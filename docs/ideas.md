@@ -10,6 +10,39 @@ Backlog notes for future `gwt` releases. These are intentionally lightweight, no
 - Keep PR and size columns hidden until data is available or terminal width is very wide.
 - Add screenshots or an asciinema demo to the README.
 
+### Boxed App Layout Sketch
+
+Explore a full dashboard-style frame where each major region has its own box. This would make `gwt` feel less like rendered text and more like a terminal app surface.
+
+```text
+┌ gwt ─ activejob-temporal ─ 2 worktrees ───────────── n new · r refresh · ? help · q quit ┐
+│ ┌ Worktrees ───────────────────────────────────────────────────────────────────────────┐ │
+│ │   │ branch                  │ status │ head± │ main± │ commit              │ age │ PR │ │
+│ │ ● │ main                    │ ✓      │ ↑1    │       │ 46264bf add AGENTS  │ 14h │    │ │
+│ │ ○ │ codex/baseline-rspec-ci │ ✓      │       │ ↑1 ↓1 │ 886d3ef chore...    │ 29m │ #98│ │
+│ └──────────────────────────────────────────────────────────────────────────────────────┘ │
+│ ┌ Details ──────────────────────────────────────────┬ Current ─────────────────────────┐ │
+│ │ Branch    main                                    │ ↵ go                              │ │
+│ │ Path      .                                       │ o editor                          │ │
+│ │ Status    clean                                   │ d delete                          │ │
+│ │ Dirty     none                                    │ y abs path                        │ │
+│ │ Sync      origin/main, ↑1                         │ p PR                              │ │
+│ │ Commit    46264bf add AGENTS, 14h                 │                                   │ │
+│ │ PR        none                                    │                                   │ │
+│ │ Delete    blocked, active worktree                │                                   │ │
+│ └───────────────────────────────────────────────────┴───────────────────────────────────┘ │
+│ g/G top/bottom · m main · a active · Tab notable · / filter       + staged · ~ modified │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Notes:
+
+- Keep the table box dominant, because selecting a worktree is the primary task.
+- Use one outer frame only if it does not waste too much width on smaller terminals.
+- Let narrow terminals drop the outer frame first, then collapse the detail/action box.
+- Keep selected-row highlight full width inside the table box.
+- Avoid heavy borders inside rows; vertical column dividers are enough.
+
 ## Inspector
 
 - Show PR title, review state, and CI workflow names when GitHub data is loaded.

@@ -16,6 +16,7 @@ type Options struct {
 	Color             bool
 	Hyperlinks        bool
 	ShowHeader        bool
+	ShowSeparators    bool
 	ShowPR            bool
 	Pending           string
 	PRPending         bool
@@ -129,17 +130,25 @@ func renderHeader(columns []column, options Options) string {
 func renderRow(row gitdata.Worktree, columns []column, options Options, now time.Time, rowIndex int) string {
 	cells := make([]string, 0, len(columns))
 	selected := options.HighlightSelected && rowIndex == options.SelectedIndex
-	for _, column := range columns {
+	separator := rowSeparator(options)
+	for index, column := range columns {
 		value := cellValue(row, column.key, now, options)
 		cell := pad(value, column.width, column.align)
 		if options.Color && !selected {
 			cell = colorCell(row, column.key, value, cell)
 		}
 		cells = append(cells, cell)
+		if options.ShowSeparators && index < len(columns)-1 {
+			cells = append(cells, separator)
+		}
 	}
-	line := strings.Join(cells, strings.Repeat(" ", columnGap(options)))
+	joiner := strings.Repeat(" ", columnGap(options))
+	if options.ShowSeparators {
+		joiner = ""
+	}
+	line := strings.Join(cells, joiner)
 	if options.Color && selected {
-		return selectedRowStyle.Render(line)
+		return selectedRowStyle.Render(padStyledWidth(line, options.Width))
 	}
 	if options.Color {
 		return inactiveRowStyle.Render(line)
@@ -268,6 +277,10 @@ func headerSeparator(options Options) string {
 	return separator + strings.Repeat(" ", gap-1)
 }
 
+func rowSeparator(options Options) string {
+	return headerSeparator(options)
+}
+
 func columnGap(options Options) int {
 	if options.Width < 40 {
 		return 1
@@ -286,6 +299,17 @@ func pad(value string, width int, align string) string {
 		return padding + value
 	}
 	return value + padding
+}
+
+func padStyledWidth(value string, width int) string {
+	if width <= 0 {
+		return value
+	}
+	visible := lipgloss.Width(value)
+	if visible >= width {
+		return value
+	}
+	return value + strings.Repeat(" ", width-visible)
 }
 
 func truncate(value string, width int) string {

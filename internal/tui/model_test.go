@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/schovi/git-worktree-tui/internal/gitdata"
 )
 
@@ -144,6 +146,96 @@ func TestStatusBarSplitsAppControlsAndDirtyLegend(t *testing.T) {
 	}
 	if strings.Contains(output, "delete") || strings.Contains(output, "editor") {
 		t.Fatalf("statusBar() should not contain persistent keybindings:\n%s", output)
+	}
+}
+
+func TestStatusBarDropsWholeHintsWhenNarrow(t *testing.T) {
+	output := joinPartsWithin([]string{"g/G top/bottom", "m main", "a active", "Tab notable"}, 35)
+
+	if strings.Contains(output, "…") {
+		t.Fatalf("joinPartsWithin() should avoid partial keybinds: %q", output)
+	}
+	if strings.Contains(output, "Tab") {
+		t.Fatalf("joinPartsWithin() should drop keybinds that do not fit: %q", output)
+	}
+}
+
+func TestViewRendersBoxedAppSections(t *testing.T) {
+	model := Model{
+		width:  100,
+		height: 18,
+		state: gitdata.State{
+			Repo: gitdata.Repository{
+				Root:           "/repo/main",
+				ActiveWorktree: "/repo/main",
+			},
+			Rows: []gitdata.Worktree{{
+				Path:          "/repo/main",
+				Branch:        "main",
+				IsMain:        true,
+				IsActive:      true,
+				CommitShort:   "abc1234",
+				CommitSubject: "boxed app",
+			}},
+		},
+	}
+
+	output := model.View()
+
+	for _, want := range []string{"gwt", "Worktrees", "Details", "╭─", "├", "╰", "Current", "g/G", "staged", " · "} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("View() missing boxed app element %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"╭─┐", "└┘", "└─╯"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("View() should not contain cap separator %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestAppBottomLineEmbedsStatusWithDotSeparators(t *testing.T) {
+	model := Model{width: 100}
+
+	output := model.appBottomLine(100)
+
+	for _, want := range []string{"╰─ ", "g/G", "top/bottom", " · ", "m", "main", "+", "staged", "~", "modified", "? untracked", " ─╯"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("appBottomLine() missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"└┘", "╰─┘", "└─╯"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("appBottomLine() should not contain cap separator %q:\n%s", unwanted, output)
+		}
+	}
+	if width := lipgloss.Width(output); width != 100 {
+		t.Fatalf("appBottomLine() width = %d, want 100:\n%s", width, output)
+	}
+}
+
+func TestAppTopLineFitsWidth(t *testing.T) {
+	model := Model{
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/git-worktree-tui"},
+			Rows: []gitdata.Worktree{{Branch: "main"}},
+		},
+	}
+
+	output := model.appTopLine(1, 80)
+
+	for _, want := range []string{"╭─", "gwt", "─╮"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("appTopLine() missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"╭─┐", "┌─╮"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("appTopLine() should not contain cap separator %q:\n%s", unwanted, output)
+		}
+	}
+	if width := lipgloss.Width(output); width != 80 {
+		t.Fatalf("appTopLine() width = %d, want 80:\n%s", width, output)
 	}
 }
 

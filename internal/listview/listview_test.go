@@ -128,6 +128,43 @@ func TestRenderRowsSelectedColorKeepsBranchText(t *testing.T) {
 	}
 }
 
+func TestRenderRowsSelectedColorPadsToWidth(t *testing.T) {
+	output := RenderRows([]gitdata.Worktree{
+		{Branch: "main", IsActive: true, IsMain: true},
+	}, Options{
+		Width:             100,
+		Color:             true,
+		ShowHeader:        true,
+		HighlightSelected: true,
+		SelectedIndex:     0,
+	}, time.Now())
+	lines := strings.Split(output, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
+	}
+	if width := runewidth.StringWidth(lines[1]); width < 100 {
+		t.Fatalf("selected row width = %d, want at least 100:\n%q", width, lines[1])
+	}
+}
+
+func TestRenderRowsCanShowSeparatorsInRows(t *testing.T) {
+	output := RenderRows([]gitdata.Worktree{
+		{Branch: "main", IsActive: true, IsMain: true},
+	}, Options{
+		Width:          100,
+		ShowHeader:     true,
+		ShowSeparators: true,
+	}, time.Now())
+
+	lines := strings.Split(output, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
+	}
+	if strings.Count(lines[0], "│") == 0 || strings.Count(lines[1], "│") == 0 {
+		t.Fatalf("RenderRows() should include separators in header and rows:\n%s", output)
+	}
+}
+
 func visualIndex(line, needle string) int {
 	byteIndex := strings.Index(line, needle)
 	if byteIndex < 0 {

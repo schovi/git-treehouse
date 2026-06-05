@@ -44,6 +44,9 @@ type Model struct {
 
 var (
 	separatorStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	appBorderStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("65"))
+	panelBorderStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	panelTitleStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
 	titleNameStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
 	titleRepoStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	titleMetaStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
@@ -57,6 +60,8 @@ var (
 	hintStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	statusMessageStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 )
+
+const sectionRule = "\x00section-rule"
 
 type createDialog struct {
 	input     textinput.Model
@@ -451,6 +456,11 @@ func deleteRow(ctx context.Context, repo gitdata.Repository, row gitdata.Worktre
 
 func (model Model) View() string {
 	now := time.Now()
+	width := viewWidth(model)
+	outerWidth := max(4, width)
+	contentWidth := max(1, outerWidth-4)
+	panelWidth := max(4, contentWidth)
+	panelContentWidth := max(1, panelWidth-2)
 	indexes := model.visibleIndexes()
 	rows := make([]gitdata.Worktree, 0, len(indexes))
 	for _, index := range indexes {
@@ -459,13 +469,30 @@ func (model Model) View() string {
 	selectedRow, hasSelectedRow := model.selectedRow()
 	detail := ""
 	if hasSelectedRow {
-		detail = model.detailPanel(selectedRow, now)
+		detail = model.detailPanelAtWidth(selectedRow, now, panelContentWidth)
 	}
-	fixedLines := 1 + 1 + lineCount(detail) + 1 + 1
+	tableFixedLines := 2
+	if len(rows) == 0 {
+		tableFixedLines = 1
+	}
+	detailFixedLines := 0
+	if detail != "" {
+		detailFixedLines = 2 + lineCount(detail)
+	}
+	fixedLines := 1 + 2 + tableFixedLines + detailFixedLines + 1
 	if model.flash != "" {
 		fixedLines++
 	}
-	availableHeight := max(1, model.height-fixedLines-1)
+	if model.help {
+		fixedLines += lineCount(model.renderHelp())
+	}
+	if model.createDialog != nil {
+		fixedLines += lineCount(model.renderCreate())
+	}
+	if model.deleteDialog != nil {
+		fixedLines += lineCount(model.renderDelete())
+	}
+	availableHeight := max(1, model.height-fixedLines)
 	if model.height <= 0 {
 		availableHeight = 8
 	}
@@ -482,10 +509,11 @@ func (model Model) View() string {
 	end := min(len(rows), start+availableHeight)
 	visibleRows := rows[start:end]
 	table := listview.RenderRows(visibleRows, listview.Options{
-		Width:             model.width,
+		Width:             panelContentWidth,
 		Color:             true,
 		Hyperlinks:        true,
 		ShowHeader:        true,
+		ShowSeparators:    true,
 		ShowPR:            model.showPR,
 		HighlightSelected: true,
 		SelectedIndex:     model.selected - start,
@@ -493,25 +521,29 @@ func (model Model) View() string {
 	lines := strings.Split(table, "\n")
 	if len(rows) == 0 {
 		lines = []string{"No worktrees"}
+	} else if len(lines) > 0 {
+		lines = insertAfter(lines, 1, sectionRule)
 	}
-	status := model.statusBar()
-	parts := []string{model.titleLine(len(rows)), strings.Join(lines, "\n"), model.separator()}
+	parts := []string{
+		model.appTopLine(len(rows), outerWidth),
+		model.wrapOuter(sectionBox("Worktrees", lines, panelWidth), outerWidth),
+	}
 	if detail != "" {
-		parts = append(parts, detail, model.separator())
+		parts = append(parts, model.wrapOuter(sectionBox("Details", strings.Split(detail, "\n"), panelWidth), outerWidth))
 	}
 	if model.flash != "" {
-		parts = append(parts, model.flashLine())
+		parts = append(parts, model.wrapOuter(model.flashLineAtWidth(panelWidth), outerWidth))
 	}
-	parts = append(parts, status)
 	if model.help {
-		parts = append(parts, model.renderHelp())
+		parts = append(parts, model.wrapOuter(model.renderHelp(), outerWidth))
 	}
 	if model.createDialog != nil {
-		parts = append(parts, model.renderCreate())
+		parts = append(parts, model.wrapOuter(model.renderCreate(), outerWidth))
 	}
 	if model.deleteDialog != nil {
-		parts = append(parts, model.renderDelete())
+		parts = append(parts, model.wrapOuter(model.renderDelete(), outerWidth))
 	}
+	parts = append(parts, model.appBottomLine(outerWidth))
 	return model.frame(strings.Join(parts, "\n"))
 }
 
@@ -554,7 +586,10 @@ func (model Model) inspectorFieldAtWidth(label, value string, style lipgloss.Sty
 }
 
 func (model Model) detailPanel(row gitdata.Worktree, now time.Time) string {
-	width := viewWidth(model)
+	return model.detailPanelAtWidth(row, now, viewWidth(model))
+}
+
+func (model Model) detailPanelAtWidth(row gitdata.Worktree, now time.Time, width int) string {
 	if width < 72 {
 		return model.selectedInspectorAtWidth(row, now, width)
 	}
@@ -775,6 +810,122 @@ func (model Model) separator() string {
 	return separatorStyle.Render(strings.Repeat("─", width))
 }
 
+func (model Model) appTopLine(visibleCount, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if width < 4 {
+		return appBorderStyle.Render(strings.Repeat("─", width))
+	}
+	innerWidth := width - 4
+	right := appControlsAtWidth(innerWidth)
+	if right != "" {
+		right = " " + right + " "
+	}
+	leftMaxWidth := innerWidth - lipgloss.Width(right) - 3
+	if leftMaxWidth < 3 {
+		right = ""
+		leftMaxWidth = innerWidth - 2
+	}
+	left := model.titleLeftContentAtWidth(visibleCount, leftMaxWidth)
+	if left != "" {
+		left = " " + left + " "
+	}
+	gapWidth := innerWidth - lipgloss.Width(left) - lipgloss.Width(right)
+	if gapWidth < 0 {
+		gapWidth = 0
+	}
+	return appBorderStyle.Render("╭─") + left + appBorderStyle.Render(strings.Repeat("─", gapWidth)) + right + appBorderStyle.Render("─╮")
+}
+
+func (model Model) appBottomLine(width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if width < 4 {
+		return appBorderStyle.Render(strings.Repeat("─", width))
+	}
+	contentWidth := width - 6
+	if contentWidth < 1 {
+		return appBorderStyle.Render("╰" + strings.Repeat("─", width-2) + "╯")
+	}
+	leftParts := model.statusLeftParts()
+	right := colorDirtyLegend(strings.Join(dirtyLegendParts(), " · "))
+	maxLeftWidth := contentWidth - lipgloss.Width(right) - 3
+	if maxLeftWidth < 12 {
+		leftText := joinPartsWithin(leftParts, contentWidth)
+		left := colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
+		return bottomLineWithContent(left, width)
+	}
+	leftText := joinPartsWithin(leftParts, maxLeftWidth)
+	left := colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
+	return bottomLineWithSplit(left, right, width)
+}
+
+func bottomLineWithContent(content string, width int) string {
+	contentWidth := width - 6
+	if contentWidth < 1 {
+		return appBorderStyle.Render("╰" + strings.Repeat("─", max(0, width-2)) + "╯")
+	}
+	return appBorderStyle.Render("╰─ ") + padStyled(content, contentWidth) + appBorderStyle.Render(" ─╯")
+}
+
+func bottomLineWithSplit(left, right string, width int) string {
+	contentWidth := width - 6
+	left = left + " "
+	right = " " + right
+	fillerWidth := contentWidth - lipgloss.Width(left) - lipgloss.Width(right)
+	if fillerWidth < 1 {
+		return bottomLineWithContent(strings.TrimSpace(left), width)
+	}
+	return appBorderStyle.Render("╰─ ") + left + appBorderStyle.Render(strings.Repeat("─", fillerWidth)) + right + appBorderStyle.Render(" ─╯")
+}
+
+func (model Model) wrapOuter(content string, width int) string {
+	if width < 4 {
+		return content
+	}
+	innerWidth := width - 4
+	lines := strings.Split(content, "\n")
+	for index, line := range lines {
+		lines[index] = appBorderStyle.Render("│ ") + padStyled(line, innerWidth) + appBorderStyle.Render(" │")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func sectionBox(title string, bodyLines []string, width int) string {
+	if width < 4 {
+		return strings.Join(bodyLines, "\n")
+	}
+	innerWidth := width - 2
+	lines := make([]string, 0, len(bodyLines)+2)
+	lines = append(lines, sectionTopLine(title, width))
+	for _, line := range bodyLines {
+		if line == sectionRule {
+			lines = append(lines, panelBorderStyle.Render("├"+strings.Repeat("─", innerWidth)+"┤"))
+			continue
+		}
+		lines = append(lines, panelBorderStyle.Render("│")+padStyled(line, innerWidth)+panelBorderStyle.Render("│"))
+	}
+	lines = append(lines, panelBorderStyle.Render("╰"+strings.Repeat("─", innerWidth)+"╯"))
+	return strings.Join(lines, "\n")
+}
+
+func sectionTopLine(title string, width int) string {
+	innerWidth := width - 2
+	label := ""
+	if title != "" {
+		label = " " + title + " "
+		label = truncatePlain(label, max(0, innerWidth-1))
+	}
+	labelWidth := runewidth.StringWidth(label)
+	ruleWidth := innerWidth - 1 - labelWidth
+	if ruleWidth < 0 {
+		ruleWidth = 0
+	}
+	return panelBorderStyle.Render("╭─") + panelTitleStyle.Render(label) + panelBorderStyle.Render(strings.Repeat("─", ruleWidth)+"╮")
+}
+
 func padRight(value string, width int) string {
 	visible := runewidth.StringWidth(value)
 	if visible >= width {
@@ -816,22 +967,19 @@ func truncatePlain(value string, width int) string {
 }
 
 func (model Model) statusBar() string {
-	leftParts := []string{"g/G top/bottom", "m main", "a active", "Tab notable", "/ filter", "Esc close/clear"}
-	if model.filtering {
-		leftParts = append([]string{"filter " + model.filter.Value(), "Enter apply", "Esc clear"}, leftParts...)
-	}
-	if model.loading != "" {
-		leftParts = append(leftParts, model.loading)
-	}
-	leftText := strings.Join(leftParts, " · ")
-	rightText := "+ staged · ~ modified · ? untracked"
-	width := viewWidth(model)
-	right := colorDirtyLegend(rightText)
+	return model.statusBarAtWidth(viewWidth(model))
+}
+
+func (model Model) statusBarAtWidth(width int) string {
+	leftParts := model.statusLeftParts()
+	right := colorDirtyLegend(strings.Join(dirtyLegendParts(), " · "))
 	maxLeftWidth := width - lipgloss.Width(right) - 2
 	if maxLeftWidth < 12 {
-		return colorKeyHints(truncatePlain(leftText, width), model.loading != "")
+		leftText := joinPartsWithin(leftParts, width)
+		return colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
 	}
-	left := colorKeyHints(truncatePlain(leftText, maxLeftWidth), model.loading != "")
+	leftText := joinPartsWithin(leftParts, maxLeftWidth)
+	left := colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
 	spacerWidth := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if spacerWidth < 1 {
 		spacerWidth = 1
@@ -839,21 +987,51 @@ func (model Model) statusBar() string {
 	return left + strings.Repeat(" ", spacerWidth) + right
 }
 
+func (model Model) statusLeftParts() []string {
+	leftParts := []string{"g/G top/bottom", "m main", "a active", "Tab notable", "/ filter", "Esc close/clear"}
+	if model.filtering {
+		leftParts = append([]string{"filter " + model.filter.Value(), "Enter apply", "Esc clear"}, leftParts...)
+	}
+	if model.loading != "" {
+		leftParts = append(leftParts, model.loading)
+	}
+	return leftParts
+}
+
+func dirtyLegendParts() []string {
+	return []string{"+ staged", "~ modified", "? untracked"}
+}
+
+func joinPartsWithin(parts []string, width int) string {
+	if len(parts) == 0 || width <= 0 {
+		return ""
+	}
+	for count := len(parts); count > 0; count-- {
+		text := strings.Join(parts[:count], " · ")
+		if runewidth.StringWidth(text) <= width {
+			return text
+		}
+	}
+	return truncatePlain(parts[0], width)
+}
+
 func colorKeyHints(text string, hasStatus bool) string {
 	parts := strings.Split(text, " · ")
 	for index, part := range parts {
-		key, rest, found := strings.Cut(part, " ")
-		if found && key != "" {
-			parts[index] = keyStyle.Render(key) + hintStyle.Render(" "+rest)
-			continue
-		}
-		if hasStatus && index == len(parts)-1 {
-			parts[index] = statusMessageStyle.Render(part)
-			continue
-		}
-		parts[index] = hintStyle.Render(part)
+		parts[index] = colorKeyHintPart(part, hasStatus && index == len(parts)-1)
 	}
 	return strings.Join(parts, hintStyle.Render(" · "))
+}
+
+func colorKeyHintPart(part string, isStatus bool) string {
+	key, rest, found := strings.Cut(part, " ")
+	if found && key != "" {
+		return keyStyle.Render(key) + hintStyle.Render(" "+rest)
+	}
+	if isStatus {
+		return statusMessageStyle.Render(part)
+	}
+	return hintStyle.Render(part)
 }
 
 func colorDirtyLegend(text string) string {
@@ -863,33 +1041,60 @@ func colorDirtyLegend(text string) string {
 func colorStatusBar(text string, hasStatus bool) string {
 	parts := strings.Split(text, " · ")
 	for index, part := range parts {
-		key, rest, found := strings.Cut(part, " ")
-		if key == "+" {
-			parts[index] = inspectorCleanStyle.Render(key) + hintStyle.Render(" "+rest)
-			continue
-		}
-		if key == "~" {
-			parts[index] = inspectorWarnStyle.Render(key) + hintStyle.Render(" "+rest)
-			continue
-		}
-		if key == "?" {
-			parts[index] = inspectorCommitStyle.Render(key) + hintStyle.Render(" "+rest)
-			continue
-		}
-		if found && key != "" {
-			parts[index] = keyStyle.Render(key) + hintStyle.Render(" "+rest)
-			continue
-		}
-		if hasStatus && index == len(parts)-1 {
-			parts[index] = statusMessageStyle.Render(part)
-			continue
-		}
-		parts[index] = hintStyle.Render(part)
+		parts[index] = colorDirtyLegendPartWithStatus(part, hasStatus && index == len(parts)-1)
 	}
 	return strings.Join(parts, hintStyle.Render(" · "))
 }
 
+func colorDirtyLegendPartWithStatus(part string, isStatus bool) string {
+	key, rest, found := strings.Cut(part, " ")
+	if key == "+" {
+		return inspectorCleanStyle.Render(key) + hintStyle.Render(" "+rest)
+	}
+	if key == "~" {
+		return inspectorWarnStyle.Render(key) + hintStyle.Render(" "+rest)
+	}
+	if key == "?" {
+		return inspectorCommitStyle.Render(key) + hintStyle.Render(" "+rest)
+	}
+	if found && key != "" {
+		return keyStyle.Render(key) + hintStyle.Render(" "+rest)
+	}
+	if isStatus {
+		return statusMessageStyle.Render(part)
+	}
+	return hintStyle.Render(part)
+}
+
 func (model Model) titleLine(visibleCount int) string {
+	return model.titleContentAtWidth(visibleCount, viewWidth(model))
+}
+
+func (model Model) titleContentAtWidth(visibleCount, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	right := appControlsAtWidth(width)
+	leftWidth := width - lipgloss.Width(right) - 2
+	if leftWidth < 3 {
+		right = ""
+		leftWidth = width
+	}
+	left := model.titleLeftContentAtWidth(visibleCount, leftWidth)
+	if right == "" {
+		return padStyled(left, width)
+	}
+	spacerWidth := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if spacerWidth < 1 {
+		spacerWidth = 1
+	}
+	return left + strings.Repeat(" ", spacerWidth) + right
+}
+
+func (model Model) titleLeftContentAtWidth(visibleCount, width int) string {
+	if width <= 0 {
+		return ""
+	}
 	repoName := filepath.Base(model.state.Repo.Root)
 	if repoName == "." || repoName == string(filepath.Separator) {
 		repoName = model.state.Repo.Root
@@ -898,28 +1103,57 @@ func (model Model) titleLine(visibleCount int) string {
 	if model.filter.Value() != "" {
 		count = fmt.Sprintf("%d/%d worktrees", visibleCount, len(model.state.Rows))
 	}
-	appControls := "n new · r refresh · ? help · q quit"
-	width := viewWidth(model)
-	staticWidth := runewidth.StringWidth("gwt  ") + runewidth.StringWidth("  ") + runewidth.StringWidth(count) + runewidth.StringWidth("  ") + runewidth.StringWidth(appControls)
+	if width <= runewidth.StringWidth("gwt") {
+		return titleNameStyle.Render(truncatePlain("gwt", width))
+	}
+	staticWidth := runewidth.StringWidth("gwt  ") + runewidth.StringWidth("  ") + runewidth.StringWidth(count)
 	repoWidth := width - staticWidth
-	if repoWidth < 8 {
-		repoWidth = 8
+	if repoWidth < 4 {
+		compactWidth := width - runewidth.StringWidth("gwt  ") - runewidth.StringWidth(count)
+		if compactWidth >= 0 {
+			title := titleNameStyle.Render("gwt")
+			meta := titleMetaStyle.Render(count)
+			return title + "  " + meta
+		}
+		repoWidth = width - runewidth.StringWidth("gwt  ")
+		if repoWidth <= 0 {
+			return titleNameStyle.Render(truncatePlain("gwt", width))
+		}
+		return titleNameStyle.Render("gwt") + "  " + titleRepoStyle.Render(truncatePlain(repoName, repoWidth))
 	}
 	repoName = truncatePlain(repoName, repoWidth)
 	title := titleNameStyle.Render("gwt")
 	repo := titleRepoStyle.Render(repoName)
 	meta := titleMetaStyle.Render(count)
-	left := title + "  " + repo + "  " + meta
-	app := keyStyle.Render("n") + hintStyle.Render(" new") + hintStyle.Render(" · ") + keyStyle.Render("r") + hintStyle.Render(" refresh") + hintStyle.Render(" · ") + keyStyle.Render("?") + hintStyle.Render(" help") + hintStyle.Render(" · ") + keyStyle.Render("q") + hintStyle.Render(" quit")
-	spacerWidth := width - lipgloss.Width(left) - lipgloss.Width(app)
-	if spacerWidth < 2 {
-		spacerWidth = 2
+	return title + "  " + repo + "  " + meta
+}
+
+func appControlsAtWidth(width int) string {
+	full := colorKeyHints("n new · r refresh · ? help · q quit", false)
+	if lipgloss.Width(full) <= width {
+		return full
 	}
-	return left + strings.Repeat(" ", spacerWidth) + app
+	medium := colorKeyHints("r refresh · ? help · q quit", false)
+	if lipgloss.Width(medium) <= width {
+		return medium
+	}
+	short := colorKeyHints("? help · q quit", false)
+	if lipgloss.Width(short) <= width {
+		return short
+	}
+	tiny := colorKeyHints("? · q", false)
+	if lipgloss.Width(tiny) <= width {
+		return tiny
+	}
+	return ""
 }
 
 func (model Model) flashLine() string {
-	return flashStyle.Render(truncatePlain(model.flash, viewWidth(model)))
+	return model.flashLineAtWidth(viewWidth(model))
+}
+
+func (model Model) flashLineAtWidth(width int) string {
+	return flashStyle.Render(truncatePlain(model.flash, width))
 }
 
 func (model Model) setFlash(text string) (Model, tea.Cmd) {
@@ -1027,6 +1261,17 @@ func lineCount(value string) int {
 		return 0
 	}
 	return len(strings.Split(value, "\n"))
+}
+
+func insertAfter(values []string, index int, value string) []string {
+	if index >= len(values) {
+		return append(values, value)
+	}
+	result := make([]string, 0, len(values)+1)
+	result = append(result, values[:index]...)
+	result = append(result, value)
+	result = append(result, values[index:]...)
+	return result
 }
 
 func viewWidth(model Model) int {
