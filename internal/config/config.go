@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 
@@ -8,9 +9,10 @@ import (
 )
 
 type Config struct {
-	Editor       string `toml:"editor"`
-	PathTemplate string `toml:"path_template"`
-	MainBranch   string `toml:"main_branch"`
+	Editor                      string `toml:"editor"`
+	PathTemplate                string `toml:"path_template"`
+	MainBranch                  string `toml:"main_branch"`
+	SkipShellIntegrationWelcome bool   `toml:"skip_shell_integration_welcome"`
 }
 
 func Default() Config {
@@ -22,15 +24,49 @@ func Default() Config {
 
 func LoadDefault() (Config, error) {
 	config := Default()
-	home, err := os.UserHomeDir()
+	path, err := Path()
 	if err != nil {
 		return config, nil
 	}
-	path := filepath.Join(home, ".config", "gwt", "config.toml")
 	if _, err := os.Stat(path); err != nil {
 		return config, nil
 	}
 	return Load(path)
+}
+
+func Path() (string, error) {
+	if configHome := os.Getenv("XDG_CONFIG_HOME"); configHome != "" {
+		return filepath.Join(configHome, "gwt", "config.toml"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "gwt", "config.toml"), nil
+}
+
+func SaveDefault(config Config) error {
+	path, err := Path()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	var buffer bytes.Buffer
+	if err := toml.NewEncoder(&buffer).Encode(config); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buffer.Bytes(), 0600)
+}
+
+func PatchDefault(update func(*Config)) error {
+	config, err := LoadDefault()
+	if err != nil {
+		return err
+	}
+	update(&config)
+	return SaveDefault(config)
 }
 
 func Load(path string) (Config, error) {

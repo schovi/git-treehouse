@@ -117,3 +117,44 @@ main_branch = "develop"
 		t.Fatalf("LoadDefault().MainBranch = %q, want %q", got.MainBranch, "develop")
 	}
 }
+
+func TestSaveDefaultWritesConfigFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	err := SaveDefault(Config{
+		Editor:                      "vim",
+		PathTemplate:                "{repo_parent}/{branch}",
+		MainBranch:                  "main",
+		SkipShellIntegrationWelcome: true,
+	})
+	if err != nil {
+		t.Fatalf("SaveDefault() error = %v", err)
+	}
+
+	got, err := LoadDefault()
+	if err != nil {
+		t.Fatalf("LoadDefault() error = %v", err)
+	}
+	if !got.SkipShellIntegrationWelcome {
+		t.Fatal("LoadDefault().SkipShellIntegrationWelcome = false, want true")
+	}
+	if got.Editor != "vim" {
+		t.Fatalf("LoadDefault().Editor = %q, want vim", got.Editor)
+	}
+}
+
+func TestPathUsesXDGConfigHome(t *testing.T) {
+	configHome := filepath.Join(t.TempDir(), "xdg")
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	got, err := Path()
+	if err != nil {
+		t.Fatalf("Path() error = %v", err)
+	}
+	want := filepath.Join(configHome, "gwt", "config.toml")
+	if got != want {
+		t.Fatalf("Path() = %q, want %q", got, want)
+	}
+}

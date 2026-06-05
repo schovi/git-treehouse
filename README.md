@@ -58,11 +58,27 @@ gwt list --no-github
 
 A child process cannot change the parent shell's current directory directly. `gwt` uses the same pattern as tools like `zoxide` and `yazi`: the TUI writes the selected path to a temporary file, and a shell wrapper reads it after `gwt` exits.
 
+On first raw launch, `gwt` shows a setup screen when shell integration is not active. You can install the wrapper from there, skip the screen, or continue without installing.
+
+Supported shells:
+
+| Shell | Init command |
+| --- | --- |
+| zsh | `gwt init zsh` |
+| bash | `gwt init bash` |
+| fish | `gwt init fish` |
+| sh / dash | `gwt init sh` |
+| ksh | `gwt init ksh` |
+| Nushell | `gwt init nushell` |
+| PowerShell | `gwt init powershell` |
+
 Load the wrapper in your current shell:
 
 ```sh
 eval "$(gwt init)"
 ```
+
+`gwt init` detects the current parent shell. You can pass a shell name explicitly when needed, for example `gwt init zsh` or `gwt init nushell`.
 
 Fish uses `source` instead:
 
@@ -75,7 +91,11 @@ Persist the wrapper for future shells:
 ```sh
 gwt init zsh >> ~/.zshrc
 gwt init bash >> ~/.bashrc
+gwt init sh >> ~/.profile
+gwt init ksh >> ~/.kshrc
 gwt init fish >> ~/.config/fish/config.fish
+gwt init nushell | save --append ~/.config/nushell/config.nu
+gwt init powershell >> ~/.config/powershell/Microsoft.PowerShell_profile.ps1
 ```
 
 Restart your shell or source the file. After that, pressing `Enter` on a worktree changes your shell directory to that worktree.
@@ -115,6 +135,7 @@ Create `~/.config/gwt/config.toml`:
 editor = "cursor"
 path_template = "{repo_parent}/{branch}"
 main_branch = ""
+skip_shell_integration_welcome = false
 ```
 
 Options:
@@ -124,6 +145,7 @@ Options:
 | `editor` | `$EDITOR`, then `code` | Command used by `o` |
 | `path_template` | `{repo_parent}/{branch}` | New worktree path template |
 | `main_branch` | auto-detected | Override main branch detection |
+| `skip_shell_integration_welcome` | `false` | Do not show the first-run shell setup screen |
 
 Path templates support:
 

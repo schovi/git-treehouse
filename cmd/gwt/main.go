@@ -5,8 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
+	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/schovi/git-worktree-tui/internal/gitdata"
 	"github.com/schovi/git-worktree-tui/internal/github"
 	"github.com/schovi/git-worktree-tui/internal/listview"
+	"github.com/schovi/git-worktree-tui/internal/onboarding"
 	"github.com/schovi/git-worktree-tui/internal/shellinit"
 	"github.com/schovi/git-worktree-tui/internal/tui"
 )
@@ -50,15 +52,15 @@ func run(args []string) error {
 
 func runInit(args []string) error {
 	if len(args) > 1 {
-		return fmt.Errorf("usage: gwt init [fish|zsh|bash]")
+		return fmt.Errorf("usage: gwt init [%s]", strings.Join(shellinit.SupportedShells(), "|"))
 	}
 	shell := ""
 	if len(args) == 1 {
 		shell = args[0]
 	} else {
-		shell = detectShell(os.Getenv("SHELL"))
+		shell = currentShell()
 		if shell == "" {
-			return fmt.Errorf("usage: gwt init fish|zsh|bash")
+			return fmt.Errorf("usage: gwt init %s", strings.Join(shellinit.SupportedShells(), "|"))
 		}
 	}
 	script, err := shellinit.Script(shell)
@@ -176,6 +178,12 @@ func runTUI(cdFile string) error {
 	if err != nil {
 		return err
 	}
+	shell := currentShell()
+	if shouldShowShellWelcome(cdFile, config, stdoutIsTTY(), os.Getenv("GWT_SHELL_INTEGRATION"), shell) {
+		if err := runShellWelcome(shell); err != nil {
+			return err
+		}
+	}
 	runner := gitdata.ExecRunner{}
 	state, err := gitdata.Load(context.Background(), ".", config, runner)
 	if err != nil {
@@ -198,50 +206,91 @@ func runTUI(cdFile string) error {
 		return os.WriteFile(cdFile, []byte(selectedPath), 0600)
 	}
 	if stdoutIsTTY() {
-		fmt.Fprintln(os.Stderr, pathSelectionHint(selectedPath, os.Getenv("SHELL")))
+		fmt.Fprintln(os.Stderr, pathSelectionHint(selectedPath, currentShell()))
 		return nil
 	}
 	fmt.Println(selectedPath)
 	return nil
 }
 
-func pathSelectionHint(selectedPath, shellPath string) string {
-	shell := detectShell(shellPath)
-	if shell == "" {
-		return fmt.Sprintf("Selected %s\nA standalone gwt process cannot change your shell directory. Install shell integration with: gwt init fish|zsh|bash", selectedPath)
+func shouldShowShellWelcome(cdFile string, config config.Config, stdoutTTY bool, integration, shell string) bool {
+	return cdFile == "" &&
+		integration == "" &&
+		stdoutTTY &&
+		!config.SkipShellIntegrationWelcome &&
+		shellinit.Normalize(shell) != ""
+}
+
+func runShellWelcome(shell string) error {
+	shell = shellinit.Normalize(shell)
+	path, err := shellinit.ConfigPath(shell)
+	if err != nil {
+		return err
 	}
-	return fmt.Sprintf("Selected %s\nA standalone gwt process cannot change your shell directory. Run this once now:\n  %s\nPersist it with:\n  %s", selectedPath, shellActivationCommand(shell), shellInstallCommand(shell))
+	result, err := onboarding.Run(os.Stderr, onboarding.Info{
+		Shell:             shell,
+		ActivationCommand: shellinit.ActivationCommand(shell),
+		InstallPath:       path,
+		ReloadCommand:     shellinit.ReloadCommand(shell, path),
+	})
+	if err != nil {
+		return err
+	}
+	switch result.Action {
+	case onboarding.ActionInstall:
+		install, err := shellinit.Install(shell)
+		if err != nil {
+			return err
+		}
+		if err := config.PatchDefault(func(config *config.Config) {
+			config.SkipShellIntegrationWelcome = true
+		}); err != nil {
+			return err
+		}
+		if install.AlreadyInstalled {
+			fmt.Fprintf(os.Stderr, "gwt shell integration is already installed in %s.\nReload with: %s\n\n", install.Path, install.ReloadCommand)
+		} else {
+			fmt.Fprintf(os.Stderr, "Installed gwt shell integration in %s.\nReload with: %s\n\n", install.Path, install.ReloadCommand)
+		}
+	case onboarding.ActionSkip:
+		return config.PatchDefault(func(config *config.Config) {
+			config.SkipShellIntegrationWelcome = true
+		})
+	}
+	return nil
+}
+
+func pathSelectionHint(selectedPath, shell string) string {
+	shell = shellinit.Normalize(shell)
+	if shell == "" {
+		return fmt.Sprintf("Selected %s\nA standalone gwt process cannot change your shell directory. Install shell integration with: gwt init %s", selectedPath, strings.Join(shellinit.SupportedShells(), "|"))
+	}
+	return fmt.Sprintf("Selected %s\nA standalone gwt process cannot change your shell directory. Run this once now:\n  %s\nPersist it with:\n  %s", selectedPath, shellinit.ActivationCommand(shell), shellinit.InstallCommand(shell))
 }
 
 func detectShell(shellPath string) string {
-	switch filepath.Base(shellPath) {
-	case "fish":
-		return "fish"
-	case "zsh":
-		return "zsh"
-	case "bash":
-		return "bash"
-	default:
+	return shellinit.Normalize(shellPath)
+}
+
+func currentShell() string {
+	if shell := detectShell(parentProcessName()); shell != "" {
+		return shell
+	}
+	if shell := detectShell(os.Getenv("SHELL")); shell != "" {
+		return shell
+	}
+	if os.Getenv("PSModulePath") != "" {
+		return "powershell"
+	}
+	return ""
+}
+
+func parentProcessName() string {
+	output, err := exec.Command("ps", "-p", strconv.Itoa(os.Getppid()), "-o", "comm=").Output()
+	if err != nil {
 		return ""
 	}
-}
-
-func shellActivationCommand(shell string) string {
-	if shell == "fish" {
-		return "gwt init fish | source"
-	}
-	return fmt.Sprintf("eval \"$(gwt init %s)\"", shell)
-}
-
-func shellInstallCommand(shell string) string {
-	switch shell {
-	case "fish":
-		return "gwt init fish >> ~/.config/fish/config.fish"
-	case "bash":
-		return "gwt init bash >> ~/.bashrc"
-	default:
-		return "gwt init zsh >> ~/.zshrc"
-	}
+	return strings.TrimSpace(string(output))
 }
 
 func stdoutIsTTY() bool {
