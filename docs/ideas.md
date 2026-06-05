@@ -6,7 +6,7 @@ Backlog notes for future `git-treehouse` releases. These are intentionally light
 
 - Add a narrow-mode layout designed specifically for small terminals.
 - Add optional theme configuration for selected-row color and status colors.
-- Show row count and filtered count in the title or status area.
+- Show row count and visible count in the title or status area.
 - Keep PR and size columns hidden until data is available or terminal width is very wide.
 - Add screenshots or an asciinema demo to the README.
 
@@ -31,7 +31,7 @@ Explore a full dashboard-style frame where each major region has its own box. Th
 │ │ PR        none                                    │                                   │ │
 │ │ Delete    blocked, active worktree                │                                   │ │
 │ └───────────────────────────────────────────────────┴───────────────────────────────────┘ │
-│ g/G top/bottom · m main · a active · Tab notable · / filter       + staged · ~ modified │
+│ g/G top/bottom · m main · a active · Tab filter: all · s search  + staged · ~ modified │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -55,7 +55,7 @@ Notes:
 - Preserve selection by branch/path across all async enrichment updates, not only reloads.
 - Add jump shortcuts for next dirty, next prunable, next upstream-gone row.
 - Add a command palette for less common actions.
-- Make `Esc` behavior visible when a filter or dialog is active.
+- Make `Esc` behavior visible when a filter, search, or dialog is active.
 
 ## Create Flow
 

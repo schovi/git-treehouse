@@ -11,6 +11,7 @@ It is built for repositories where you keep several task branches checked out at
 - Creates a new branch and worktree from the focused row.
 - Shows the exact path where a new worktree will be created.
 - Deletes worktrees with guardrails for active, main, dirty, and unmerged branches.
+- Searches branches with `s` and filters worktree states with `Tab`.
 - Shows compact status: dirty counts, upstream sync, main comparison, commit age, disk size, PR, and CI state.
 - Auto-refreshes local Git state while idle.
 - Runs `git fetch --prune` only when you ask for it.
@@ -177,16 +178,16 @@ Then `git-treehouse` reloads the table.
 | `g` / `G` | Jump to top / bottom |
 | `m` | Jump to main worktree |
 | `a` | Jump to active worktree |
-| `Tab` | Cycle notable rows |
+| `Tab` | Cycle filter: all, modified, prunable, locked, detached |
 | `Enter` | Go to selected worktree and exit |
 | `n` | Create a new worktree |
 | `d`, `Delete`, `Backspace` | Delete focused worktree |
 | `o` | Open selected worktree in editor |
 | `p` | Open selected PR or branch page with `gh` |
 | `y` | Copy selected worktree absolute path |
-| `r`, `f` | Fetch, prune, and reload |
-| `/` | Filter branches |
-| `Esc` | Close dialog or clear filter |
+| `r`, `f` | Run `git fetch --prune` and reload |
+| `s` | Search branches |
+| `Esc` | Close dialog, clear filter/search, or quit |
 | `?` | Toggle help |
 | `q`, `Ctrl+C` | Quit |
 

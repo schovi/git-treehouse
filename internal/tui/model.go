@@ -29,8 +29,9 @@ type Model struct {
 	width           int
 	height          int
 	selected        int
-	filtering       bool
-	filter          textinput.Model
+	filter          worktreeFilter
+	searching       bool
+	search          textinput.Model
 	help            bool
 	loading         string
 	flash           string
@@ -145,18 +146,66 @@ type selectionAnchor struct {
 	head   string
 }
 
+type worktreeFilter int
+
+const (
+	filterAll worktreeFilter = iota
+	filterModified
+	filterPrunable
+	filterLocked
+	filterDetached
+)
+
+var orderedFilters = []worktreeFilter{
+	filterAll,
+	filterModified,
+	filterPrunable,
+	filterLocked,
+	filterDetached,
+}
+
+func (filter worktreeFilter) label() string {
+	switch filter {
+	case filterModified:
+		return "modified"
+	case filterPrunable:
+		return "prunable"
+	case filterLocked:
+		return "locked"
+	case filterDetached:
+		return "detached"
+	default:
+		return "all"
+	}
+}
+
+func (filter worktreeFilter) matches(row gitdata.Worktree) bool {
+	switch filter {
+	case filterModified:
+		return !row.Status.Clean()
+	case filterPrunable:
+		return row.Prunable
+	case filterLocked:
+		return row.Locked
+	case filterDetached:
+		return row.Detached
+	default:
+		return true
+	}
+}
+
 func New(state gitdata.State, config config.Config, runner gitdata.Runner) Model {
-	filter := textinput.New()
-	filter.Prompt = "/"
-	filter.CharLimit = 200
-	filter.Width = 40
+	search := textinput.New()
+	search.Prompt = "s "
+	search.CharLimit = 200
+	search.Width = 40
 	return Model{
 		state:         state,
 		config:        config,
 		runner:        runner,
 		width:         100,
 		height:        30,
-		filter:        filter,
+		search:        search,
 		lastRefreshAt: time.Now(),
 	}
 }
@@ -276,8 +325,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if model.deleteDialog != nil {
 			return model.updateDelete(message)
 		}
-		if model.filtering {
-			return model.updateFilter(message)
+		if model.searching {
+			return model.updateSearch(message)
 		}
 		return model.updateList(message)
 	default:
@@ -294,8 +343,16 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 			model.help = false
 			return model, nil
 		}
-		if model.filter.Value() != "" {
-			model.filter.SetValue("")
+		if model.filter != filterAll {
+			anchor := model.selectionAnchor()
+			model.filter = filterAll
+			if !model.restoreSelection(anchor) && len(model.visibleIndexes()) > 0 {
+				model.selected = 0
+			}
+			return model, nil
+		}
+		if model.search.Value() != "" {
+			model.search.SetValue("")
 			model.selected = 0
 			return model, nil
 		}
@@ -313,7 +370,7 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 	case "a":
 		model.selectMatching(func(row gitdata.Worktree) bool { return row.IsActive })
 	case "tab":
-		model.cycleSpecialRows()
+		model.cycleFilter()
 	case "enter":
 		row, ok := model.selectedRow()
 		if !ok {
@@ -357,9 +414,9 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 		model.refreshID++
 		model.refreshInFlight = true
 		return model, reloadCmd(model.reloadCwd(), model.config, model.runner, true, false, model.refreshID)
-	case "/":
-		model.filtering = true
-		model.filter.Focus()
+	case "s":
+		model.searching = true
+		model.search.Focus()
 	case "?":
 		model.help = !model.help
 	}
@@ -384,7 +441,7 @@ func (model Model) canAutoRefresh() bool {
 
 func (model Model) canApplyAutoRefresh() bool {
 	return model.loading == "" &&
-		!model.filtering &&
+		!model.searching &&
 		!model.help &&
 		model.createDialog == nil &&
 		model.deleteDialog == nil
@@ -397,19 +454,19 @@ func (model Model) reloadCwd() string {
 	return model.state.Repo.Root
 }
 
-func (model Model) updateFilter(message tea.KeyMsg) (Model, tea.Cmd) {
+func (model Model) updateSearch(message tea.KeyMsg) (Model, tea.Cmd) {
 	switch message.String() {
 	case "esc":
-		model.filtering = false
-		model.filter.SetValue("")
+		model.searching = false
+		model.search.SetValue("")
 		model.selected = 0
 		return model, nil
 	case "enter":
-		model.filtering = false
+		model.searching = false
 		return model, nil
 	}
 	var cmd tea.Cmd
-	model.filter, cmd = model.filter.Update(message)
+	model.search, cmd = model.search.Update(message)
 	model.selected = clamp(model.selected, 0, max(0, len(model.visibleIndexes())-1))
 	return model, cmd
 }
@@ -1105,9 +1162,9 @@ func (model Model) statusBarAtWidth(width int) string {
 }
 
 func (model Model) statusLeftParts() []string {
-	leftParts := []string{"g/G top/bottom", "m main", "a active", "Tab notable", "/ filter", "Esc close/clear"}
-	if model.filtering {
-		leftParts = append([]string{"filter " + model.filter.Value(), "Enter apply", "Esc clear"}, leftParts...)
+	leftParts := []string{"g/G top/bottom", "m main", "a active", "Tab filter: " + model.filter.label(), "s search", "Esc close/clear"}
+	if model.searching {
+		leftParts = append([]string{"search " + model.search.Value(), "Enter apply", "Esc clear"}, leftParts...)
 	}
 	if model.loading != "" {
 		leftParts = append(leftParts, model.loading)
@@ -1213,7 +1270,7 @@ func (model Model) titleLeftContentAtWidth(visibleCount, width int) string {
 		repoName = model.state.Repo.Root
 	}
 	count := fmt.Sprintf("%d worktrees", len(model.state.Rows))
-	if model.filter.Value() != "" {
+	if model.search.Value() != "" || model.filter != filterAll {
 		count = fmt.Sprintf("%d/%d worktrees", visibleCount, len(model.state.Rows))
 	}
 	if width <= runewidth.StringWidth(appTitle) {
@@ -1329,17 +1386,17 @@ func (model Model) selectionAnchor() selectionAnchor {
 	return selectionAnchor{path: row.Path, branch: row.Branch, head: row.Head}
 }
 
-func (model *Model) restoreSelection(anchor selectionAnchor) {
+func (model *Model) restoreSelection(anchor selectionAnchor) bool {
 	indexes := model.visibleIndexes()
 	if len(indexes) == 0 {
 		model.selected = 0
-		return
+		return false
 	}
 	if anchor.path != "" {
 		for visibleIndex, rowIndex := range indexes {
 			if model.state.Rows[rowIndex].Path == anchor.path {
 				model.selected = visibleIndex
-				return
+				return true
 			}
 		}
 	}
@@ -1348,15 +1405,16 @@ func (model *Model) restoreSelection(anchor selectionAnchor) {
 			row := model.state.Rows[rowIndex]
 			if anchor.branch != "" && row.Branch == anchor.branch {
 				model.selected = visibleIndex
-				return
+				return true
 			}
 			if anchor.head != "" && row.Head == anchor.head {
 				model.selected = visibleIndex
-				return
+				return true
 			}
 		}
 	}
 	model.selected = clamp(model.selected, 0, len(indexes)-1)
+	return false
 }
 
 func (model *Model) selectMatching(match func(gitdata.Worktree) bool) {
@@ -1368,32 +1426,26 @@ func (model *Model) selectMatching(match func(gitdata.Worktree) bool) {
 	}
 }
 
-func (model *Model) cycleSpecialRows() {
-	indexes := model.visibleIndexes()
-	targets := make([]int, 0, len(indexes))
-	seen := map[int]bool{}
-	addTargets := func(match func(gitdata.Worktree) bool) {
-		for visibleIndex, rowIndex := range indexes {
-			if match(model.state.Rows[rowIndex]) && !seen[visibleIndex] {
-				targets = append(targets, visibleIndex)
-				seen[visibleIndex] = true
-			}
+func (model *Model) cycleFilter() {
+	anchor := model.selectionAnchor()
+	currentIndex := 0
+	for index, filter := range orderedFilters {
+		if filter == model.filter {
+			currentIndex = index
+			break
 		}
 	}
-	addTargets(func(row gitdata.Worktree) bool { return row.IsMain })
-	addTargets(func(row gitdata.Worktree) bool { return row.IsActive })
-	addTargets(func(row gitdata.Worktree) bool { return !row.Status.Clean() })
-	addTargets(func(row gitdata.Worktree) bool { return row.Prunable })
-	if len(targets) == 0 {
+	for offset := 1; offset <= len(orderedFilters); offset++ {
+		filter := orderedFilters[(currentIndex+offset)%len(orderedFilters)]
+		if filter != filterAll && len(model.visibleIndexesForFilter(filter)) == 0 {
+			continue
+		}
+		model.filter = filter
+		if !model.restoreSelection(anchor) && len(model.visibleIndexes()) > 0 {
+			model.selected = 0
+		}
 		return
 	}
-	for _, target := range targets {
-		if target > model.selected {
-			model.selected = target
-			return
-		}
-	}
-	model.selected = targets[0]
 }
 
 func (model Model) frame(content string) string {
@@ -1432,7 +1484,7 @@ func (model Model) renderHelp() string {
 		"g/G jump top/bottom",
 		"m jump main worktree",
 		"a jump active worktree",
-		"Tab cycle main, active, dirty, prunable rows",
+		"Tab filter: all, modified, prunable, locked, detached",
 		"Enter cd to worktree",
 		"n create worktree",
 		"d delete worktree",
@@ -1440,8 +1492,8 @@ func (model Model) renderHelp() string {
 		"p open PR or branch page",
 		"y copy absolute path",
 		"r/f fetch --prune and reload",
-		"/ filter branches",
-		"Esc close, clear filter, or quit",
+		"s search branches",
+		"Esc close, clear filter/search, or quit",
 	}, "\n"))
 }
 
@@ -1616,10 +1668,15 @@ func centeredOverlay(base, popup string, width, height int) string {
 }
 
 func (model Model) visibleIndexes() []int {
-	pattern := model.filter.Value()
+	return model.visibleIndexesForFilter(model.filter)
+}
+
+func (model Model) visibleIndexesForFilter(filter worktreeFilter) []int {
+	pattern := model.search.Value()
 	indexes := make([]int, 0, len(model.state.Rows))
 	for index, row := range model.state.Rows {
-		if pattern == "" || fuzzyMatch(row.DisplayBranch(), pattern) {
+		branchMatches := pattern == "" || fuzzyMatch(row.DisplayBranch(), pattern)
+		if branchMatches && filter.matches(row) {
 			indexes = append(indexes, index)
 		}
 	}
