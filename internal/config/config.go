@@ -6,7 +6,11 @@ import (
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/schovi/git-worktree-tui/internal/pathutil"
 )
+
+const legacyDefaultPathTemplate = "{repo_parent}/{branch}"
 
 type Config struct {
 	Editor                      string `toml:"editor"`
@@ -18,7 +22,7 @@ type Config struct {
 func Default() Config {
 	return Config{
 		Editor:       defaultEditor(),
-		PathTemplate: "{repo_parent}/{branch}",
+		PathTemplate: pathutil.DefaultTemplate,
 	}
 }
 
@@ -77,8 +81,8 @@ func Load(path string) (Config, error) {
 	if config.Editor == "" {
 		config.Editor = defaultEditor()
 	}
-	if config.PathTemplate == "" {
-		config.PathTemplate = "{repo_parent}/{branch}"
+	if config.PathTemplate == "" || config.PathTemplate == legacyDefaultPathTemplate {
+		config.PathTemplate = pathutil.DefaultTemplate
 	}
 	return config, nil
 }

@@ -44,6 +44,8 @@ func TestSanitizeBranch(t *testing.T) {
 
 func TestApplyTemplate(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "repo")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
 	tests := []struct {
 		name     string
@@ -52,10 +54,10 @@ func TestApplyTemplate(t *testing.T) {
 		want     string
 	}{
 		{
-			name:     "default uses repo parent and sanitized branch",
+			name:     "default uses repo worktree directory and sanitized branch",
 			template: "",
 			branch:   "feature/new UI",
-			want:     filepath.Join(filepath.Dir(repoRoot), "feature-new-UI"),
+			want:     filepath.Join(filepath.Dir(repoRoot), ".worktrees", filepath.Base(repoRoot), "feature-new-UI"),
 		},
 		{
 			name:     "relative template is rooted in repo",
@@ -68,6 +70,18 @@ func TestApplyTemplate(t *testing.T) {
 			template: "{repo}/../siblings/{branch}",
 			branch:   "team\\branch",
 			want:     filepath.Join(filepath.Dir(repoRoot), "siblings", "team-branch"),
+		},
+		{
+			name:     "expands repo name placeholder",
+			template: "{repo_parent}/worktrees/{repo_name}/{branch}",
+			branch:   "feature/login",
+			want:     filepath.Join(filepath.Dir(repoRoot), "worktrees", filepath.Base(repoRoot), "feature-login"),
+		},
+		{
+			name:     "expands home shorthand before relative path handling",
+			template: "~/.worktrees/{repo_name}/{branch}",
+			branch:   "feature/login",
+			want:     filepath.Join(home, ".worktrees", filepath.Base(repoRoot), "feature-login"),
 		},
 	}
 

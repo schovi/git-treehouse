@@ -116,6 +116,21 @@ type actionMsg struct {
 	err  error
 }
 
+type configOpenedMsg struct {
+	path    string
+	modTime time.Time
+	err     error
+}
+
+type configReloadedMsg struct {
+	config  config.Config
+	path    string
+	modTime time.Time
+	err     error
+}
+
+type noOpMsg struct{}
+
 type clearFlashMsg struct {
 	id int
 }
@@ -227,6 +242,24 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			return model.setFlash(message.text)
 		}
+	case configOpenedMsg:
+		if message.err != nil {
+			return model.setFlash(message.err.Error())
+		}
+		model, flashCmd := model.setFlash("opened gwt config")
+		return model, tea.Batch(flashCmd, watchConfigChangeCmd(message.path, message.modTime))
+	case configReloadedMsg:
+		if message.err != nil {
+			return model.setFlash(message.err.Error())
+		}
+		model.config = message.config
+		model, flashCmd := model.setFlash("config reloaded")
+		if model.createDialog != nil && message.path != "" {
+			return model, tea.Batch(flashCmd, watchConfigChangeCmd(message.path, message.modTime))
+		}
+		return model, flashCmd
+	case noOpMsg:
+		return model, nil
 	case clearFlashMsg:
 		if message.id == model.flashID {
 			model.flash = ""
@@ -412,6 +445,8 @@ func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
 	case "shift+tab", "up":
 		dialog.baseIndex = (dialog.baseIndex + len(dialog.bases) - 1) % len(dialog.bases)
 		return model, nil
+	case "ctrl+o":
+		return model, openConfigCmd(model.config.Editor, model.config)
 	case "enter":
 		model.validateCreate()
 		if dialog.error != "" {
@@ -1461,6 +1496,7 @@ func (model Model) renderCreateAtWidth(width int) string {
 	}
 	lines := []string{
 		branchLine,
+		truncatePlain("Path: "+model.createPathPreview(), contentWidth),
 		"Base:",
 	}
 	for index, base := range dialog.bases {
@@ -1474,6 +1510,17 @@ func (model Model) renderCreateAtWidth(width int) string {
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(truncatePlain(dialog.error, contentWidth)))
 	}
 	return dialogBox("New worktree", lines, createDialogHintsAtWidth(width-6), width)
+}
+
+func (model Model) createPathPreview() string {
+	if model.createDialog == nil {
+		return ""
+	}
+	branch := strings.TrimSpace(model.createDialog.input.Value())
+	if branch == "" {
+		return "enter branch name"
+	}
+	return pathutil.ApplyTemplate(model.config.PathTemplate, model.state.Repo.Root, branch)
 }
 
 func (model Model) renderDelete() string {
@@ -1567,15 +1614,15 @@ func dialogBottomLine(content string, width int) string {
 }
 
 func createDialogHintsAtWidth(width int) string {
-	full := colorKeyHints("Enter create · Tab switch base · Esc cancel", false)
+	full := colorKeyHints("Enter create · Tab switch base · ctrl+o config · Esc cancel", false)
 	if lipgloss.Width(full) <= width {
 		return full
 	}
-	medium := colorKeyHints("Enter create · Tab base · Esc cancel", false)
+	medium := colorKeyHints("Enter create · Tab base · ctrl+o config · Esc cancel", false)
 	if lipgloss.Width(medium) <= width {
 		return medium
 	}
-	short := colorKeyHints("Enter · Tab · Esc", false)
+	short := colorKeyHints("Enter · Tab · ctrl+o · Esc", false)
 	if lipgloss.Width(short) <= width {
 		return short
 	}
@@ -1671,6 +1718,64 @@ func openEditorCmd(editor, path string) tea.Cmd {
 		err := exec.Command("sh", "-c", shellQuoteCommand(editor, path)).Start()
 		return actionMsg{text: "opened editor", err: err}
 	}
+}
+
+func openConfigCmd(editor string, currentConfig config.Config) tea.Cmd {
+	return func() tea.Msg {
+		path, err := config.Path()
+		if err != nil {
+			return configOpenedMsg{err: err}
+		}
+		if _, err := os.Stat(path); err != nil {
+			if !os.IsNotExist(err) {
+				return configOpenedMsg{err: err}
+			}
+			if err := config.SaveDefault(currentConfig); err != nil {
+				return configOpenedMsg{err: err}
+			}
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return configOpenedMsg{err: err}
+		}
+		if editor == "" {
+			editor = "code"
+		}
+		err = exec.Command("sh", "-c", shellQuoteCommand(editor, path)).Start()
+		return configOpenedMsg{path: path, modTime: info.ModTime(), err: err}
+	}
+}
+
+func watchConfigChangeCmd(path string, previousModTime time.Time) tea.Cmd {
+	return func() tea.Msg {
+		deadline := time.Now().Add(2 * time.Minute)
+		for time.Now().Before(deadline) {
+			time.Sleep(500 * time.Millisecond)
+			config, modTime, changed, err := loadConfigIfChanged(path, previousModTime)
+			if err != nil {
+				return configReloadedMsg{err: err}
+			}
+			if changed {
+				return configReloadedMsg{config: config, path: path, modTime: modTime}
+			}
+		}
+		return noOpMsg{}
+	}
+}
+
+func loadConfigIfChanged(path string, previousModTime time.Time) (config.Config, time.Time, bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return config.Config{}, time.Time{}, false, err
+	}
+	if info.ModTime().Equal(previousModTime) {
+		return config.Config{}, info.ModTime(), false, nil
+	}
+	loadedConfig, err := config.Load(path)
+	if err != nil {
+		return loadedConfig, info.ModTime(), true, err
+	}
+	return loadedConfig, info.ModTime(), true, nil
 }
 
 func copyPathCmd(path string) tea.Cmd {

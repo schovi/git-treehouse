@@ -14,7 +14,7 @@ func TestDefault(t *testing.T) {
 	if got.Editor != "vim" {
 		t.Fatalf("Default().Editor = %q, want %q", got.Editor, "vim")
 	}
-	if got.PathTemplate != "{repo_parent}/{branch}" {
+	if got.PathTemplate != "{repo_parent}/.worktrees/{repo_name}/{branch}" {
 		t.Fatalf("Default().PathTemplate = %q, want default template", got.PathTemplate)
 	}
 	if got.MainBranch != "" {
@@ -77,11 +77,30 @@ main_branch = "main"
 	if got.Editor != "nano" {
 		t.Fatalf("Load().Editor = %q, want %q", got.Editor, "nano")
 	}
-	if got.PathTemplate != "{repo_parent}/{branch}" {
+	if got.PathTemplate != "{repo_parent}/.worktrees/{repo_name}/{branch}" {
 		t.Fatalf("Load().PathTemplate = %q, want default template", got.PathTemplate)
 	}
 	if got.MainBranch != "main" {
 		t.Fatalf("Load().MainBranch = %q, want %q", got.MainBranch, "main")
+	}
+}
+
+func TestLoadTreatsLegacyDefaultTemplateAsCurrentDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	err := os.WriteFile(path, []byte(`
+path_template = "{repo_parent}/{branch}"
+`), 0600)
+	if err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if got.PathTemplate != "{repo_parent}/.worktrees/{repo_name}/{branch}" {
+		t.Fatalf("Load().PathTemplate = %q, want current default template", got.PathTemplate)
 	}
 }
 
@@ -125,7 +144,7 @@ func TestSaveDefaultWritesConfigFile(t *testing.T) {
 
 	err := SaveDefault(Config{
 		Editor:                      "vim",
-		PathTemplate:                "{repo_parent}/{branch}",
+		PathTemplate:                "{repo_parent}/.worktrees/{repo_name}/{branch}",
 		MainBranch:                  "main",
 		SkipShellIntegrationWelcome: true,
 	})

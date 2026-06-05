@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	appconfig "github.com/schovi/git-worktree-tui/internal/config"
 	"github.com/schovi/git-worktree-tui/internal/gitdata"
 )
 
@@ -308,9 +311,10 @@ func TestCreateDialogTypingUpdatesBranchInputWithoutValidation(t *testing.T) {
 	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
 
 	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 
-	if got := model.createDialog.input.Value(); got != "f" {
-		t.Fatalf("create branch input = %q, want f", got)
+	if got := model.createDialog.input.Value(); got != "fe" {
+		t.Fatalf("create branch input = %q, want fe", got)
 	}
 	if model.createDialog.error != "" {
 		t.Fatalf("typing should not validate immediately, got error %q", model.createDialog.error)
@@ -432,7 +436,7 @@ func TestCreateDialogRendersColoredBorderAndBottomHints(t *testing.T) {
 		appBorderStyle.Render("╭─"),
 		appBorderStyle.Render("│ "),
 		appBorderStyle.Render("╰─ "),
-		colorKeyHints("Enter create · Tab switch base · Esc cancel", false),
+		colorKeyHints("Enter create · Tab switch base · ctrl+o config · Esc cancel", false),
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("renderCreateAtWidth() missing %q:\n%s", want, output)
@@ -451,6 +455,101 @@ func TestCreateDialogRenderShowsTypedBranchName(t *testing.T) {
 
 	if !strings.Contains(output, "feature/login") {
 		t.Fatalf("renderCreateAtWidth() should show typed branch name:\n%s", output)
+	}
+}
+
+func TestCreateDialogRenderShowsLivePathPreview(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.state.Repo.Root = "/repo/git-worktree-tui"
+	model.createDialog.input.SetValue("feature/login")
+
+	output := model.renderCreateAtWidth(100)
+
+	want := filepath.Join("/repo", ".worktrees", "git-worktree-tui", "feature-login")
+	if !strings.Contains(output, want) {
+		t.Fatalf("renderCreateAtWidth() should show path %q:\n%s", want, output)
+	}
+}
+
+func TestCreateDialogConfigShortcutCreatesAndOpensConfig(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.config = appconfig.Config{
+		Editor:       "true",
+		PathTemplate: "{repo_parent}/custom/{branch}",
+	}
+
+	_, cmd := model.updateCreate(tea.KeyMsg{Type: tea.KeyCtrlO})
+	if cmd == nil {
+		t.Fatal("ctrl+o should return config editor command")
+	}
+	message := cmd()
+	opened, ok := message.(configOpenedMsg)
+	if !ok {
+		t.Fatalf("config command message = %T, want configOpenedMsg", message)
+	}
+	if opened.err != nil {
+		t.Fatalf("config command error = %v", opened.err)
+	}
+
+	path, err := appconfig.Path()
+	if err != nil {
+		t.Fatalf("config path: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(content), `path_template = "{repo_parent}/custom/{branch}"`) {
+		t.Fatalf("config should contain current path template:\n%s", content)
+	}
+}
+
+func TestLoadConfigIfChangedReloadsModifiedConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`path_template = "{repo_parent}/old/{branch}"`), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	previousModTime := info.ModTime()
+	if err := os.WriteFile(path, []byte(`path_template = "{repo_parent}/new/{branch}"`), 0600); err != nil {
+		t.Fatalf("rewrite config: %v", err)
+	}
+	nextModTime := previousModTime.Add(time.Second)
+	if err := os.Chtimes(path, nextModTime, nextModTime); err != nil {
+		t.Fatalf("set config mtime: %v", err)
+	}
+
+	config, _, changed, err := loadConfigIfChanged(path, previousModTime)
+
+	if err != nil {
+		t.Fatalf("loadConfigIfChanged() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("loadConfigIfChanged() changed = false, want true")
+	}
+	if config.PathTemplate != "{repo_parent}/new/{branch}" {
+		t.Fatalf("loaded PathTemplate = %q, want new template", config.PathTemplate)
+	}
+}
+
+func TestConfigReloadedMessageUpdatesCreatePathPreview(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.state.Repo.Root = "/repo/git-worktree-tui"
+	model.createDialog.input.SetValue("feature/login")
+
+	updated, _ := model.Update(configReloadedMsg{config: appconfig.Config{
+		PathTemplate: "~/.worktrees/{repo_name}/{branch}",
+	}})
+	model = updated.(Model)
+
+	output := model.renderCreateAtWidth(120)
+	if !strings.Contains(output, ".worktrees/git-worktree-tui/feature-login") {
+		t.Fatalf("renderCreateAtWidth() should use reloaded path template:\n%s", output)
 	}
 }
 
