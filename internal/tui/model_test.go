@@ -1,15 +1,24 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/schovi/git-worktree-tui/internal/gitdata"
 )
+
+type testRunner struct{}
+
+func (runner testRunner) Run(_ context.Context, _, _ string, _ ...string) ([]byte, error) {
+	return nil, errors.New("unexpected command")
+}
 
 func TestSelectedInspectorUsesLabeledRelativeFields(t *testing.T) {
 	model := Model{
@@ -264,6 +273,187 @@ func TestViewRendersBoxedAppSections(t *testing.T) {
 	}
 }
 
+func TestOpenCreateStartsWithEmptyBranchName(t *testing.T) {
+	model := Model{
+		runner: testRunner{},
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/main"},
+			Rows: []gitdata.Worktree{{
+				Path:   "/repo/main",
+				Branch: "feature/source",
+			}},
+		},
+	}
+
+	model, cmd := model.openCreate()
+
+	if model.createDialog == nil {
+		t.Fatal("openCreate() did not open create dialog")
+	}
+	if cmd == nil {
+		t.Fatal("openCreate() should return input focus command")
+	}
+	if got := model.createDialog.input.Value(); got != "" {
+		t.Fatalf("create branch input = %q, want empty", got)
+	}
+	if model.createDialog.error != "" {
+		t.Fatalf("create dialog error = %q, want empty initial error", model.createDialog.error)
+	}
+	if !model.createDialog.input.Focused() {
+		t.Fatal("create branch input should be focused")
+	}
+}
+
+func TestCreateDialogTypingUpdatesBranchInputWithoutValidation(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+
+	if got := model.createDialog.input.Value(); got != "f" {
+		t.Fatalf("create branch input = %q, want f", got)
+	}
+	if model.createDialog.error != "" {
+		t.Fatalf("typing should not validate immediately, got error %q", model.createDialog.error)
+	}
+}
+
+func TestCreateDialogTextNavigationDoesNotChangeBase(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{
+		{Label: "main (local)", Rev: "main"},
+		{Label: "origin/main", Rev: "origin/main"},
+	})
+	model.createDialog.input.SetValue("ab")
+
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyLeft})
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyRight})
+
+	if got := model.createDialog.input.Value(); got != "axb" {
+		t.Fatalf("left arrow should move text cursor, input = %q, want axb", got)
+	}
+	if got := model.createDialog.baseIndex; got != 0 {
+		t.Fatalf("left/right should not change base index, got %d", got)
+	}
+}
+
+func TestCreateDialogBaseNavigationKeys(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{
+		{Label: "main (local)", Rev: "main"},
+		{Label: "origin/main", Rev: "origin/main"},
+		{Label: "feature (local)", Rev: "feature"},
+	})
+
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyTab})
+	if got := model.createDialog.baseIndex; got != 1 {
+		t.Fatalf("tab base index = %d, want 1", got)
+	}
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyDown})
+	if got := model.createDialog.baseIndex; got != 2 {
+		t.Fatalf("down base index = %d, want 2", got)
+	}
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if got := model.createDialog.baseIndex; got != 1 {
+		t.Fatalf("shift+tab base index = %d, want 1", got)
+	}
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyUp})
+	if got := model.createDialog.baseIndex; got != 0 {
+		t.Fatalf("up base index = %d, want 0", got)
+	}
+}
+
+func TestCreateDialogValidatesOnlyOnSubmit(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	if model.createDialog.error != "" {
+		t.Fatalf("typing should not validate immediately, got error %q", model.createDialog.error)
+	}
+
+	model.createDialog.input.SetValue("")
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := model.createDialog.error; got != "branch name is required" {
+		t.Fatalf("submit validation error = %q, want branch name is required", got)
+	}
+}
+
+func TestCreateDialogRendersCenteredOverlay(t *testing.T) {
+	input := textinput.New()
+	input.Prompt = ""
+	model := Model{
+		width:  100,
+		height: 40,
+		state: gitdata.State{
+			Repo: gitdata.Repository{
+				Root:           "/repo/main",
+				ActiveWorktree: "/repo/main",
+			},
+			Rows: []gitdata.Worktree{{
+				Path:          "/repo/main",
+				Branch:        "main",
+				IsMain:        true,
+				IsActive:      true,
+				CommitShort:   "abc1234",
+				CommitSubject: "boxed app",
+			}},
+		},
+		createDialog: &createDialog{
+			input: input,
+			bases: []gitdata.BaseOption{{Label: "main (local)", Rev: "main"}},
+		},
+	}
+
+	output := model.View()
+	lines := strings.Split(output, "\n")
+	dialogLine := -1
+	for index, line := range lines {
+		if strings.Contains(line, "New worktree") {
+			dialogLine = index
+			break
+		}
+	}
+
+	if len(lines) != model.height {
+		t.Fatalf("View() line count = %d, want %d:\n%s", len(lines), model.height, output)
+	}
+	if dialogLine < 5 || dialogLine > 12 {
+		t.Fatalf("New worktree dialog line = %d, want centered in app frame:\n%s", dialogLine, output)
+	}
+	if dialogLine >= model.height/2 {
+		t.Fatalf("New worktree dialog line = %d, should not be centered in terminal viewport:\n%s", dialogLine, output)
+	}
+}
+
+func TestCreateDialogRendersColoredBorderAndBottomHints(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+
+	output := model.renderCreateAtWidth(72)
+
+	for _, want := range []string{
+		appBorderStyle.Render("╭─"),
+		appBorderStyle.Render("│ "),
+		appBorderStyle.Render("╰─ "),
+		colorKeyHints("Enter create · Tab switch base · Esc cancel", false),
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("renderCreateAtWidth() missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "Tab switch · Esc cancel") {
+		t.Fatalf("renderCreateAtWidth() should use Tab switch base:\n%s", output)
+	}
+}
+
+func TestCreateDialogRenderShowsTypedBranchName(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.createDialog.input.SetValue("feature/login")
+
+	output := model.renderCreateAtWidth(72)
+
+	if !strings.Contains(output, "feature/login") {
+		t.Fatalf("renderCreateAtWidth() should show typed branch name:\n%s", output)
+	}
+}
+
 func TestAppBottomLineEmbedsStatusWithDotSeparators(t *testing.T) {
 	model := Model{width: 100}
 
@@ -284,6 +474,25 @@ func TestAppBottomLineEmbedsStatusWithDotSeparators(t *testing.T) {
 	}
 	if width := lipgloss.Width(output); width != 100 {
 		t.Fatalf("appBottomLine() width = %d, want 100:\n%s", width, output)
+	}
+}
+
+func modelWithCreateDialog(bases []gitdata.BaseOption) Model {
+	input := textinput.New()
+	input.Prompt = ""
+	input.Cursor.Style = flashStyle
+	input.Focus()
+	return Model{
+		width:  100,
+		height: 24,
+		runner: testRunner{},
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/main"},
+		},
+		createDialog: &createDialog{
+			input: input,
+			bases: bases,
+		},
 	}
 }
 

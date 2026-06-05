@@ -390,15 +390,14 @@ func (model Model) openCreate() (Model, tea.Cmd) {
 	input.Prompt = ""
 	input.CharLimit = 200
 	input.Width = 34
-	input.SetValue(row.Branch)
-	input.Focus()
+	input.Cursor.Style = flashStyle
+	focusCmd := input.Focus()
 	bases := gitdata.BaseOptions(context.Background(), model.state.Repo, row, model.runner)
 	if len(bases) == 0 {
 		return model.setFlash("no base ref available")
 	}
 	model.createDialog = &createDialog{input: input, bases: bases}
-	model.validateCreate()
-	return model, nil
+	return model, focusCmd
 }
 
 func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
@@ -410,7 +409,7 @@ func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
 	case "tab", "down":
 		dialog.baseIndex = (dialog.baseIndex + 1) % len(dialog.bases)
 		return model, nil
-	case "up":
+	case "shift+tab", "up":
 		dialog.baseIndex = (dialog.baseIndex + len(dialog.bases) - 1) % len(dialog.bases)
 		return model, nil
 	case "enter":
@@ -433,7 +432,7 @@ func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
 	default:
 		var cmd tea.Cmd
 		dialog.input, cmd = dialog.input.Update(message)
-		model.validateCreate()
+		dialog.error = ""
 		return model, cmd
 	}
 }
@@ -549,9 +548,6 @@ func (model Model) View() string {
 	if model.help {
 		fixedLines += lineCount(model.renderHelp())
 	}
-	if model.createDialog != nil {
-		fixedLines += lineCount(model.renderCreate())
-	}
 	if model.deleteDialog != nil {
 		fixedLines += lineCount(model.renderDelete())
 	}
@@ -559,7 +555,7 @@ func (model Model) View() string {
 	if model.height <= 0 {
 		availableHeight = 8
 	}
-	if model.createDialog != nil || model.deleteDialog != nil || model.help {
+	if model.deleteDialog != nil || model.help {
 		availableHeight = max(3, availableHeight-8)
 	}
 	start := 0
@@ -598,14 +594,15 @@ func (model Model) View() string {
 	if model.help {
 		parts = append(parts, model.wrapOuter(model.renderHelp(), outerWidth))
 	}
-	if model.createDialog != nil {
-		parts = append(parts, model.wrapOuter(model.renderCreate(), outerWidth))
-	}
 	if model.deleteDialog != nil {
 		parts = append(parts, model.wrapOuter(model.renderDelete(), outerWidth))
 	}
 	parts = append(parts, model.appBottomLine(outerWidth))
-	return model.frame(strings.Join(parts, "\n"))
+	output := strings.Join(parts, "\n")
+	if model.createDialog != nil {
+		output = centeredOverlay(output, model.renderCreateAtWidth(createDialogWidth(outerWidth)), outerWidth, lineCount(output))
+	}
+	return model.frame(output)
 }
 
 func (model Model) selectedInspector(row gitdata.Worktree, now time.Time) string {
@@ -1449,9 +1446,21 @@ func (model Model) renderHelp() string {
 }
 
 func (model Model) renderCreate() string {
+	return model.renderCreateAtWidth(createDialogWidth(viewWidth(model)))
+}
+
+func (model Model) renderCreateAtWidth(width int) string {
 	dialog := model.createDialog
+	contentWidth := max(1, width-4)
+	input := dialog.input
+	branchLabel := "Branch name: "
+	input.Width = max(1, contentWidth-runewidth.StringWidth(branchLabel)-1)
+	branchLine := branchLabel + input.View()
+	if lipgloss.Width(branchLine) > contentWidth {
+		branchLine = truncatePlain(strings.TrimSpace(branchLabel), contentWidth)
+	}
 	lines := []string{
-		"Branch name: " + dialog.input.View(),
+		branchLine,
 		"Base:",
 	}
 	for index, base := range dialog.bases {
@@ -1459,13 +1468,12 @@ func (model Model) renderCreate() string {
 		if index == dialog.baseIndex {
 			marker = "●"
 		}
-		lines = append(lines, "  "+marker+" "+base.Label)
+		lines = append(lines, truncatePlain("  "+marker+" "+base.Label, contentWidth))
 	}
 	if dialog.error != "" {
-		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(dialog.error))
+		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(truncatePlain(dialog.error, contentWidth)))
 	}
-	lines = append(lines, "", "Enter create · Tab switch · Esc cancel")
-	return box("New worktree", strings.Join(lines, "\n"))
+	return dialogBox("New worktree", lines, createDialogHintsAtWidth(width-6), width)
 }
 
 func (model Model) renderDelete() string {
@@ -1513,6 +1521,90 @@ func box(title, body string) string {
 		BorderForeground(lipgloss.Color("240")).
 		Padding(0, 1).
 		Render(title + "\n" + body)
+}
+
+func createDialogWidth(viewWidth int) int {
+	if viewWidth <= 0 {
+		return 72
+	}
+	inset := 8
+	if viewWidth < 48 {
+		inset = 2
+	}
+	return max(4, min(72, viewWidth-inset))
+}
+
+func dialogBox(title string, bodyLines []string, bottomContent string, width int) string {
+	width = max(4, width)
+	contentWidth := max(1, width-4)
+	lines := make([]string, 0, len(bodyLines)+2)
+	lines = append(lines, dialogTopLine(title, width))
+	for _, line := range bodyLines {
+		lines = append(lines, appBorderStyle.Render("│ ")+padStyled(line, contentWidth)+appBorderStyle.Render(" │"))
+	}
+	lines = append(lines, dialogBottomLine(bottomContent, width))
+	return strings.Join(lines, "\n")
+}
+
+func dialogTopLine(title string, width int) string {
+	innerWidth := width - 2
+	label := ""
+	if title != "" {
+		label = " " + title + " "
+		label = truncatePlain(label, max(0, innerWidth-1))
+	}
+	labelWidth := runewidth.StringWidth(label)
+	ruleWidth := max(0, innerWidth-1-labelWidth)
+	return appBorderStyle.Render("╭─") + panelTitleStyle.Render(label) + appBorderStyle.Render(strings.Repeat("─", ruleWidth)+"╮")
+}
+
+func dialogBottomLine(content string, width int) string {
+	contentWidth := width - 6
+	if contentWidth < 1 || content == "" {
+		return appBorderStyle.Render("╰" + strings.Repeat("─", max(0, width-2)) + "╯")
+	}
+	return appBorderStyle.Render("╰─ ") + padStyled(content, contentWidth) + appBorderStyle.Render(" ─╯")
+}
+
+func createDialogHintsAtWidth(width int) string {
+	full := colorKeyHints("Enter create · Tab switch base · Esc cancel", false)
+	if lipgloss.Width(full) <= width {
+		return full
+	}
+	medium := colorKeyHints("Enter create · Tab base · Esc cancel", false)
+	if lipgloss.Width(medium) <= width {
+		return medium
+	}
+	short := colorKeyHints("Enter · Tab · Esc", false)
+	if lipgloss.Width(short) <= width {
+		return short
+	}
+	return ""
+}
+
+func centeredOverlay(base, popup string, width, height int) string {
+	lines := strings.Split(base, "\n")
+	if height <= 0 {
+		height = len(lines)
+	}
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", width))
+	}
+	popupLines := strings.Split(popup, "\n")
+	popupWidth := 0
+	for _, line := range popupLines {
+		popupWidth = max(popupWidth, lipgloss.Width(line))
+	}
+	top := max(0, (height-len(popupLines))/2)
+	left := max(0, (width-popupWidth)/2)
+	for index, line := range popupLines {
+		target := top + index
+		if target >= len(lines) {
+			break
+		}
+		lines[target] = strings.Repeat(" ", left) + padStyled(line, popupWidth) + strings.Repeat(" ", max(0, width-left-popupWidth))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (model Model) visibleIndexes() []int {
