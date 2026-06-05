@@ -72,12 +72,3 @@ homebrew_casks:
     license: MIT
     url:
       template: https://github.com/schovi/git-treehouse/releases/download/{{ .Tag }}/{{ .ArtifactName }}
-      verified: github.com/schovi/git-treehouse/
-    dependencies:
-      - formula: git
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/git-treehouse", "#{staged_path}/gth"]
-          end
