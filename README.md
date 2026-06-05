@@ -1,8 +1,33 @@
-# Git Treehouse
+<p align="center">
+  <img src="docs/assets/git-treehouse-icon-small.png" alt="Git Treehouse" width="120">
+</p>
 
-Git Treehouse is a terminal UI for Git worktrees.
+<h1 align="center">Git Treehouse</h1>
 
-It is built for repositories where you keep several task branches checked out at the same time. It gives you one keyboard-driven table for jumping between worktrees, creating new ones, deleting stale ones, and seeing enough Git state to know what is safe to touch.
+<p align="center">
+  <strong>Git Treehouse - Tame AI agent worktrees</strong>
+</p>
+
+<p align="center">
+  When agents create branches and worktrees faster than you can track them, Git Treehouse gives you one keyboard-driven view to inspect, jump, clean up, and create the next worktree safely.
+</p>
+
+<p align="center">
+  <a href="https://github.com/schovi/git-treehouse/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/schovi/git-treehouse/ci.yml?branch=main&style=flat-square" alt="Build"></a>
+  <a href="https://github.com/schovi/git-treehouse/releases"><img src="https://img.shields.io/github/v/release/schovi/git-treehouse?style=flat-square" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/screen-app-1.png" alt="Git Treehouse app screenshot">
+</p>
+
+<p align="center">
+  More screenshots:
+  <a href="docs/assets/screen-onboarding.png">onboarding</a> |
+  <a href="docs/assets/screen-app-2.png">app example #2</a> |
+  <a href="docs/assets/screen-new-worktree.png">create new worktree</a>
+</p>
 
 ## What It Does
 
