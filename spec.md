@@ -3,7 +3,7 @@
 A fast terminal UI for managing git worktrees: browse, switch, create, and delete them from one keyboard-driven table.
 
 - **Binary name:** `git-treehouse`
-- **Shell wrapper + Homebrew alias:** `gth`
+- **Smart shell wrapper:** `gth`
 - **Stack:** Go + Bubble Tea (with Lip Gloss for styling, Bubbles for inputs/spinners)
 - **Scope:** single repo per invocation (the repo containing the cwd), single user, local tool
 
@@ -18,9 +18,9 @@ A fast terminal UI for managing git worktrees: browse, switch, create, and delet
 
 | Command | Behavior |
 |---|---|
-| `git-treehouse` | Launch the TUI |
+| `git-treehouse` | Launch the native TUI. It cannot change the parent shell directory by itself. |
 | `git-treehouse list` | Print the table to stdout, no TUI, no ANSI when piped. For scripting. |
-| `git-treehouse init <shell>` | Print the shell wrapper function for `fish`, `zsh`, or `bash` (see §2) |
+| `git-treehouse init <shell>` | Print shell integration functions that define `gth` (see §2) |
 
 ## 2. Shell integration (cd mechanism)
 
@@ -28,6 +28,7 @@ A child process cannot change its parent shell's cwd, so Git Treehouse uses the 
 
 - The TUI writes the selected path to a file given via `--cd-file <path>` (nothing else goes to that file).
 - The `gth` wrapper function (installed via `git-treehouse init fish | source` etc.) runs the binary with a temp `--cd-file`, and `cd`s to its content after the TUI exits, if non-empty.
+- `git-treehouse` remains the native CLI for non-navigating commands and direct invocation. `gth` is the directory-changing command.
 - Quitting without selecting writes nothing; the shell stays where it was.
 - **Graceful degradation:** without `--cd-file`, the selected path is printed to stdout on exit (TUI renders on stderr/tty), so `cd (git-treehouse)` works bare.
 

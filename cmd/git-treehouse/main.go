@@ -208,10 +208,11 @@ func runTUI(cdFile string) error {
 		return nil
 	}
 	if cdFile != "" {
-		return os.WriteFile(cdFile, []byte(selectedPath), 0600)
+		return os.WriteFile(cdFile, []byte(selectedPath), 0600) // #nosec G703 -- --cd-file is an explicit shell-integration path created by the wrapper.
 	}
 	if stdoutIsTTY() {
-		fmt.Fprintln(os.Stderr, pathSelectionHint(selectedPath, currentShell()))
+		shell := currentShell()
+		fmt.Fprintln(os.Stderr, pathSelectionHint(selectedPath, shell, shellinit.ConfigFileContainsIntegration(shell))) // #nosec G705 -- This is terminal text, not HTML output.
 		return nil
 	}
 	fmt.Println(selectedPath)
@@ -265,12 +266,16 @@ func runShellWelcome(shell string) error {
 	return nil
 }
 
-func pathSelectionHint(selectedPath, shell string) string {
+func pathSelectionHint(selectedPath, shell string, integrationInstalled bool) string {
 	shell = shellinit.Normalize(shell)
+	const nativeCommandHint = "Use git-treehouse for native commands like:\n  git-treehouse list"
 	if shell == "" {
-		return fmt.Sprintf("Selected %s\nA standalone %s process cannot change your shell directory. Install shell integration with: %s init %s", selectedPath, commandName, commandName, strings.Join(shellinit.SupportedShells(), "|"))
+		return fmt.Sprintf("Selected %s\nA standalone %s process cannot change your shell directory.\nUse gth for directory-changing runs after shell integration is installed.\nInstall it with: %s init %s\nThen run:\n  gth\n%s", selectedPath, commandName, commandName, strings.Join(shellinit.SupportedShells(), "|"), nativeCommandHint)
 	}
-	return fmt.Sprintf("Selected %s\nA standalone %s process cannot change your shell directory. Run this once now:\n  %s\nPersist it with:\n  %s", selectedPath, commandName, shellinit.ActivationCommand(shell), shellinit.InstallCommand(shell))
+	if integrationInstalled {
+		return fmt.Sprintf("Selected %s\nA standalone %s process cannot change your shell directory.\nShell integration appears installed in your config. Reload your shell if needed.\nRun the smart wrapper instead:\n  gth\n%s", selectedPath, commandName, nativeCommandHint)
+	}
+	return fmt.Sprintf("Selected %s\nA standalone %s process cannot change your shell directory.\nInstall shell integration, then use the smart wrapper:\n  %s\n  gth\nPersist it with:\n  %s\n%s", selectedPath, commandName, shellinit.ActivationCommand(shell), shellinit.InstallCommand(shell), nativeCommandHint)
 }
 
 func detectShell(shellPath string) string {

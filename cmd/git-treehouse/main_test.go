@@ -31,18 +31,41 @@ func TestDetectShell(t *testing.T) {
 }
 
 func TestPathSelectionHintExplainsShellIntegration(t *testing.T) {
-	hint := pathSelectionHint("/repo/worktree", "zsh")
+	hint := pathSelectionHint("/repo/worktree", "zsh", false)
 
 	for _, want := range []string{
 		"Selected /repo/worktree",
 		"cannot change your shell directory",
+		"Install shell integration, then use the smart wrapper",
 		`eval "$(git-treehouse init zsh)"`,
+		"\n  gth",
 		"git-treehouse init zsh >> ",
+		"Use git-treehouse for native commands",
+		"git-treehouse list",
 		".zshrc",
 	} {
 		if !strings.Contains(hint, want) {
 			t.Fatalf("pathSelectionHint() missing %q:\n%s", want, hint)
 		}
+	}
+}
+
+func TestPathSelectionHintSuggestsGthWhenIntegrationIsInstalled(t *testing.T) {
+	hint := pathSelectionHint("/repo/worktree", "zsh", true)
+
+	for _, want := range []string{
+		"Selected /repo/worktree",
+		"Shell integration appears installed in your config",
+		"Reload your shell if needed",
+		"Run the smart wrapper instead:\n  gth",
+		"Use git-treehouse for native commands",
+	} {
+		if !strings.Contains(hint, want) {
+			t.Fatalf("pathSelectionHint() missing %q:\n%s", want, hint)
+		}
+	}
+	if strings.Contains(hint, "Run this once") || strings.Contains(hint, "Persist it with") {
+		t.Fatalf("pathSelectionHint() should not show install instructions when integration is installed:\n%s", hint)
 	}
 }
 

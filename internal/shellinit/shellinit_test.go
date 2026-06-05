@@ -94,6 +94,21 @@ func TestInstallAppendsBlockOnce(t *testing.T) {
 	}
 }
 
+func TestConfigFileContainsIntegration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if ConfigFileContainsIntegration("zsh") {
+		t.Fatal("ConfigFileContainsIntegration(zsh) = true before install")
+	}
+	if _, err := Install("zsh"); err != nil {
+		t.Fatalf("Install(zsh) error = %v", err)
+	}
+	if !ConfigFileContainsIntegration("zsh") {
+		t.Fatal("ConfigFileContainsIntegration(zsh) = false after install")
+	}
+}
+
 func TestConfigPathAndReloadCommand(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

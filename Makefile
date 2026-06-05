@@ -1,5 +1,7 @@
 .PHONY: build run lint test test-cover install clean security
 
+GO_PACKAGE_DIRS := $(shell go list -f '{{.Dir}}' ./...)
+
 build:
 	go build -o git-treehouse ./cmd/git-treehouse
 
@@ -23,5 +25,5 @@ clean:
 	rm -f git-treehouse coverage.out coverage.html
 
 security:
-	gosec -exclude=G104,G204,G301,G302,G304,G306 ./...
+	gosec -exclude=G104,G204,G301,G302,G304,G306 $(GO_PACKAGE_DIRS)
 	govulncheck ./...

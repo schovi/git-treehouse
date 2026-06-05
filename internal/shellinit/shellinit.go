@@ -107,6 +107,18 @@ func Install(shell string) (InstallResult, error) {
 	return result, nil
 }
 
+func ConfigFileContainsIntegration(shell string) bool {
+	path, err := ConfigPath(shell)
+	if err != nil {
+		return false
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(content), blockStart)
+}
+
 func ConfigPath(shell string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

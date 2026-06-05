@@ -10,7 +10,7 @@
 
 <p align="center">
   When agents create branches and worktrees faster than you can track them, Git Treehouse gives you one keyboard-driven view to inspect, jump, clean up, and create the next worktree safely.
-  Use `git-treehouse` directly, or `gth` after shell integration for quick directory-changing workflows.
+  Use `git-treehouse` as the native CLI, or `gth` after shell integration for directory-changing workflows.
 </p>
 
 <p align="center">
@@ -51,7 +51,7 @@ Install with Homebrew:
 brew install --cask schovi/tap/git-treehouse
 ```
 
-Homebrew installs `git-treehouse` and the short `gth` command. With the binary on `PATH`, Git can also run it as `git treehouse`.
+Homebrew installs the native `git-treehouse` binary and the short `gth` command. With the binary on `PATH`, Git can also run it as `git treehouse`.
 
 Install from GitHub with Go:
 
@@ -81,7 +81,7 @@ git-treehouse
 
 On first launch, `git-treehouse` may show a shell integration setup screen. Install it if you want `Enter` to change your shell directory to the selected worktree.
 
-After shell integration is installed, use `gth` for the directory-changing wrapper.
+After shell integration is installed, use `gth` for directory-changing runs. Keep using `git-treehouse` for native commands like `git-treehouse list` and `git-treehouse init`.
 
 Without shell integration, `git-treehouse` can still print the selected path:
 
@@ -92,6 +92,8 @@ cd "$(git-treehouse)"
 ## Shell Integration
 
 A child process cannot change the parent shell directory directly. Git Treehouse solves this with a small `gth` shell wrapper: the TUI writes the selected path to a temporary file, then the wrapper reads it and runs `cd`.
+
+`git-treehouse init` installs shell functions for `gth`. It does not replace the native `git-treehouse` binary. Use `gth` when you want the selected worktree to become your current directory.
 
 The first-run setup screen can install this for you. You can also install it manually.
 
@@ -141,11 +143,11 @@ Restart the shell, or source the config file after installation.
 
 ### Jump To A Worktree
 
-1. Open `gth` if shell integration is installed, or `git-treehouse` otherwise.
+1. Run `gth` after shell integration is installed.
 2. Move with `up` / `down`, or `k` / `j`.
 3. Press `Enter`.
 
-With shell integration installed, your shell moves into that worktree.
+Your shell moves into the selected worktree. Without shell integration, run `git-treehouse` as the native TUI and use the printed path with `cd`.
 
 ### Create A Worktree
 
