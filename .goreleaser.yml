@@ -1,0 +1,83 @@
+version: 2
+
+project_name: git-treehouse
+
+release:
+  github:
+    owner: schovi
+    name: git-treehouse
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: git-treehouse
+    main: ./cmd/git-treehouse
+    binary: git-treehouse
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+  - id: gth
+    main: ./cmd/git-treehouse
+    binary: gth
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: git-treehouse
+    ids:
+      - git-treehouse
+      - gth
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+homebrew_casks:
+  - name: git-treehouse
+    ids:
+      - git-treehouse
+    binaries:
+      - git-treehouse
+      - gth
+    repository:
+      owner: schovi
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/schovi/git-treehouse
+    description: TUI for managing Git worktrees
+    license: MIT
+    url:
+      template: https://github.com/schovi/git-treehouse/releases/download/{{ .Tag }}/{{ .ArtifactName }}
+      verified: github.com/schovi/git-treehouse/
+    dependencies:
+      - formula: git
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/git-treehouse", "#{staged_path}/gth"]
+          end

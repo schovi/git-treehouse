@@ -1,6 +1,6 @@
 # Ideas
 
-Backlog notes for future `gwt` releases. These are intentionally lightweight, not commitments.
+Backlog notes for future `git-treehouse` releases. These are intentionally lightweight, not commitments.
 
 ## UI and Layout
 
@@ -12,10 +12,10 @@ Backlog notes for future `gwt` releases. These are intentionally lightweight, no
 
 ### Boxed App Layout Sketch
 
-Explore a full dashboard-style frame where each major region has its own box. This would make `gwt` feel less like rendered text and more like a terminal app surface.
+Explore a full dashboard-style frame where each major region has its own box. This would make `git-treehouse` feel less like rendered text and more like a terminal app surface.
 
 ```text
-┌ gwt ─ activejob-temporal ─ 2 worktrees ───────────── n new · r refresh · ? help · q quit ┐
+┌ git-treehouse ─ activejob-temporal ─ 2 worktrees ───────────── n new · r refresh · ? help · q quit ┐
 │ ┌ Worktrees ───────────────────────────────────────────────────────────────────────────┐ │
 │ │   │ branch                  │ status │ head± │ main± │ commit              │ age │ PR │ │
 │ │ ● │ main                    │ ✓      │ ↑1    │       │ 46264bf add AGENTS  │ 14h │    │ │
@@ -88,8 +88,8 @@ Notes:
 
 ## CLI and Scripting
 
-- Add `gwt list --json`.
-- Add `gwt doctor` for checking `git`, `gh`, shell wrapper, config, editor, and clipboard.
+- Add `git-treehouse list --json`.
+- Add `git-treehouse doctor` for checking `git`, `gh`, shell wrapper, config, editor, and clipboard.
 - Add `--repo <path>` for explicit repo selection.
 - Add `--sort age|branch|status|size`.
 

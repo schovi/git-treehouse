@@ -108,13 +108,13 @@ func TestLoadDefaultUsesHomeConfigWhenPresent(t *testing.T) {
 	t.Setenv("EDITOR", "vim")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	configDir := filepath.Join(home, ".config", "gwt")
+	configDir := filepath.Join(home, ".config", "git-treehouse")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		t.Fatalf("make config dir: %v", err)
 	}
 	err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(`
 editor = "zed"
-path_template = "{repo_parent}/gwt/{branch}"
+path_template = "{repo_parent}/git-treehouse/{branch}"
 main_branch = "develop"
 `), 0600)
 	if err != nil {
@@ -129,7 +129,7 @@ main_branch = "develop"
 	if got.Editor != "zed" {
 		t.Fatalf("LoadDefault().Editor = %q, want %q", got.Editor, "zed")
 	}
-	if got.PathTemplate != "{repo_parent}/gwt/{branch}" {
+	if got.PathTemplate != "{repo_parent}/git-treehouse/{branch}" {
 		t.Fatalf("LoadDefault().PathTemplate = %q, want configured template", got.PathTemplate)
 	}
 	if got.MainBranch != "develop" {
@@ -172,7 +172,7 @@ func TestPathUsesXDGConfigHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Path() error = %v", err)
 	}
-	want := filepath.Join(configHome, "gwt", "config.toml")
+	want := filepath.Join(configHome, "git-treehouse", "config.toml")
 	if got != want {
 		t.Fatalf("Path() = %q, want %q", got, want)
 	}

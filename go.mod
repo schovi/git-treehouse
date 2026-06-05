@@ -1,4 +1,4 @@
-module github.com/schovi/git-worktree-tui
+module github.com/schovi/git-treehouse
 
 go 1.26.1
 

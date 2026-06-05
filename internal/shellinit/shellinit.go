@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	blockStart = "# >>> gwt shell integration >>>"
-	blockEnd   = "# <<< gwt shell integration <<<"
+	blockStart = "# >>> gth shell integration >>>"
+	blockEnd   = "# <<< gth shell integration <<<"
 )
 
 type InstallResult struct {
@@ -135,13 +135,13 @@ func ConfigPath(shell string) (string, error) {
 func ActivationCommand(shell string) string {
 	switch Normalize(shell) {
 	case "fish":
-		return "gwt init fish | source"
+		return "git-treehouse init fish | source"
 	case "nushell":
-		return "gwt init nushell | save --force /tmp/gwt.nu; source /tmp/gwt.nu"
+		return "git-treehouse init nushell | save --force /tmp/gth.nu; source /tmp/gth.nu"
 	case "powershell":
-		return `gwt init powershell | Invoke-Expression`
+		return `git-treehouse init powershell | Invoke-Expression`
 	default:
-		return fmt.Sprintf("eval \"$(gwt init %s)\"", Normalize(shell))
+		return fmt.Sprintf("eval \"$(git-treehouse init %s)\"", Normalize(shell))
 	}
 }
 
@@ -149,15 +149,15 @@ func InstallCommand(shell string) string {
 	shell = Normalize(shell)
 	path, err := ConfigPath(shell)
 	if err != nil {
-		return "gwt init " + shell
+		return "git-treehouse init " + shell
 	}
 	switch shell {
 	case "nushell":
-		return fmt.Sprintf("gwt init nushell | save --append %s", quotePath(path))
+		return fmt.Sprintf("git-treehouse init nushell | save --append %s", quotePath(path))
 	case "powershell":
-		return fmt.Sprintf("gwt init powershell >> %s", quotePath(path))
+		return fmt.Sprintf("git-treehouse init powershell >> %s", quotePath(path))
 	default:
-		return fmt.Sprintf("gwt init %s >> %s", shell, quotePath(path))
+		return fmt.Sprintf("git-treehouse init %s >> %s", shell, quotePath(path))
 	}
 }
 
@@ -180,29 +180,29 @@ func quotePath(path string) string {
 }
 
 func posixScript() string {
-	return `gwt() {
-  _gwt_cd_file="$(mktemp -t gwt.XXXXXX)" || return
-  GWT_SHELL_INTEGRATION=1 command gwt --cd-file "$_gwt_cd_file" "$@"
-  _gwt_status=$?
-  if [ -s "$_gwt_cd_file" ]; then
-    _gwt_target="$(cat "$_gwt_cd_file")"
-    rm -f "$_gwt_cd_file"
-    if [ -n "$_gwt_target" ]; then
-      cd "$_gwt_target" || return
+	return `gth() {
+  _gth_cd_file="$(mktemp -t gth.XXXXXX)" || return
+  GTH_SHELL_INTEGRATION=1 command git-treehouse --cd-file "$_gth_cd_file" "$@"
+  _gth_status=$?
+  if [ -s "$_gth_cd_file" ]; then
+    _gth_target="$(cat "$_gth_cd_file")"
+    rm -f "$_gth_cd_file"
+    if [ -n "$_gth_target" ]; then
+      cd "$_gth_target" || return
     fi
   else
-    rm -f "$_gwt_cd_file"
+    rm -f "$_gth_cd_file"
   fi
-  return "$_gwt_status"
+  return "$_gth_status"
 }
 `
 }
 
 func fishScript() string {
-	return `function gwt
-  set cd_file (mktemp -t gwt.XXXXXX)
-  env GWT_SHELL_INTEGRATION=1 command gwt --cd-file $cd_file $argv
-  set gwt_status $status
+	return `function gth
+  set cd_file (mktemp -t gth.XXXXXX)
+  env GTH_SHELL_INTEGRATION=1 command git-treehouse --cd-file $cd_file $argv
+  set gth_status $status
   if test -s $cd_file
     set target (cat $cd_file)
     rm -f $cd_file
@@ -212,36 +212,36 @@ func fishScript() string {
   else
     rm -f $cd_file
   end
-  return $gwt_status
+  return $gth_status
 end
 `
 }
 
 func nushellScript() string {
-	return `def --env gwt [...args] {
-  let cd_file = (mktemp -t gwt.XXXXXX)
-  with-env { GWT_SHELL_INTEGRATION: "1" } {
-    ^gwt --cd-file $cd_file ...$args
+	return `def --env gth [...args] {
+  let cd_file = (mktemp -t gth.XXXXXX)
+  with-env { GTH_SHELL_INTEGRATION: "1" } {
+    ^git-treehouse --cd-file $cd_file ...$args
   }
-  let gwt_status = $env.LAST_EXIT_CODE
+  let gth_status = $env.LAST_EXIT_CODE
   if ($cd_file | path exists) and ((open $cd_file | str trim) != "") {
     cd (open $cd_file | str trim)
   }
   rm -f $cd_file
-  $gwt_status
+  $gth_status
 }
 `
 }
 
 func powershellScript() string {
-	return `function gwt {
+	return `function gth {
   $cdFile = New-TemporaryFile
-  $previousIntegration = $env:GWT_SHELL_INTEGRATION
+  $previousIntegration = $env:GTH_SHELL_INTEGRATION
   try {
-    $env:GWT_SHELL_INTEGRATION = "1"
-    $gwtCommand = (Get-Command gwt -CommandType Application).Source
-    & $gwtCommand --cd-file $cdFile.FullName @args
-    $gwtStatus = $LASTEXITCODE
+    $env:GTH_SHELL_INTEGRATION = "1"
+    $gthCommand = (Get-Command git-treehouse -CommandType Application).Source
+    & $gthCommand --cd-file $cdFile.FullName @args
+    $gthStatus = $LASTEXITCODE
     if ((Test-Path $cdFile.FullName) -and ((Get-Item $cdFile.FullName).Length -gt 0)) {
       $target = (Get-Content -Raw $cdFile.FullName).Trim()
       if ($target.Length -gt 0) {
@@ -251,12 +251,12 @@ func powershellScript() string {
   } finally {
     Remove-Item $cdFile.FullName -ErrorAction SilentlyContinue
     if ($null -eq $previousIntegration) {
-      Remove-Item Env:GWT_SHELL_INTEGRATION -ErrorAction SilentlyContinue
+      Remove-Item Env:GTH_SHELL_INTEGRATION -ErrorAction SilentlyContinue
     } else {
-      $env:GWT_SHELL_INTEGRATION = $previousIntegration
+      $env:GTH_SHELL_INTEGRATION = $previousIntegration
     }
   }
-  $global:LASTEXITCODE = $gwtStatus
+  $global:LASTEXITCODE = $gthStatus
 }
 `
 }

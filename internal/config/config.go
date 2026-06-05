@@ -7,7 +7,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/schovi/git-worktree-tui/internal/pathutil"
+	"github.com/schovi/git-treehouse/internal/pathutil"
 )
 
 const legacyDefaultPathTemplate = "{repo_parent}/{branch}"
@@ -40,13 +40,13 @@ func LoadDefault() (Config, error) {
 
 func Path() (string, error) {
 	if configHome := os.Getenv("XDG_CONFIG_HOME"); configHome != "" {
-		return filepath.Join(configHome, "gwt", "config.toml"), nil
+		return filepath.Join(configHome, "git-treehouse", "config.toml"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "gwt", "config.toml"), nil
+	return filepath.Join(home, ".config", "git-treehouse", "config.toml"), nil
 }
 
 func SaveDefault(config Config) error {

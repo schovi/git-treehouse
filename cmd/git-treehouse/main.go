@@ -13,13 +13,18 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/schovi/git-worktree-tui/internal/config"
-	"github.com/schovi/git-worktree-tui/internal/gitdata"
-	"github.com/schovi/git-worktree-tui/internal/github"
-	"github.com/schovi/git-worktree-tui/internal/listview"
-	"github.com/schovi/git-worktree-tui/internal/onboarding"
-	"github.com/schovi/git-worktree-tui/internal/shellinit"
-	"github.com/schovi/git-worktree-tui/internal/tui"
+	"github.com/schovi/git-treehouse/internal/config"
+	"github.com/schovi/git-treehouse/internal/gitdata"
+	"github.com/schovi/git-treehouse/internal/github"
+	"github.com/schovi/git-treehouse/internal/listview"
+	"github.com/schovi/git-treehouse/internal/onboarding"
+	"github.com/schovi/git-treehouse/internal/shellinit"
+	"github.com/schovi/git-treehouse/internal/tui"
+)
+
+const (
+	commandName         = "git-treehouse"
+	shellIntegrationEnv = "GTH_SHELL_INTEGRATION"
 )
 
 func main() {
@@ -30,7 +35,7 @@ func main() {
 }
 
 func run(args []string) error {
-	globalFlags := flag.NewFlagSet("gwt", flag.ContinueOnError)
+	globalFlags := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	globalFlags.SetOutput(os.Stderr)
 	cdFile := globalFlags.String("cd-file", "", "write selected worktree path to file")
 	if err := globalFlags.Parse(args); err != nil {
@@ -52,7 +57,7 @@ func run(args []string) error {
 
 func runInit(args []string) error {
 	if len(args) > 1 {
-		return fmt.Errorf("usage: gwt init [%s]", strings.Join(shellinit.SupportedShells(), "|"))
+		return fmt.Errorf("usage: %s init [%s]", commandName, strings.Join(shellinit.SupportedShells(), "|"))
 	}
 	shell := ""
 	if len(args) == 1 {
@@ -60,7 +65,7 @@ func runInit(args []string) error {
 	} else {
 		shell = currentShell()
 		if shell == "" {
-			return fmt.Errorf("usage: gwt init %s", strings.Join(shellinit.SupportedShells(), "|"))
+			return fmt.Errorf("usage: %s init %s", commandName, strings.Join(shellinit.SupportedShells(), "|"))
 		}
 	}
 	script, err := shellinit.Script(shell)
@@ -72,7 +77,7 @@ func runInit(args []string) error {
 }
 
 func runList(args []string) error {
-	flags := flag.NewFlagSet("gwt list", flag.ContinueOnError)
+	flags := flag.NewFlagSet(commandName+" list", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	noGitHub := flags.Bool("no-github", false, "skip GitHub PR lookup")
 	if err := flags.Parse(args); err != nil {
@@ -179,7 +184,7 @@ func runTUI(cdFile string) error {
 		return err
 	}
 	shell := currentShell()
-	if shouldShowShellWelcome(cdFile, config, stdoutIsTTY(), os.Getenv("GWT_SHELL_INTEGRATION"), shell) {
+	if shouldShowShellWelcome(cdFile, config, stdoutIsTTY(), os.Getenv(shellIntegrationEnv), shell) {
 		if err := runShellWelcome(shell); err != nil {
 			return err
 		}
@@ -248,9 +253,9 @@ func runShellWelcome(shell string) error {
 			return err
 		}
 		if install.AlreadyInstalled {
-			fmt.Fprintf(os.Stderr, "gwt shell integration is already installed in %s.\nReload with: %s\n\n", install.Path, install.ReloadCommand)
+			fmt.Fprintf(os.Stderr, "gth shell integration is already installed in %s.\nReload with: %s\n\n", install.Path, install.ReloadCommand)
 		} else {
-			fmt.Fprintf(os.Stderr, "Installed gwt shell integration in %s.\nReload with: %s\n\n", install.Path, install.ReloadCommand)
+			fmt.Fprintf(os.Stderr, "Installed gth shell integration in %s.\nReload with: %s\n\n", install.Path, install.ReloadCommand)
 		}
 	case onboarding.ActionSkip:
 		return config.PatchDefault(func(config *config.Config) {
@@ -263,9 +268,9 @@ func runShellWelcome(shell string) error {
 func pathSelectionHint(selectedPath, shell string) string {
 	shell = shellinit.Normalize(shell)
 	if shell == "" {
-		return fmt.Sprintf("Selected %s\nA standalone gwt process cannot change your shell directory. Install shell integration with: gwt init %s", selectedPath, strings.Join(shellinit.SupportedShells(), "|"))
+		return fmt.Sprintf("Selected %s\nA standalone %s process cannot change your shell directory. Install shell integration with: %s init %s", selectedPath, commandName, commandName, strings.Join(shellinit.SupportedShells(), "|"))
 	}
-	return fmt.Sprintf("Selected %s\nA standalone gwt process cannot change your shell directory. Run this once now:\n  %s\nPersist it with:\n  %s", selectedPath, shellinit.ActivationCommand(shell), shellinit.InstallCommand(shell))
+	return fmt.Sprintf("Selected %s\nA standalone %s process cannot change your shell directory. Run this once now:\n  %s\nPersist it with:\n  %s", selectedPath, commandName, shellinit.ActivationCommand(shell), shellinit.InstallCommand(shell))
 }
 
 func detectShell(shellPath string) string {

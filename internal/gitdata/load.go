@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schovi/git-worktree-tui/internal/config"
+	"github.com/schovi/git-treehouse/internal/config"
 )
 
 type BaseOption struct {

@@ -1,6 +1,6 @@
-# gwt
+# Git Treehouse
 
-`gwt` is a terminal UI for Git worktrees.
+Git Treehouse is a terminal UI for Git worktrees.
 
 It is built for repositories where you keep several task branches checked out at the same time. It gives you one keyboard-driven table for jumping between worktrees, creating new ones, deleting stale ones, and seeing enough Git state to know what is safe to touch.
 
@@ -16,23 +16,31 @@ It is built for repositories where you keep several task branches checked out at
 - Runs `git fetch --prune` only when you ask for it.
 - Opens a worktree in your editor.
 - Copies paths.
-- Supports `gwt list` for non-interactive output.
+- Supports `git-treehouse list` for non-interactive output.
 
 ## Install
 
-Install from GitHub:
+Install with Homebrew:
 
 ```sh
-go install github.com/schovi/git-worktree-tui/cmd/gwt@latest
+brew install --cask schovi/tap/git-treehouse
+```
+
+Homebrew installs `git-treehouse` and the short `gth` command. With the binary on `PATH`, Git can also run it as `git treehouse`.
+
+Install from GitHub with Go:
+
+```sh
+go install github.com/schovi/git-treehouse/cmd/git-treehouse@latest
 ```
 
 Or from a local checkout:
 
 ```sh
-go install ./cmd/gwt
+go install ./cmd/git-treehouse
 ```
 
-The installed binary is `gwt`.
+Go installs the `git-treehouse` binary.
 
 Optional dependency:
 
@@ -40,50 +48,52 @@ Optional dependency:
 
 ## First Run
 
-Run `gwt` inside a Git repository or any of its worktrees:
+Run `git-treehouse` inside a Git repository or any of its worktrees:
 
 ```sh
-gwt
+git-treehouse
 ```
 
-On first launch, `gwt` may show a shell integration setup screen. Install it if you want `Enter` to change your shell directory to the selected worktree.
+On first launch, `git-treehouse` may show a shell integration setup screen. Install it if you want `Enter` to change your shell directory to the selected worktree.
 
-Without shell integration, `gwt` can still print the selected path:
+After shell integration is installed, use `gth` for the directory-changing wrapper.
+
+Without shell integration, `git-treehouse` can still print the selected path:
 
 ```sh
-cd "$(gwt)"
+cd "$(git-treehouse)"
 ```
 
 ## Shell Integration
 
-A child process cannot change the parent shell directory directly. `gwt` solves this with a small shell wrapper: the TUI writes the selected path to a temporary file, then the wrapper reads it and runs `cd`.
+A child process cannot change the parent shell directory directly. Git Treehouse solves this with a small `gth` shell wrapper: the TUI writes the selected path to a temporary file, then the wrapper reads it and runs `cd`.
 
 The first-run setup screen can install this for you. You can also install it manually.
 
 Load integration for the current shell session:
 
 ```sh
-eval "$(gwt init)"
+eval "$(git-treehouse init)"
 ```
 
-`gwt init` auto-detects your shell when it can. Pass a shell name explicitly if detection is wrong or unavailable.
+`git-treehouse init` auto-detects your shell when it can. Pass a shell name explicitly if detection is wrong or unavailable.
 
 Fish:
 
 ```fish
-gwt init fish | source
+git-treehouse init fish | source
 ```
 
 Persistent setup examples:
 
 ```sh
-gwt init zsh >> ~/.zshrc
-gwt init bash >> ~/.bashrc
-gwt init sh >> ~/.profile
-gwt init ksh >> ~/.kshrc
-gwt init fish >> ~/.config/fish/config.fish
-gwt init nushell | save --append ~/.config/nushell/config.nu
-gwt init powershell >> ~/.config/powershell/Microsoft.PowerShell_profile.ps1
+git-treehouse init zsh >> ~/.zshrc
+git-treehouse init bash >> ~/.bashrc
+git-treehouse init sh >> ~/.profile
+git-treehouse init ksh >> ~/.kshrc
+git-treehouse init fish >> ~/.config/fish/config.fish
+git-treehouse init nushell | save --append ~/.config/nushell/config.nu
+git-treehouse init powershell >> ~/.config/powershell/Microsoft.PowerShell_profile.ps1
 ```
 
 These manual examples append to the shell config file directly. Create the parent config directory first if your shell has not created it yet.
@@ -92,13 +102,13 @@ Supported shells:
 
 | Shell | Init command |
 | --- | --- |
-| zsh | `gwt init zsh` |
-| bash | `gwt init bash` |
-| fish | `gwt init fish` |
-| sh / dash | `gwt init sh` |
-| ksh | `gwt init ksh` |
-| Nushell | `gwt init nushell` |
-| PowerShell | `gwt init powershell` |
+| zsh | `git-treehouse init zsh` |
+| bash | `git-treehouse init bash` |
+| fish | `git-treehouse init fish` |
+| sh / dash | `git-treehouse init sh` |
+| ksh | `git-treehouse init ksh` |
+| Nushell | `git-treehouse init nushell` |
+| PowerShell | `git-treehouse init powershell` |
 
 Restart the shell, or source the config file after installation.
 
@@ -106,7 +116,7 @@ Restart the shell, or source the config file after installation.
 
 ### Jump To A Worktree
 
-1. Open `gwt`.
+1. Open `gth` if shell integration is installed, or `git-treehouse` otherwise.
 2. Move with `up` / `down`, or `k` / `j`.
 3. Press `Enter`.
 
@@ -136,7 +146,7 @@ Branch: feature/login
 Path:   /Users/me/work/.worktrees/api/feature-login
 ```
 
-To change where new worktrees go, press `ctrl+o` in the create popup. This opens `~/.config/gwt/config.toml`. Save the file and `gwt` reloads it while the popup is still open.
+To change where new worktrees go, press `ctrl+o` in the create popup. This opens `~/.config/git-treehouse/config.toml`. Save the file and `git-treehouse` reloads it while the popup is still open.
 
 ### Delete A Worktree
 
@@ -149,7 +159,7 @@ Active and main worktrees cannot be deleted from the TUI. Dirty or unmerged dele
 
 ### Refresh State
 
-`gwt` refreshes local Git state automatically while idle.
+`git-treehouse` refreshes local Git state automatically while idle.
 
 Use `r` or `f` to run:
 
@@ -157,7 +167,7 @@ Use `r` or `f` to run:
 git fetch --prune
 ```
 
-Then `gwt` reloads the table.
+Then `git-treehouse` reloads the table.
 
 ## Keybindings
 
@@ -188,7 +198,7 @@ Create popup:
 | `left` / `right` | Move branch-name cursor |
 | `Tab`, `down` | Next base |
 | `shift+tab`, `up` | Previous base |
-| `ctrl+o` | Open `gwt` config |
+| `ctrl+o` | Open `git-treehouse` config |
 | `Enter` | Create worktree |
 | `Esc` | Cancel |
 
@@ -199,7 +209,7 @@ Configuration is optional. Defaults work without a config file.
 Path:
 
 ```text
-~/.config/gwt/config.toml
+~/.config/git-treehouse/config.toml
 ```
 
 Example:
@@ -234,39 +244,40 @@ Notes:
 - `~` at the start of `path_template` expands to your home directory.
 - Relative templates are resolved from the main worktree path.
 - Branch sanitization replaces path separators and whitespace with `-`.
-- If your config still contains the old exact default `{repo_parent}/{branch}`, `gwt` treats it as the current default.
+- If your config still contains the old exact default `{repo_parent}/{branch}`, `git-treehouse` treats it as the current default.
 
 ## Commands
 
 Interactive TUI:
 
 ```sh
-gwt
+git-treehouse
+gth
 ```
 
 Print a plain table:
 
 ```sh
-gwt list
+git-treehouse list
 ```
 
 Skip GitHub lookup:
 
 ```sh
-gwt list --no-github
+git-treehouse list --no-github
 ```
 
 Print shell integration:
 
 ```sh
-gwt init
-gwt init fish
-gwt init zsh
+git-treehouse init
+git-treehouse init fish
+git-treehouse init zsh
 ```
 
 ## GitHub Integration
 
-If `gh` is installed and authenticated, `gwt` loads PR data in the background:
+If `gh` is installed and authenticated, `git-treehouse` loads PR data in the background:
 
 - PR number
 - PR state
@@ -284,13 +295,13 @@ Shell integration is not active in that terminal.
 Run this for the current session:
 
 ```sh
-eval "$(gwt init)"
+eval "$(git-treehouse init)"
 ```
 
 For fish:
 
 ```fish
-gwt init fish | source
+git-treehouse init fish | source
 ```
 
 Then install the integration persistently using the commands in [Shell Integration](#shell-integration).
@@ -306,7 +317,7 @@ skip_shell_integration_welcome = false
 in:
 
 ```text
-~/.config/gwt/config.toml
+~/.config/git-treehouse/config.toml
 ```
 
 ### New Worktree Path Looks Wrong
@@ -332,12 +343,12 @@ gh auth status
 You can always skip PR lookup:
 
 ```sh
-gwt list --no-github
+git-treehouse list --no-github
 ```
 
 ## Behavior Notes
 
-- `gwt` does not run `git fetch` on startup.
+- `git-treehouse` does not run `git fetch` on startup.
 - Local Git state auto-refreshes while idle.
 - `r` and `f` run `git fetch --prune`.
 - Bare worktree entries are not navigable rows.
@@ -357,18 +368,18 @@ go test ./...
 Build:
 
 ```sh
-go build ./cmd/gwt
+go build ./cmd/git-treehouse
 ```
 
 Smoke checks:
 
 ```sh
-gwt list --no-github
-COLUMNS=80 gwt list --no-github
-gwt init zsh
-gwt init fish
+git-treehouse list --no-github
+COLUMNS=80 git-treehouse list --no-github
+git-treehouse init zsh
+git-treehouse init fish
 ```
 
 ## Status
 
-`gwt` is early software. Version `v0.1.0` is the first usable release and focuses on local, single-repository worktree management.
+`git-treehouse` is early software. Version `v0.1.0` is the first usable release and focuses on local, single-repository worktree management.

@@ -103,8 +103,8 @@ func (model model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (model model) View() string {
 	lines := []string{
-		bodyStyle.Render("gwt can open the selected worktree, but a standalone child process cannot change your current shell directory."),
-		bodyStyle.Render("The shell wrapper lets gwt write the selected path to a temporary file, then your shell cd's there after the TUI exits."),
+		bodyStyle.Render("Git Treehouse can open the selected worktree, but a standalone child process cannot change your current shell directory."),
+		bodyStyle.Render("The gth shell wrapper lets Git Treehouse write the selected path to a temporary file, then your shell cd's there after the TUI exits."),
 		"",
 		mutedStyle.Render("Detected shell: ") + bodyStyle.Render(model.info.Shell),
 		"",
@@ -149,7 +149,7 @@ func (model model) renderFrame(content string) string {
 	width = min(width, 120)
 	width = max(width, 40)
 	innerWidth := width - 4
-	title := " " + titleStyle.Render("Set up gwt shell integration") + " "
+	title := " " + titleStyle.Render("Set up gth shell integration") + " "
 	titleWidth := lipgloss.Width(title)
 	ruleWidth := max(0, width-titleWidth-3)
 
@@ -159,9 +159,7 @@ func (model model) renderFrame(content string) string {
 	contentLines := make([]string, 0)
 	wrapStyle := lipgloss.NewStyle().Width(innerWidth)
 	for _, line := range strings.Split(content, "\n") {
-		for _, wrappedLine := range strings.Split(wrapStyle.Render(line), "\n") {
-			contentLines = append(contentLines, wrappedLine)
-		}
+		contentLines = append(contentLines, strings.Split(wrapStyle.Render(line), "\n")...)
 	}
 	if model.height > 2 {
 		contentHeight := model.height - 2

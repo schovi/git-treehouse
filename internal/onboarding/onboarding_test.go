@@ -11,7 +11,7 @@ import (
 func TestViewExplainsShellIntegration(t *testing.T) {
 	model := newModel(Info{
 		Shell:             "zsh",
-		ActivationCommand: `eval "$(gwt init zsh)"`,
+		ActivationCommand: `eval "$(git-treehouse init zsh)"`,
 		InstallPath:       "/home/me/.zshrc",
 		ReloadCommand:     ". /home/me/.zshrc",
 	})
@@ -19,10 +19,10 @@ func TestViewExplainsShellIntegration(t *testing.T) {
 	output := model.View()
 
 	for _, want := range []string{
-		"Set up gwt shell integration",
-		"cannot change your current",
-		"shell directory",
-		`eval "$(gwt init zsh)"`,
+		"Set up gth shell integration",
+		"cannot change your",
+		"current shell directory",
+		`eval "$(git-treehouse init zsh)"`,
 		"/home/me/.zshrc",
 		"Install for me",
 		"Don't show again",

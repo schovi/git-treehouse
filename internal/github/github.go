@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/schovi/git-worktree-tui/internal/gitdata"
+	"github.com/schovi/git-treehouse/internal/gitdata"
 )
 
 type rawPullRequest struct {

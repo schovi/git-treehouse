@@ -12,14 +12,14 @@ func TestScriptReturnsWrappersForSupportedShells(t *testing.T) {
 		shell string
 		want  []string
 	}{
-		{shell: "zsh", want: []string{"gwt() {", "GWT_SHELL_INTEGRATION=1", `cd "$_gwt_target" || return`}},
-		{shell: "bash", want: []string{"gwt() {", "GWT_SHELL_INTEGRATION=1"}},
-		{shell: "sh", want: []string{"gwt() {", "GWT_SHELL_INTEGRATION=1"}},
-		{shell: "dash", want: []string{"gwt() {", "GWT_SHELL_INTEGRATION=1"}},
-		{shell: "ksh", want: []string{"gwt() {", "GWT_SHELL_INTEGRATION=1"}},
-		{shell: "fish", want: []string{"function gwt", "env GWT_SHELL_INTEGRATION=1", `cd "$target"`}},
-		{shell: "nushell", want: []string{"def --env gwt", "GWT_SHELL_INTEGRATION", "cd (open $cd_file | str trim)"}},
-		{shell: "powershell", want: []string{"function gwt", "$env:GWT_SHELL_INTEGRATION", "Set-Location $target"}},
+		{shell: "zsh", want: []string{"gth() {", "GTH_SHELL_INTEGRATION=1", "command git-treehouse", `cd "$_gth_target" || return`}},
+		{shell: "bash", want: []string{"gth() {", "GTH_SHELL_INTEGRATION=1"}},
+		{shell: "sh", want: []string{"gth() {", "GTH_SHELL_INTEGRATION=1"}},
+		{shell: "dash", want: []string{"gth() {", "GTH_SHELL_INTEGRATION=1"}},
+		{shell: "ksh", want: []string{"gth() {", "GTH_SHELL_INTEGRATION=1"}},
+		{shell: "fish", want: []string{"function gth", "env GTH_SHELL_INTEGRATION=1", "command git-treehouse", `cd "$target"`}},
+		{shell: "nushell", want: []string{"def --env gth", "GTH_SHELL_INTEGRATION", "^git-treehouse", "cd (open $cd_file | str trim)"}},
+		{shell: "powershell", want: []string{"function gth", "$env:GTH_SHELL_INTEGRATION", "Get-Command git-treehouse", "Set-Location $target"}},
 	}
 
 	for _, test := range tests {
@@ -126,13 +126,13 @@ func TestInstallCommandUsesShellSpecificSyntax(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	if got := InstallCommand("zsh"); !strings.Contains(got, "gwt init zsh >> ") || !strings.Contains(got, ".zshrc") {
+	if got := InstallCommand("zsh"); !strings.Contains(got, "git-treehouse init zsh >> ") || !strings.Contains(got, ".zshrc") {
 		t.Fatalf("InstallCommand(zsh) = %q", got)
 	}
 	if got := InstallCommand("nushell"); !strings.Contains(got, "save --append") || !strings.Contains(got, "config.nu") {
 		t.Fatalf("InstallCommand(nushell) = %q", got)
 	}
-	if got := InstallCommand("powershell"); !strings.Contains(got, "gwt init powershell >> ") || !strings.Contains(got, "Microsoft.PowerShell_profile.ps1") {
+	if got := InstallCommand("powershell"); !strings.Contains(got, "git-treehouse init powershell >> ") || !strings.Contains(got, "Microsoft.PowerShell_profile.ps1") {
 		t.Fatalf("InstallCommand(powershell) = %q", got)
 	}
 }

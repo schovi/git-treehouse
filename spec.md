@@ -1,14 +1,15 @@
-# gwt — git worktree TUI
+# Git Treehouse — git worktree TUI
 
 A fast terminal UI for managing git worktrees: browse, switch, create, and delete them from one keyboard-driven table.
 
-- **Binary + wrapper name:** `gwt`
+- **Binary name:** `git-treehouse`
+- **Shell wrapper + Homebrew alias:** `gth`
 - **Stack:** Go + Bubble Tea (with Lip Gloss for styling, Bubbles for inputs/spinners)
 - **Scope:** single repo per invocation (the repo containing the cwd), single user, local tool
 
 ## 1. Invocation
 
-`gwt` can be started from the main repo or any of its worktrees. It resolves the repo via `git rev-parse`; the full worktree set comes from `git worktree list --porcelain`.
+`git-treehouse` can be started from the main repo or any of its worktrees. It resolves the repo via `git rev-parse`; the full worktree set comes from `git worktree list --porcelain`.
 
 - Run outside a git repo → print a one-line error to stderr, exit 1.
 - Bare repos: the bare entry is not a navigable row; only real worktrees are listed.
@@ -17,18 +18,18 @@ A fast terminal UI for managing git worktrees: browse, switch, create, and delet
 
 | Command | Behavior |
 |---|---|
-| `gwt` | Launch the TUI |
-| `gwt list` | Print the table to stdout, no TUI, no ANSI when piped. For scripting. |
-| `gwt init <shell>` | Print the shell wrapper function for `fish`, `zsh`, or `bash` (see §2) |
+| `git-treehouse` | Launch the TUI |
+| `git-treehouse list` | Print the table to stdout, no TUI, no ANSI when piped. For scripting. |
+| `git-treehouse init <shell>` | Print the shell wrapper function for `fish`, `zsh`, or `bash` (see §2) |
 
 ## 2. Shell integration (cd mechanism)
 
-A child process cannot change its parent shell's cwd, so `gwt` uses the zoxide/yazi pattern:
+A child process cannot change its parent shell's cwd, so Git Treehouse uses the zoxide/yazi pattern:
 
 - The TUI writes the selected path to a file given via `--cd-file <path>` (nothing else goes to that file).
-- The wrapper function (installed via `gwt init fish | source` etc.) runs the binary with a temp `--cd-file`, and `cd`s to its content after the TUI exits, if non-empty.
+- The `gth` wrapper function (installed via `git-treehouse init fish | source` etc.) runs the binary with a temp `--cd-file`, and `cd`s to its content after the TUI exits, if non-empty.
 - Quitting without selecting writes nothing; the shell stays where it was.
-- **Graceful degradation:** without `--cd-file`, the selected path is printed to stdout on exit (TUI renders on stderr/tty), so `cd (gwt)` works bare.
+- **Graceful degradation:** without `--cd-file`, the selected path is printed to stdout on exit (TUI renders on stderr/tty), so `cd (git-treehouse)` works bare.
 
 ## 3. Main view
 
@@ -56,7 +57,7 @@ There was a dedicated `remote` column in the original sketch; it is dropped — 
 
 | Glyph | Meaning |
 |---|---|
-| `●` | Active worktree (where `gwt` was started) |
+| `●` | Active worktree (where `git-treehouse` was started) |
 | `○` | Other worktree |
 | `⌂` | Main worktree (combined with active state: `◉` if main is also active) |
 | `✗` | Prunable: directory missing on disk |
@@ -168,7 +169,7 @@ The dialog states exactly what will happen:
 
 **Prunable rows** (directory missing) reuse this flow: the dialog offers `git worktree prune`-equivalent cleanup plus the same optional branch deletion.
 
-## 7. `gwt list` (non-interactive)
+## 7. `git-treehouse list` (non-interactive)
 
 - Prints the same columns as the TUI, aligned, one row per worktree.
 - TTY: colored, with hyperlinks. Piped: plain text, no ANSI.
@@ -176,7 +177,7 @@ The dialog states exactly what will happen:
 
 ## 8. Configuration
 
-Optional `~/.config/gwt/config.toml`. Everything works with zero config.
+Optional `~/.config/git-treehouse/config.toml`. Everything works with zero config.
 
 ```toml
 editor = "cursor"                          # default: $EDITOR, else `code`

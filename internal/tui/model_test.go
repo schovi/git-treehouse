@@ -13,8 +13,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	appconfig "github.com/schovi/git-worktree-tui/internal/config"
-	"github.com/schovi/git-worktree-tui/internal/gitdata"
+	appconfig "github.com/schovi/git-treehouse/internal/config"
+	"github.com/schovi/git-treehouse/internal/gitdata"
 )
 
 type testRunner struct{}
@@ -137,7 +137,7 @@ func TestTitleLineIncludesHelpAndQuit(t *testing.T) {
 
 	output := model.titleContentAtWidthAtTime(1, model.width, now)
 
-	for _, want := range []string{"gwt", "main", "1 worktrees", "n", "new", "r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
+	for _, want := range []string{"treehouse", "main", "1 worktrees", "n", "new", "r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("titleLine() missing %q:\n%s", want, output)
 		}
@@ -194,14 +194,14 @@ func TestAppTopLineIncludesRefreshAgeWhenWide(t *testing.T) {
 	model := Model{
 		lastRefreshAt: now.Add(-12 * time.Second),
 		state: gitdata.State{
-			Repo: gitdata.Repository{Root: "/repo/git-worktree-tui"},
+			Repo: gitdata.Repository{Root: "/repo/git-treehouse"},
 			Rows: []gitdata.Worktree{{Branch: "main"}},
 		},
 	}
 
 	output := model.appTopLineAtTime(1, 120, now)
 
-	for _, want := range []string{"╭─", "gwt", "r", "refresh", "12 seconds ago", "─╮"} {
+	for _, want := range []string{"╭─", "treehouse", "r", "refresh", "12 seconds ago", "─╮"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("appTopLineAtTime() missing %q:\n%s", want, output)
 		}
@@ -264,7 +264,7 @@ func TestViewRendersBoxedAppSections(t *testing.T) {
 
 	output := model.View()
 
-	for _, want := range []string{"gwt", "Worktrees", "Details", "╭─", "╰", "Current", "g/G", "staged", " · "} {
+	for _, want := range []string{"treehouse", "Worktrees", "Details", "╭─", "╰", "Current", "g/G", "staged", " · "} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("View() missing boxed app element %q:\n%s", want, output)
 		}
@@ -460,12 +460,12 @@ func TestCreateDialogRenderShowsTypedBranchName(t *testing.T) {
 
 func TestCreateDialogRenderShowsLivePathPreview(t *testing.T) {
 	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
-	model.state.Repo.Root = "/repo/git-worktree-tui"
+	model.state.Repo.Root = "/repo/git-treehouse"
 	model.createDialog.input.SetValue("feature/login")
 
 	output := model.renderCreateAtWidth(100)
 
-	want := filepath.Join("/repo", ".worktrees", "git-worktree-tui", "feature-login")
+	want := filepath.Join("/repo", ".worktrees", "git-treehouse", "feature-login")
 	if !strings.Contains(output, want) {
 		t.Fatalf("renderCreateAtWidth() should show path %q:\n%s", want, output)
 	}
@@ -539,7 +539,7 @@ func TestLoadConfigIfChangedReloadsModifiedConfig(t *testing.T) {
 
 func TestConfigReloadedMessageUpdatesCreatePathPreview(t *testing.T) {
 	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
-	model.state.Repo.Root = "/repo/git-worktree-tui"
+	model.state.Repo.Root = "/repo/git-treehouse"
 	model.createDialog.input.SetValue("feature/login")
 
 	updated, _ := model.Update(configReloadedMsg{config: appconfig.Config{
@@ -548,7 +548,7 @@ func TestConfigReloadedMessageUpdatesCreatePathPreview(t *testing.T) {
 	model = updated.(Model)
 
 	output := model.renderCreateAtWidth(120)
-	if !strings.Contains(output, ".worktrees/git-worktree-tui/feature-login") {
+	if !strings.Contains(output, ".worktrees/git-treehouse/feature-login") {
 		t.Fatalf("renderCreateAtWidth() should use reloaded path template:\n%s", output)
 	}
 }
@@ -598,14 +598,14 @@ func modelWithCreateDialog(bases []gitdata.BaseOption) Model {
 func TestAppTopLineFitsWidth(t *testing.T) {
 	model := Model{
 		state: gitdata.State{
-			Repo: gitdata.Repository{Root: "/repo/git-worktree-tui"},
+			Repo: gitdata.Repository{Root: "/repo/git-treehouse"},
 			Rows: []gitdata.Worktree{{Branch: "main"}},
 		},
 	}
 
 	output := model.appTopLine(1, 80)
 
-	for _, want := range []string{"╭─", "gwt", "─╮"} {
+	for _, want := range []string{"╭─", "treehouse", "─╮"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("appTopLine() missing %q:\n%s", want, output)
 		}

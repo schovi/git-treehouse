@@ -15,11 +15,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/schovi/git-worktree-tui/internal/config"
-	"github.com/schovi/git-worktree-tui/internal/gitdata"
-	"github.com/schovi/git-worktree-tui/internal/github"
-	"github.com/schovi/git-worktree-tui/internal/listview"
-	"github.com/schovi/git-worktree-tui/internal/pathutil"
+	"github.com/schovi/git-treehouse/internal/config"
+	"github.com/schovi/git-treehouse/internal/gitdata"
+	"github.com/schovi/git-treehouse/internal/github"
+	"github.com/schovi/git-treehouse/internal/listview"
+	"github.com/schovi/git-treehouse/internal/pathutil"
 )
 
 type Model struct {
@@ -32,7 +32,6 @@ type Model struct {
 	filtering       bool
 	filter          textinput.Model
 	help            bool
-	status          string
 	loading         string
 	flash           string
 	flashID         int
@@ -68,6 +67,7 @@ var (
 const (
 	autoRefreshInterval = 30 * time.Second
 	clockTickInterval   = time.Second
+	appTitle            = "treehouse"
 )
 
 type createDialog struct {
@@ -246,7 +246,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.err != nil {
 			return model.setFlash(message.err.Error())
 		}
-		model, flashCmd := model.setFlash("opened gwt config")
+		model, flashCmd := model.setFlash("opened Git Treehouse config")
 		return model, tea.Batch(flashCmd, watchConfigChangeCmd(message.path, message.modTime))
 	case configReloadedMsg:
 		if message.err != nil {
@@ -664,10 +664,6 @@ func (model Model) selectedInspectorAtWidth(row gitdata.Worktree, now time.Time,
 	return strings.Join(lines, "\n")
 }
 
-func (model Model) inspectorField(label, value string, style lipgloss.Style) string {
-	return model.inspectorFieldAtWidth(label, value, style, viewWidth(model))
-}
-
 func (model Model) inspectorFieldAtWidth(label, value string, style lipgloss.Style, width int) string {
 	return model.inspectorRenderedFieldAtWidth(label, value, func(value string) string {
 		return style.Render(value)
@@ -790,13 +786,6 @@ func statusStyle(row gitdata.Worktree) lipgloss.Style {
 		return inspectorWarnStyle
 	}
 	return inspectorValueStyle
-}
-
-func dirtyStyle(row gitdata.Worktree) lipgloss.Style {
-	if row.Status.Clean() {
-		return inspectorCleanStyle
-	}
-	return inspectorWarnStyle
 }
 
 func branchStyle(row gitdata.Worktree) lipgloss.Style {
@@ -936,14 +925,6 @@ func (model Model) relativePath(path string) string {
 		return path
 	}
 	return relative
-}
-
-func (model Model) separator() string {
-	width := model.width
-	if width <= 0 {
-		width = 80
-	}
-	return separatorStyle.Render(strings.Repeat("─", width))
 }
 
 func (model Model) appTopLine(visibleCount, width int) string {
@@ -1202,14 +1183,6 @@ func colorDirtyLegendPartWithStatus(part string, isStatus bool) string {
 	return hintStyle.Render(part)
 }
 
-func (model Model) titleLine(visibleCount int) string {
-	return model.titleContentAtWidth(visibleCount, viewWidth(model))
-}
-
-func (model Model) titleContentAtWidth(visibleCount, width int) string {
-	return model.titleContentAtWidthAtTime(visibleCount, width, time.Now())
-}
-
 func (model Model) titleContentAtWidthAtTime(visibleCount, width int, now time.Time) string {
 	if width <= 0 {
 		return ""
@@ -1243,33 +1216,29 @@ func (model Model) titleLeftContentAtWidth(visibleCount, width int) string {
 	if model.filter.Value() != "" {
 		count = fmt.Sprintf("%d/%d worktrees", visibleCount, len(model.state.Rows))
 	}
-	if width <= runewidth.StringWidth("gwt") {
-		return titleNameStyle.Render(truncatePlain("gwt", width))
+	if width <= runewidth.StringWidth(appTitle) {
+		return titleNameStyle.Render(truncatePlain(appTitle, width))
 	}
-	staticWidth := runewidth.StringWidth("gwt  ") + runewidth.StringWidth("  ") + runewidth.StringWidth(count)
+	staticWidth := runewidth.StringWidth(appTitle+"  ") + runewidth.StringWidth("  ") + runewidth.StringWidth(count)
 	repoWidth := width - staticWidth
 	if repoWidth < 4 {
-		compactWidth := width - runewidth.StringWidth("gwt  ") - runewidth.StringWidth(count)
+		compactWidth := width - runewidth.StringWidth(appTitle+"  ") - runewidth.StringWidth(count)
 		if compactWidth >= 0 {
-			title := titleNameStyle.Render("gwt")
+			title := titleNameStyle.Render(appTitle)
 			meta := titleMetaStyle.Render(count)
 			return title + "  " + meta
 		}
-		repoWidth = width - runewidth.StringWidth("gwt  ")
+		repoWidth = width - runewidth.StringWidth(appTitle+"  ")
 		if repoWidth <= 0 {
-			return titleNameStyle.Render(truncatePlain("gwt", width))
+			return titleNameStyle.Render(truncatePlain(appTitle, width))
 		}
-		return titleNameStyle.Render("gwt") + "  " + titleRepoStyle.Render(truncatePlain(repoName, repoWidth))
+		return titleNameStyle.Render(appTitle) + "  " + titleRepoStyle.Render(truncatePlain(repoName, repoWidth))
 	}
 	repoName = truncatePlain(repoName, repoWidth)
-	title := titleNameStyle.Render("gwt")
+	title := titleNameStyle.Render(appTitle)
 	repo := titleRepoStyle.Render(repoName)
 	meta := titleMetaStyle.Render(count)
 	return title + "  " + repo + "  " + meta
-}
-
-func (model Model) appControlsAtWidth(width int) string {
-	return model.appControlsAtWidthAtTime(width, time.Now())
 }
 
 func (model Model) appControlsAtWidthAtTime(width int, now time.Time) string {
@@ -1337,10 +1306,6 @@ func autoRefreshTickCmd() tea.Cmd {
 	return tea.Tick(autoRefreshInterval, func(time.Time) tea.Msg {
 		return autoRefreshMsg{}
 	})
-}
-
-func (model Model) flashLine() string {
-	return model.flashLineAtWidth(viewWidth(model))
 }
 
 func (model Model) flashLineAtWidth(width int) string {
@@ -1478,10 +1443,6 @@ func (model Model) renderHelp() string {
 		"/ filter branches",
 		"Esc close, clear filter, or quit",
 	}, "\n"))
-}
-
-func (model Model) renderCreate() string {
-	return model.renderCreateAtWidth(createDialogWidth(viewWidth(model)))
 }
 
 func (model Model) renderCreateAtWidth(width int) string {

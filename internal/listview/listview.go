@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/schovi/git-worktree-tui/internal/gitdata"
+	"github.com/schovi/git-treehouse/internal/gitdata"
 )
 
 type Options struct {

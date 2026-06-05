@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schovi/git-worktree-tui/internal/config"
+	"github.com/schovi/git-treehouse/internal/config"
 )
 
 func TestDetectShell(t *testing.T) {
@@ -36,8 +36,8 @@ func TestPathSelectionHintExplainsShellIntegration(t *testing.T) {
 	for _, want := range []string{
 		"Selected /repo/worktree",
 		"cannot change your shell directory",
-		`eval "$(gwt init zsh)"`,
-		"gwt init zsh >> ",
+		`eval "$(git-treehouse init zsh)"`,
+		"git-treehouse init zsh >> ",
 		".zshrc",
 	} {
 		if !strings.Contains(hint, want) {
@@ -52,7 +52,7 @@ func TestShouldShowShellWelcome(t *testing.T) {
 	if !shouldShowShellWelcome("", cfg, true, "", "zsh") {
 		t.Fatal("shouldShowShellWelcome() = false, want true")
 	}
-	if shouldShowShellWelcome("/tmp/gwt", cfg, true, "", "zsh") {
+	if shouldShowShellWelcome("/tmp/gth", cfg, true, "", "zsh") {
 		t.Fatal("shouldShowShellWelcome() should be false with --cd-file")
 	}
 	if shouldShowShellWelcome("", cfg, true, "1", "zsh") {
