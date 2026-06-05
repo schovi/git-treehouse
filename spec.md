@@ -96,12 +96,13 @@ Each async result patches its cell in place; no full-table flicker.
 Below the table:
 
 - **Detail line:** full info for the selected row — absolute path, full status counts, upstream name and sync state, full commit subject.
-- **Status bar:** context-sensitive key hints, e.g. `↵ go · n new · d delete · o editor · p PR · y path · r refresh · / filter · q quit`. During async loading it appends a small progress note (`fetching PRs…`).
+- **Status bar:** context-sensitive key hints, e.g. `↵ go · n new · d delete · o editor · p PR · y path · r refresh · s search · q quit`. During async loading it appends a small progress note (`fetching PRs…`).
 
-### 3.7 Sorting & filtering
+### 3.7 Sorting, search, and filtering
 
 - **Order:** main worktree pinned first, remaining rows by last-commit date, newest first.
-- **Filter:** `/` opens a fuzzy filter over branch names; the list narrows live. `Esc` clears it. Filtering preserves the pin-main-first rule when main matches.
+- **Search:** `s` opens a fuzzy search over branch names.
+- **Filter:** `Tab` cycles filters across all, modified, prunable, locked, and detached rows. Search and filters compose, and `Esc` clears the filter before the branch search.
 
 ## 4. Actions & keybindings
 
@@ -115,8 +116,9 @@ Below the table:
 | `p` | Open selected row's PR in browser (`gh pr view --web`); no PR → open repo page for the branch |
 | `y` | Copy selected worktree's absolute path to clipboard; brief `copied` flash in status bar |
 | `r` / `f` | `git fetch --prune` + full reload of all rows |
-| `/` | Fuzzy filter |
-| `Esc` | Ladder: close topmost dialog → clear filter → quit app |
+| `s` | Fuzzy branch search |
+| `Tab` | Cycle filter: all → modified → prunable → locked → detached |
+| `Esc` | Ladder: close topmost dialog → clear filter → clear branch search → quit app |
 | `q`, `Ctrl+C` | Quit immediately from list view (no cd) |
 | `?` | Toggle a help overlay with the full key list |
 

@@ -10,7 +10,7 @@ It is built for the common flow of keeping several task branches checked out at 
 - Jump to a selected worktree through shell integration.
 - Create a new worktree and branch from the focused row.
 - Delete worktrees with guardrails for active, main, dirty, and unmerged branches.
-- Filter branches with `/`.
+- Search branches with `s` and filter states with `Tab`.
 - Refresh with `git fetch --prune`.
 - Open a worktree in your editor.
 - Copy the selected worktree path.
@@ -120,8 +120,9 @@ cd "$(gwt)"
 | `p` | Open the selected PR or branch page with `gh` |
 | `y` | Copy selected worktree path |
 | `r`, `f` | Run `git fetch --prune` and reload |
-| `/` | Filter branches |
-| `Esc` | Close dialog, clear filter, or quit |
+| `s` | Search branches |
+| `Tab` | Cycle filter: all, modified, prunable, locked, detached |
+| `Esc` | Close dialog, clear filter/search, or quit |
 | `?` | Toggle help |
 | `q`, `Ctrl+C` | Quit |
 
