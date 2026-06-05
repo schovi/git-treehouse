@@ -33,20 +33,117 @@ func TestSelectedInspectorUsesLabeledRelativeFields(t *testing.T) {
 	output := model.selectedInspector(row, now)
 
 	for _, want := range []string{
-		"Selected",
+		"Branch",
 		"main",
 		"Path",
 		".",
 		"Status",
-		"modified 2, untracked 1",
+		"dirty",
+		"Dirty",
+		"~ modified 2  ? untracked 1",
 		"Sync",
 		"origin/main, synced",
 		"Commit",
 		"c00b701 Add strategy-review analysis artifacts, 4h",
+		"PR",
+		"none",
+		"Delete",
+		"allowed with force, dirty worktree",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("selectedInspector() missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestSelectedInspectorKeepsDirtyFieldForCleanRows(t *testing.T) {
+	model := Model{
+		width: 80,
+		state: gitdata.State{
+			Repo: gitdata.Repository{
+				Root:           "/repo/main",
+				ActiveWorktree: "/repo/main",
+			},
+		},
+	}
+	row := gitdata.Worktree{
+		Path:          "/repo/main",
+		Branch:        "main",
+		CommitShort:   "abc1234",
+		CommitSubject: "clean row",
+	}
+
+	output := model.selectedInspector(row, time.Now())
+
+	if !strings.Contains(output, "Dirty") || !strings.Contains(output, "none") {
+		t.Fatalf("selectedInspector() should keep clean dirty field:\n%s", output)
+	}
+}
+
+func TestDetailPanelSplitsInspectorAndKeybindings(t *testing.T) {
+	model := Model{
+		width: 100,
+		state: gitdata.State{
+			Repo: gitdata.Repository{
+				Root:           "/repo/main",
+				ActiveWorktree: "/repo/main",
+			},
+		},
+	}
+	row := gitdata.Worktree{
+		Path:   "/repo/main",
+		Branch: "main",
+	}
+
+	output := model.detailPanel(row, time.Now())
+
+	for _, want := range []string{"Branch", "main", "│", "Current", "↵", "go", "o", "editor", "d", "delete", "y", "abs path", "p", "PR", "Dirty", "none"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("detailPanel() missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"? help", "q quit", "/ filter", "g/G top/bottom", "Esc close/clear", "r refresh", "n new", "m main", "a active", "Tab special", "Tab notable"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("detailPanel() should not contain app control %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestTitleLineIncludesHelpAndQuit(t *testing.T) {
+	model := Model{
+		width: 80,
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/main"},
+			Rows: []gitdata.Worktree{{Branch: "main"}},
+		},
+	}
+
+	output := model.titleLine(1)
+
+	for _, want := range []string{"gwt", "main", "1 worktrees", "n", "new", "r", "refresh", "?", "help", "q", "quit"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("titleLine() missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestStatusBarSplitsAppControlsAndDirtyLegend(t *testing.T) {
+	model := Model{width: 120}
+
+	output := model.statusBar()
+
+	for _, want := range []string{"g/G", "top/bottom", "m", "main", "a", "active", "Tab", "notable", "/", "filter", "Esc", "close/clear", "+", "staged", "~", "modified", "untracked"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("statusBar() missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"help", "quit"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("statusBar() should not include header controls %q:\n%s", unwanted, output)
+		}
+	}
+	if strings.Contains(output, "delete") || strings.Contains(output, "editor") {
+		t.Fatalf("statusBar() should not contain persistent keybindings:\n%s", output)
 	}
 }
 

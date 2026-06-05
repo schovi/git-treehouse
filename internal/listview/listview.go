@@ -44,14 +44,7 @@ func RenderRows(rows []gitdata.Worktree, options Options, now time.Time) string 
 	columns := chooseColumns(width, options.ShowPR, gap)
 	lines := make([]string, 0, len(rows)+1)
 	if options.ShowHeader {
-		cells := make([]string, 0, len(columns))
-		for _, column := range columns {
-			cells = append(cells, pad(column.title, column.width, column.align))
-		}
-		header := strings.Join(cells, strings.Repeat(" ", gap))
-		if options.Color {
-			header = lipgloss.NewStyle().Faint(true).Render(header)
-		}
+		header := renderHeader(columns, options)
 		lines = append(lines, header)
 	}
 	for index, row := range rows {
@@ -79,10 +72,10 @@ func chooseColumns(width int, showPR bool, gap int) []column {
 	if width >= 90 {
 		optional = append(optional, column{key: "age", title: "age", width: 5})
 	}
-	if showPR && width >= 105 {
+	if showPR && width >= 128 {
 		optional = append(optional, column{key: "pr", title: "PR", width: 13})
 	}
-	if width >= 118 {
+	if width >= 144 {
 		optional = append(optional, column{key: "size", title: "size", width: 8, align: "right"})
 	}
 	columns = append(columns, optional...)
@@ -117,6 +110,22 @@ func chooseColumns(width int, showPR bool, gap int) []column {
 	return columns
 }
 
+func renderHeader(columns []column, options Options) string {
+	cells := make([]string, 0, len(columns))
+	separator := headerSeparator(options)
+	for index, column := range columns {
+		cell := pad(column.title, column.width, column.align)
+		if options.Color {
+			cell = headerStyle.Render(cell)
+		}
+		cells = append(cells, cell)
+		if index < len(columns)-1 {
+			cells = append(cells, separator)
+		}
+	}
+	return strings.Join(cells, "")
+}
+
 func renderRow(row gitdata.Worktree, columns []column, options Options, now time.Time, rowIndex int) string {
 	cells := make([]string, 0, len(columns))
 	selected := options.HighlightSelected && rowIndex == options.SelectedIndex
@@ -124,13 +133,16 @@ func renderRow(row gitdata.Worktree, columns []column, options Options, now time
 		value := cellValue(row, column.key, now, options)
 		cell := pad(value, column.width, column.align)
 		if options.Color && !selected {
-			cell = colorCell(row, column.key, cell)
+			cell = colorCell(row, column.key, value, cell)
 		}
 		cells = append(cells, cell)
 	}
 	line := strings.Join(cells, strings.Repeat(" ", columnGap(options)))
 	if options.Color && selected {
-		return selectedCellStyle().Render(line)
+		return selectedRowStyle.Render(line)
+	}
+	if options.Color {
+		return inactiveRowStyle.Render(line)
 	}
 	return line
 }
@@ -182,26 +194,78 @@ func cellValue(row gitdata.Worktree, key string, now time.Time, options Options)
 	}
 }
 
-func colorCell(row gitdata.Worktree, key, value string) string {
+var (
+	headerStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
+	headerRuleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	inactiveRowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	selectedRowStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("62")).
+				Foreground(lipgloss.Color("230")).
+				Bold(true)
+	activeMarkerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	cleanStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	dirtyStagedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	dirtyModifiedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	dirtyUnknownStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	detachedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	warningStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	lockedStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
+)
+
+func colorCell(row gitdata.Worktree, key, raw, value string) string {
 	if key == "marker" && row.IsActive {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render(value)
+		return activeMarkerStyle.Render(value)
 	}
 	if key == "status" {
-		if row.Prunable || row.UpstreamGone {
-			return lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(value)
-		}
-		if !row.Status.Clean() {
-			return lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render(value)
-		}
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render(value)
+		return colorStatusCell(row, raw, value)
 	}
 	return value
 }
 
-func selectedCellStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Background(lipgloss.Color("220")).
-		Foreground(lipgloss.Color("0"))
+func colorStatusCell(row gitdata.Worktree, raw, padded string) string {
+	padding := strings.TrimPrefix(padded, raw)
+	if padding == padded {
+		padding = ""
+	}
+	switch {
+	case row.Prunable || row.UpstreamGone:
+		return warningStyle.Render(raw) + padding
+	case row.Locked:
+		return lockedStyle.Render(raw) + padding
+	case row.Detached:
+		return detachedStyle.Render(raw) + padding
+	case row.Status.Clean():
+		return cleanStyle.Render(raw) + padding
+	default:
+		return colorDirtyTokens(raw) + padding
+	}
+}
+
+func colorDirtyTokens(value string) string {
+	parts := strings.Split(value, " ")
+	for index, part := range parts {
+		switch {
+		case strings.HasPrefix(part, "+"):
+			parts[index] = dirtyStagedStyle.Render(part)
+		case strings.HasPrefix(part, "~"):
+			parts[index] = dirtyModifiedStyle.Render(part)
+		case strings.HasPrefix(part, "?"):
+			parts[index] = dirtyUnknownStyle.Render(part)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func headerSeparator(options Options) string {
+	gap := columnGap(options)
+	separator := "│"
+	if options.Color {
+		separator = headerRuleStyle.Render(separator)
+	}
+	if gap <= 1 {
+		return separator
+	}
+	return separator + strings.Repeat(" ", gap-1)
 }
 
 func columnGap(options Options) int {

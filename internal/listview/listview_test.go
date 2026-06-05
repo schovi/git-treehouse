@@ -33,7 +33,7 @@ func TestRenderRowsOmitsAnsiAndHyperlinksWhenDisabled(t *testing.T) {
 	}
 
 	output := RenderRows(rows, Options{
-		Width:      120,
+		Width:      160,
 		Color:      false,
 		Hyperlinks: false,
 		ShowHeader: true,
@@ -67,7 +67,7 @@ func TestRenderRowsUsesPendingPlaceholder(t *testing.T) {
 	output := RenderRows([]gitdata.Worktree{
 		{Branch: "main"},
 	}, Options{
-		Width:      120,
+		Width:      160,
 		ShowHeader: true,
 		Pending:    "-",
 	}, time.Now())
@@ -84,7 +84,7 @@ func TestRenderRowsUsesPendingPlaceholderForUnresolvedPRs(t *testing.T) {
 	output := RenderRows([]gitdata.Worktree{
 		{Branch: "feature/pr"},
 	}, Options{
-		Width:      120,
+		Width:      160,
 		ShowHeader: true,
 		ShowPR:     true,
 		Pending:    "-",
