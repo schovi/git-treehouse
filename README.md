@@ -11,7 +11,8 @@ It is built for the common flow of keeping several task branches checked out at 
 - Create a new worktree and branch from the focused row.
 - Delete worktrees with guardrails for active, main, dirty, and unmerged branches.
 - Filter branches with `/`.
-- Refresh with `git fetch --prune`.
+- Auto-refresh local Git state every 30 seconds.
+- Refresh with `git fetch --prune` on demand.
 - Open a worktree in your editor.
 - Copy the selected worktree path.
 - Show compact Git state: dirty counts, upstream ahead/behind, main comparison, commit age, and disk size.
@@ -119,7 +120,7 @@ cd "$(gwt)"
 | `o` | Open selected worktree in editor |
 | `p` | Open the selected PR or branch page with `gh` |
 | `y` | Copy selected worktree path |
-| `r`, `f` | Run `git fetch --prune` and reload |
+| `r`, `f` | Run `git fetch --prune` and reload immediately |
 | `/` | Filter branches |
 | `Esc` | Close dialog, clear filter, or quit |
 | `?` | Toggle help |
@@ -171,6 +172,7 @@ If `gh` is missing or unauthenticated, the PR column is hidden without warning n
 ## Behavior Notes
 
 - `gwt` never runs `git fetch` on startup.
+- The TUI reloads local Git state every 30 seconds while idle.
 - `r` and `f` run `git fetch --prune`, then reload.
 - Bare worktree entries are not navigable rows.
 - The main worktree is pinned first.

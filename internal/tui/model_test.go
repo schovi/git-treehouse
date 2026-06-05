@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/schovi/git-worktree-tui/internal/gitdata"
@@ -112,20 +113,89 @@ func TestDetailPanelSplitsInspectorAndKeybindings(t *testing.T) {
 }
 
 func TestTitleLineIncludesHelpAndQuit(t *testing.T) {
+	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 	model := Model{
-		width: 80,
+		width:         120,
+		lastRefreshAt: now.Add(-12 * time.Second),
 		state: gitdata.State{
 			Repo: gitdata.Repository{Root: "/repo/main"},
 			Rows: []gitdata.Worktree{{Branch: "main"}},
 		},
 	}
 
-	output := model.titleLine(1)
+	output := model.titleContentAtWidthAtTime(1, model.width, now)
 
-	for _, want := range []string{"gwt", "main", "1 worktrees", "n", "new", "r", "refresh", "?", "help", "q", "quit"} {
+	for _, want := range []string{"gwt", "main", "1 worktrees", "n", "new", "r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("titleLine() missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestRefreshAgeText(t *testing.T) {
+	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name          string
+		lastRefreshAt time.Time
+		want          string
+	}{
+		{name: "zero timestamp", lastRefreshAt: time.Time{}, want: ""},
+		{name: "seconds", lastRefreshAt: now.Add(-12 * time.Second), want: "12 seconds ago"},
+		{name: "future timestamp", lastRefreshAt: now.Add(3 * time.Second), want: "0 seconds ago"},
+		{name: "singular minute", lastRefreshAt: now.Add(-time.Minute), want: "1 minute ago"},
+		{name: "plural minutes", lastRefreshAt: now.Add(-3 * time.Minute), want: "3 minutes ago"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := refreshAgeText(test.lastRefreshAt, now); got != test.want {
+				t.Fatalf("refreshAgeText() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestAppControlsDropRefreshAgeBeforeCoreControls(t *testing.T) {
+	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	model := Model{lastRefreshAt: now.Add(-12 * time.Second)}
+
+	wide := model.appControlsAtWidthAtTime(80, now)
+	for _, want := range []string{"n", "new", "r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
+		if !strings.Contains(wide, want) {
+			t.Fatalf("wide controls missing %q:\n%s", want, wide)
+		}
+	}
+
+	narrow := model.appControlsAtWidthAtTime(40, now)
+	for _, want := range []string{"r", "refresh", "?", "help", "q", "quit"} {
+		if !strings.Contains(narrow, want) {
+			t.Fatalf("narrow controls missing %q:\n%s", want, narrow)
+		}
+	}
+	if strings.Contains(narrow, "seconds ago") {
+		t.Fatalf("narrow controls should drop refresh age first:\n%s", narrow)
+	}
+}
+
+func TestAppTopLineIncludesRefreshAgeWhenWide(t *testing.T) {
+	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	model := Model{
+		lastRefreshAt: now.Add(-12 * time.Second),
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/git-worktree-tui"},
+			Rows: []gitdata.Worktree{{Branch: "main"}},
+		},
+	}
+
+	output := model.appTopLineAtTime(1, 120, now)
+
+	for _, want := range []string{"╭─", "gwt", "r", "refresh", "12 seconds ago", "─╮"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("appTopLineAtTime() missing %q:\n%s", want, output)
+		}
+	}
+	if width := lipgloss.Width(output); width != 120 {
+		t.Fatalf("appTopLineAtTime() width = %d, want 120:\n%s", width, output)
 	}
 }
 
@@ -242,6 +312,192 @@ func TestAppTopLineFitsWidth(t *testing.T) {
 	}
 }
 
+func TestAutoRefreshSkipsBlockedStates(t *testing.T) {
+	tests := []struct {
+		name  string
+		model Model
+	}{
+		{
+			name: "refresh in flight",
+			model: Model{
+				refreshID:       7,
+				refreshInFlight: true,
+			},
+		},
+		{
+			name:  "loading",
+			model: Model{refreshID: 7, loading: "fetching…"},
+		},
+		{
+			name:  "filtering",
+			model: Model{refreshID: 7, filtering: true},
+		},
+		{
+			name:  "help",
+			model: Model{refreshID: 7, help: true},
+		},
+		{
+			name:  "create dialog",
+			model: Model{refreshID: 7, createDialog: &createDialog{}},
+		},
+		{
+			name:  "delete dialog",
+			model: Model{refreshID: 7, deleteDialog: &deleteDialog{}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			updated, cmd := updateModel(t, test.model, autoRefreshMsg{})
+
+			if updated.refreshID != test.model.refreshID {
+				t.Fatalf("auto refresh changed refreshID = %d, want %d", updated.refreshID, test.model.refreshID)
+			}
+			if updated.refreshInFlight != test.model.refreshInFlight {
+				t.Fatalf("auto refresh changed refreshInFlight = %v, want %v", updated.refreshInFlight, test.model.refreshInFlight)
+			}
+			if cmd == nil {
+				t.Fatal("auto refresh skip should still schedule the next tick")
+			}
+		})
+	}
+}
+
+func TestAutoRefreshStartsWhenIdle(t *testing.T) {
+	model := Model{
+		refreshID: 7,
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/main", ActiveWorktree: "/repo/main"},
+		},
+	}
+
+	updated, cmd := updateModel(t, model, autoRefreshMsg{})
+
+	if updated.refreshID != 8 {
+		t.Fatalf("refreshID = %d, want 8", updated.refreshID)
+	}
+	if !updated.refreshInFlight {
+		t.Fatal("auto refresh should mark refreshInFlight")
+	}
+	if cmd == nil {
+		t.Fatal("auto refresh should schedule the next tick and reload command")
+	}
+}
+
+func TestAutoReloadSuccessUpdatesTimestampWithoutFlash(t *testing.T) {
+	previousRefreshAt := time.Date(2026, 6, 5, 11, 0, 0, 0, time.UTC)
+	completedAt := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	model := Model{
+		refreshID:       4,
+		refreshInFlight: true,
+		lastRefreshAt:   previousRefreshAt,
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/old", ActiveWorktree: "/repo/old"},
+			Rows: []gitdata.Worktree{{Path: "/repo/old", Branch: "old"}},
+		},
+	}
+	nextState := gitdata.State{
+		Repo: gitdata.Repository{Root: "/repo/new", ActiveWorktree: "/repo/new"},
+		Rows: []gitdata.Worktree{{Path: "/repo/new", Branch: "new"}},
+	}
+
+	updated, cmd := updateModel(t, model, reloadMsg{
+		id:          4,
+		automatic:   true,
+		completedAt: completedAt,
+		state:       nextState,
+	})
+
+	if updated.flash != "" {
+		t.Fatalf("auto reload should stay quiet, flash = %q", updated.flash)
+	}
+	if updated.refreshInFlight {
+		t.Fatal("auto reload should clear refreshInFlight")
+	}
+	if !updated.lastRefreshAt.Equal(completedAt) {
+		t.Fatalf("lastRefreshAt = %s, want %s", updated.lastRefreshAt, completedAt)
+	}
+	if updated.state.Repo.Root != "/repo/new" {
+		t.Fatalf("state was not replaced: %+v", updated.state.Repo)
+	}
+	if cmd == nil {
+		t.Fatal("auto reload success should rerun enrichment")
+	}
+}
+
+func TestManualReloadSuccessFlashes(t *testing.T) {
+	completedAt := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	model := Model{
+		refreshID:       4,
+		refreshInFlight: true,
+		loading:         "fetching…",
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/old", ActiveWorktree: "/repo/old"},
+		},
+	}
+
+	updated, cmd := updateModel(t, model, reloadMsg{
+		id:          4,
+		completedAt: completedAt,
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/new", ActiveWorktree: "/repo/new"},
+		},
+	})
+
+	if updated.flash != "reloaded" {
+		t.Fatalf("manual reload flash = %q, want reloaded", updated.flash)
+	}
+	if updated.loading != "" {
+		t.Fatalf("manual reload should clear loading, got %q", updated.loading)
+	}
+	if updated.refreshInFlight {
+		t.Fatal("manual reload should clear refreshInFlight")
+	}
+	if !updated.lastRefreshAt.Equal(completedAt) {
+		t.Fatalf("lastRefreshAt = %s, want %s", updated.lastRefreshAt, completedAt)
+	}
+	if cmd == nil {
+		t.Fatal("manual reload success should rerun enrichment and schedule flash clear")
+	}
+}
+
+func TestStaleReloadMessageIsIgnored(t *testing.T) {
+	lastRefreshAt := time.Date(2026, 6, 5, 11, 0, 0, 0, time.UTC)
+	model := Model{
+		refreshID:       4,
+		refreshInFlight: true,
+		loading:         "fetching…",
+		lastRefreshAt:   lastRefreshAt,
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/current", ActiveWorktree: "/repo/current"},
+		},
+	}
+
+	updated, cmd := updateModel(t, model, reloadMsg{
+		id:          3,
+		completedAt: time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC),
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/stale", ActiveWorktree: "/repo/stale"},
+		},
+	})
+
+	if updated.state.Repo.Root != "/repo/current" {
+		t.Fatalf("stale reload replaced state: %+v", updated.state.Repo)
+	}
+	if !updated.lastRefreshAt.Equal(lastRefreshAt) {
+		t.Fatalf("stale reload changed lastRefreshAt = %s, want %s", updated.lastRefreshAt, lastRefreshAt)
+	}
+	if !updated.refreshInFlight {
+		t.Fatal("stale reload should not clear the current in-flight refresh")
+	}
+	if updated.loading != "fetching…" {
+		t.Fatalf("stale reload changed loading = %q", updated.loading)
+	}
+	if cmd != nil {
+		t.Fatalf("stale reload returned unexpected command: %v", cmd)
+	}
+}
+
 func TestFramePadsToViewportHeight(t *testing.T) {
 	model := Model{width: 12, height: 4}
 
@@ -254,4 +510,14 @@ func TestFramePadsToViewportHeight(t *testing.T) {
 	if lines[2] != strings.Repeat(" ", 12) || lines[3] != strings.Repeat(" ", 12) {
 		t.Fatalf("frame() did not pad blank lines to viewport width:\n%q", output)
 	}
+}
+
+func updateModel(t *testing.T, model Model, message tea.Msg) (Model, tea.Cmd) {
+	t.Helper()
+	updated, cmd := model.Update(message)
+	next, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("Update() returned %T, want Model", updated)
+	}
+	return next, cmd
 }

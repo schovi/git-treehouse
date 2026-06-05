@@ -87,7 +87,7 @@ Instant local render, async enrichment:
 
 1. **Synchronous (must be <50ms):** `git worktree list`, branch names, dirty status, local ahead/behind (computed against already-fetched refs), commit + age. Table renders immediately.
 2. **Async, streamed in as each resolves:** PR + CI data via `gh`; disk usage (`du`-equivalent walk per worktree, lowest priority). Pending cells show a subtle spinner/`…`.
-3. **No `git fetch` on startup.** Ahead/behind reflects the last fetch. `r` triggers fetch + full reload (3.7).
+3. **No `git fetch` on startup.** Ahead/behind reflects the last fetch. The TUI reloads local state every 30 seconds while idle; `r` triggers fetch + full reload (3.7).
 
 Each async result patches its cell in place; no full-table flicker.
 
@@ -96,7 +96,7 @@ Each async result patches its cell in place; no full-table flicker.
 Below the table:
 
 - **Detail line:** full info for the selected row — absolute path, full status counts, upstream name and sync state, full commit subject.
-- **Status bar:** context-sensitive key hints, e.g. `↵ go · n new · d delete · o editor · p PR · y path · r refresh · / filter · q quit`. During async loading it appends a small progress note (`fetching PRs…`).
+- **Status bar:** context-sensitive key hints, e.g. `↵ go · n new · d delete · o editor · p PR · y path · r refresh · / filter · q quit`. The top controls show the last successful refresh age. During async loading it appends a small progress note (`fetching PRs…`).
 
 ### 3.7 Sorting & filtering
 
@@ -114,7 +114,7 @@ Below the table:
 | `o` | Open selected worktree in editor (config → `$EDITOR` fallback); TUI stays open |
 | `p` | Open selected row's PR in browser (`gh pr view --web`); no PR → open repo page for the branch |
 | `y` | Copy selected worktree's absolute path to clipboard; brief `copied` flash in status bar |
-| `r` / `f` | `git fetch --prune` + full reload of all rows |
+| `r` / `f` | `git fetch --prune` + immediate full reload of all rows |
 | `/` | Fuzzy filter |
 | `Esc` | Ladder: close topmost dialog → clear filter → quit app |
 | `q`, `Ctrl+C` | Quit immediately from list view (no cd) |
@@ -198,5 +198,4 @@ main_branch = ""                           # default: auto-detect (origin/HEAD, 
 - Multi-select / bulk delete
 - Checking out an existing branch or PR into a new worktree
 - Multi-repo dashboard
-- Background auto-refresh / polling while open
 - Renaming or moving worktrees
