@@ -10,6 +10,7 @@
 
 <p align="center">
   When agents create branches and worktrees faster than you can track them, Git Treehouse gives you one keyboard-driven view to inspect, jump, clean up, and create the next worktree safely.
+  Use `git-treehouse` directly, or `gth` after shell integration for quick directory-changing workflows.
 </p>
 
 <p align="center">
@@ -31,18 +32,16 @@
 
 ## What It Does
 
-- Lists all worktrees for the repository containing your current directory.
-- Jumps your shell into the selected worktree with shell integration.
-- Creates a new branch and worktree from the focused row.
-- Shows the exact path where a new worktree will be created.
-- Deletes worktrees with guardrails for active, main, dirty, and unmerged branches.
-- Searches branches with `s` and filters worktree states with `Tab`.
-- Shows compact status: dirty counts, upstream sync, main comparison, commit age, disk size, PR, and CI state.
-- Auto-refreshes local Git state while idle.
-- Runs `git fetch --prune` only when you ask for it.
-- Opens a worktree in your editor.
-- Copies paths.
-- Supports `git-treehouse list` for non-interactive output.
+| | Feature |
+| --- | --- |
+| ✅ | List every worktree for the repository containing your current directory. |
+| ✅ | Jump your shell into the selected worktree with the `gth` shell wrapper. |
+| ✅ | Create a new branch and worktree from the focused row, with the target path previewed before creation. |
+| ✅ | Delete worktrees with guardrails for active, main, dirty, and unmerged branches. |
+| ✅ | Search branches with `s` and filter worktree states with `Tab`. |
+| ✅ | See dirty counts, upstream sync, main comparison, commit age, disk size, PR, and CI state in one table. |
+| ✅ | Auto-refresh local Git state while idle, with `git fetch --prune` only when you ask for it. |
+| ✅ | Open a worktree in your editor, copy paths, or use `git-treehouse list` for non-interactive output. |
 
 ## Install
 
