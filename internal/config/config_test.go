@@ -108,6 +108,7 @@ func TestLoadDefaultUsesHomeConfigWhenPresent(t *testing.T) {
 	t.Setenv("EDITOR", "vim")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
 	configDir := filepath.Join(home, ".config", "git-treehouse")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		t.Fatalf("make config dir: %v", err)

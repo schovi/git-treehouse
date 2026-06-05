@@ -101,7 +101,7 @@ func Install(shell string) (InstallResult, error) {
 	if len(content) == 0 {
 		block = strings.TrimLeft(block, "\n")
 	}
-	if err := os.WriteFile(path, append(content, []byte(block)...), 0600); err != nil {
+	if err := os.WriteFile(path, append(content, []byte(block)...), 0600); err != nil { // #nosec G703 -- ConfigPath constrains shell install targets to known user profile files.
 		return InstallResult{}, err
 	}
 	return result, nil
