@@ -43,25 +43,24 @@ type Model struct {
 }
 
 var (
-	separatorStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	appBorderStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("65"))
-	panelBorderStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	panelTitleStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
-	titleNameStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
-	titleRepoStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	titleMetaStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	flashStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("58"))
-	inspectorLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("67"))
-	inspectorValueStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	inspectorCleanStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	inspectorWarnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	inspectorCommitStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
-	keyStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
-	hintStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	statusMessageStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	separatorStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	appBorderStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("65"))
+	panelBorderStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	panelTitleStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
+	titleNameStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
+	titleRepoStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	titleMetaStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	flashStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("58"))
+	inspectorLabelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("67"))
+	inspectorValueStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	inspectorCleanStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	inspectorWarnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	inspectorCommitStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+	inspectorSubjectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	keyStyle              = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+	hintStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	statusMessageStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 )
-
-const sectionRule = "\x00section-rule"
 
 type createDialog struct {
 	input     textinput.Model
@@ -471,10 +470,7 @@ func (model Model) View() string {
 	if hasSelectedRow {
 		detail = model.detailPanelAtWidth(selectedRow, now, panelContentWidth)
 	}
-	tableFixedLines := 2
-	if len(rows) == 0 {
-		tableFixedLines = 1
-	}
+	tableFixedLines := 1
 	detailFixedLines := 0
 	if detail != "" {
 		detailFixedLines = 2 + lineCount(detail)
@@ -521,8 +517,6 @@ func (model Model) View() string {
 	lines := strings.Split(table, "\n")
 	if len(rows) == 0 {
 		lines = []string{"No worktrees"}
-	} else if len(lines) > 0 {
-		lines = insertAfter(lines, 1, sectionRule)
 	}
 	parts := []string{
 		model.appTopLine(len(rows), outerWidth),
@@ -553,14 +547,18 @@ func (model Model) selectedInspector(row gitdata.Worktree, now time.Time) string
 
 func (model Model) selectedInspectorAtWidth(row gitdata.Worktree, now time.Time, width int) string {
 	lines := []string{
-		model.inspectorFieldAtWidth("Branch", branchText(row), branchStyle(row), width),
+		model.inspectorRenderedFieldAtWidth("Branch", branchText(row), func(value string) string {
+			return branchStyle(row).Render(value)
+		}, width),
 		model.inspectorFieldAtWidth("Path", model.relativePath(row.Path), inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Status", statusText(row), statusStyle(row), width),
-		model.inspectorFieldAtWidth("Dirty", dirtyDetailText(row.Status), dirtyStyle(row), width),
+		model.inspectorRenderedFieldAtWidth("Dirty", dirtyDetailText(row.Status), renderDirtyDetailValue, width),
 	}
 	lines = append(lines,
-		model.inspectorFieldAtWidth("Sync", syncText(row), syncStyle(row), width),
-		model.inspectorFieldAtWidth("Commit", commitText(row, now), inspectorCommitStyle, width),
+		model.inspectorRenderedFieldAtWidth("Sync", syncText(row), func(value string) string {
+			return syncStyle(row).Render(value)
+		}, width),
+		model.inspectorRenderedFieldAtWidth("Commit", commitText(row, now), renderCommitValue, width),
 		model.inspectorFieldAtWidth("PR", prText(row), inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Delete", deleteSafetyText(row), deleteSafetyStyle(row), width),
 	)
@@ -572,6 +570,12 @@ func (model Model) inspectorField(label, value string, style lipgloss.Style) str
 }
 
 func (model Model) inspectorFieldAtWidth(label, value string, style lipgloss.Style, width int) string {
+	return model.inspectorRenderedFieldAtWidth(label, value, func(value string) string {
+		return style.Render(value)
+	}, width)
+}
+
+func (model Model) inspectorRenderedFieldAtWidth(label, value string, render func(string) string, width int) string {
 	labelWidth := 8
 	separatorWidth := 2
 	if width <= 0 {
@@ -582,7 +586,7 @@ func (model Model) inspectorFieldAtWidth(label, value string, style lipgloss.Sty
 	}
 	valueWidth := width - labelWidth - separatorWidth
 	labelText := padRight(label, labelWidth)
-	return inspectorLabelStyle.Render(labelText) + "  " + style.Render(truncatePlain(value, valueWidth))
+	return inspectorLabelStyle.Render(labelText) + "  " + render(truncatePlain(value, valueWidth))
 }
 
 func (model Model) detailPanel(row gitdata.Worktree, now time.Time) string {
@@ -644,6 +648,39 @@ func keybindText(value string, width int, heading bool) string {
 	}
 	visibleRestWidth := max(0, width-runewidth.StringWidth(key)-1)
 	return keyStyle.Render(key) + hintStyle.Render(" "+truncatePlain(rest, visibleRestWidth))
+}
+
+func renderDirtyDetailValue(value string) string {
+	if value == "none" {
+		return inspectorCleanStyle.Render(value)
+	}
+	parts := strings.Split(value, "  ")
+	for index, part := range parts {
+		key, rest, found := strings.Cut(part, " ")
+		if !found {
+			parts[index] = inspectorWarnStyle.Render(part)
+			continue
+		}
+		switch key {
+		case "+":
+			parts[index] = inspectorCleanStyle.Render(key) + hintStyle.Render(" "+rest)
+		case "~":
+			parts[index] = inspectorWarnStyle.Render(key) + hintStyle.Render(" "+rest)
+		case "?":
+			parts[index] = inspectorCommitStyle.Render(key) + hintStyle.Render(" "+rest)
+		default:
+			parts[index] = inspectorWarnStyle.Render(part)
+		}
+	}
+	return strings.Join(parts, hintStyle.Render("  "))
+}
+
+func renderCommitValue(value string) string {
+	hash, rest, found := strings.Cut(value, " ")
+	if !found {
+		return inspectorCommitStyle.Render(value)
+	}
+	return inspectorCommitStyle.Render(hash) + inspectorSubjectStyle.Render(" "+rest)
 }
 
 func statusStyle(row gitdata.Worktree) lipgloss.Style {
@@ -901,10 +938,6 @@ func sectionBox(title string, bodyLines []string, width int) string {
 	lines := make([]string, 0, len(bodyLines)+2)
 	lines = append(lines, sectionTopLine(title, width))
 	for _, line := range bodyLines {
-		if line == sectionRule {
-			lines = append(lines, panelBorderStyle.Render("├"+strings.Repeat("─", innerWidth)+"┤"))
-			continue
-		}
 		lines = append(lines, panelBorderStyle.Render("│")+padStyled(line, innerWidth)+panelBorderStyle.Render("│"))
 	}
 	lines = append(lines, panelBorderStyle.Render("╰"+strings.Repeat("─", innerWidth)+"╯"))
@@ -1261,17 +1294,6 @@ func lineCount(value string) int {
 		return 0
 	}
 	return len(strings.Split(value, "\n"))
-}
-
-func insertAfter(values []string, index int, value string) []string {
-	if index >= len(values) {
-		return append(values, value)
-	}
-	result := make([]string, 0, len(values)+1)
-	result = append(result, values[:index]...)
-	result = append(result, value)
-	result = append(result, values[index:]...)
-	return result
 }
 
 func viewWidth(model Model) int {

@@ -58,7 +58,19 @@ gwt list --no-github
 
 A child process cannot change the parent shell's current directory directly. `gwt` uses the same pattern as tools like `zoxide` and `yazi`: the TUI writes the selected path to a temporary file, and a shell wrapper reads it after `gwt` exits.
 
-Install the wrapper for your shell:
+Load the wrapper in your current shell:
+
+```sh
+eval "$(gwt init)"
+```
+
+Fish uses `source` instead:
+
+```fish
+gwt init fish | source
+```
+
+Persist the wrapper for future shells:
 
 ```sh
 gwt init zsh >> ~/.zshrc
@@ -68,7 +80,9 @@ gwt init fish >> ~/.config/fish/config.fish
 
 Restart your shell or source the file. After that, pressing `Enter` on a worktree changes your shell directory to that worktree.
 
-Without the wrapper, selecting a worktree prints its path to stdout:
+If selecting a worktree only prints a path, the shell wrapper is not active in that terminal. Run `eval "$(gwt init)"` for the current shell session, or add the persistent line above to your shell config.
+
+Without the wrapper, command substitution still works:
 
 ```sh
 cd "$(gwt)"

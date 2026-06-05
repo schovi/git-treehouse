@@ -182,7 +182,7 @@ func TestViewRendersBoxedAppSections(t *testing.T) {
 
 	output := model.View()
 
-	for _, want := range []string{"gwt", "Worktrees", "Details", "╭─", "├", "╰", "Current", "g/G", "staged", " · "} {
+	for _, want := range []string{"gwt", "Worktrees", "Details", "╭─", "╰", "Current", "g/G", "staged", " · "} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("View() missing boxed app element %q:\n%s", want, output)
 		}
@@ -203,6 +203,9 @@ func TestAppBottomLineEmbedsStatusWithDotSeparators(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("appBottomLine() missing %q:\n%s", want, output)
 		}
+	}
+	if strings.Contains(output, "g/G top/bottom ─ m main") {
+		t.Fatalf("appBottomLine() should use dot separators, not rule separators:\n%s", output)
 	}
 	for _, unwanted := range []string{"└┘", "╰─┘", "└─╯"} {
 		if strings.Contains(output, unwanted) {

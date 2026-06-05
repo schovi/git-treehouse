@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -48,10 +49,19 @@ func run(args []string) error {
 }
 
 func runInit(args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("usage: gwt init fish|zsh|bash")
+	if len(args) > 1 {
+		return fmt.Errorf("usage: gwt init [fish|zsh|bash]")
 	}
-	script, err := shellinit.Script(args[0])
+	shell := ""
+	if len(args) == 1 {
+		shell = args[0]
+	} else {
+		shell = detectShell(os.Getenv("SHELL"))
+		if shell == "" {
+			return fmt.Errorf("usage: gwt init fish|zsh|bash")
+		}
+	}
+	script, err := shellinit.Script(shell)
 	if err != nil {
 		return err
 	}
@@ -187,8 +197,51 @@ func runTUI(cdFile string) error {
 	if cdFile != "" {
 		return os.WriteFile(cdFile, []byte(selectedPath), 0600)
 	}
+	if stdoutIsTTY() {
+		fmt.Fprintln(os.Stderr, pathSelectionHint(selectedPath, os.Getenv("SHELL")))
+		return nil
+	}
 	fmt.Println(selectedPath)
 	return nil
+}
+
+func pathSelectionHint(selectedPath, shellPath string) string {
+	shell := detectShell(shellPath)
+	if shell == "" {
+		return fmt.Sprintf("Selected %s\nA standalone gwt process cannot change your shell directory. Install shell integration with: gwt init fish|zsh|bash", selectedPath)
+	}
+	return fmt.Sprintf("Selected %s\nA standalone gwt process cannot change your shell directory. Run this once now:\n  %s\nPersist it with:\n  %s", selectedPath, shellActivationCommand(shell), shellInstallCommand(shell))
+}
+
+func detectShell(shellPath string) string {
+	switch filepath.Base(shellPath) {
+	case "fish":
+		return "fish"
+	case "zsh":
+		return "zsh"
+	case "bash":
+		return "bash"
+	default:
+		return ""
+	}
+}
+
+func shellActivationCommand(shell string) string {
+	if shell == "fish" {
+		return "gwt init fish | source"
+	}
+	return fmt.Sprintf("eval \"$(gwt init %s)\"", shell)
+}
+
+func shellInstallCommand(shell string) string {
+	switch shell {
+	case "fish":
+		return "gwt init fish >> ~/.config/fish/config.fish"
+	case "bash":
+		return "gwt init bash >> ~/.bashrc"
+	default:
+		return "gwt init zsh >> ~/.zshrc"
+	}
 }
 
 func stdoutIsTTY() bool {

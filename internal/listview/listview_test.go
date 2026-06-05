@@ -1,10 +1,12 @@
 package listview
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/schovi/git-worktree-tui/internal/gitdata"
@@ -142,8 +144,8 @@ func TestRenderRowsSelectedColorPadsToWidth(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
 	}
-	if width := runewidth.StringWidth(lines[1]); width < 100 {
-		t.Fatalf("selected row width = %d, want at least 100:\n%q", width, lines[1])
+	if width := lipgloss.Width(lines[1]); width != 100 {
+		t.Fatalf("selected row width = %d, want 100:\n%q", width, lines[1])
 	}
 }
 
@@ -162,6 +164,60 @@ func TestRenderRowsCanShowSeparatorsInRows(t *testing.T) {
 	}
 	if strings.Count(lines[0], "│") == 0 || strings.Count(lines[1], "│") == 0 {
 		t.Fatalf("RenderRows() should include separators in header and rows:\n%s", output)
+	}
+}
+
+func TestRenderRowsFoldsMarkerIntoBranchColumn(t *testing.T) {
+	output := RenderRows([]gitdata.Worktree{
+		{Branch: "main", IsActive: true, IsMain: true},
+	}, Options{
+		Width:          100,
+		ShowHeader:     true,
+		ShowSeparators: true,
+	}, time.Now())
+
+	lines := strings.Split(output, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
+	}
+	if strings.HasPrefix(lines[0], "│") || strings.HasPrefix(lines[1], "│") {
+		t.Fatalf("RenderRows() should not start with a marker separator:\n%s", output)
+	}
+	if !strings.Contains(lines[1], "◉ main") {
+		t.Fatalf("RenderRows() should render marker inside branch column:\n%s", output)
+	}
+}
+
+func TestRenderRowsHeaderIsBoldWhite(t *testing.T) {
+	if !headerStyle.GetBold() {
+		t.Fatal("headerStyle should be bold")
+	}
+	if got := fmt.Sprint(headerStyle.GetForeground()); got != "255" {
+		t.Fatalf("headerStyle foreground = %q, want 255", got)
+	}
+}
+
+func TestRenderRowsSelectedRowDoesNotContainStyledSeparators(t *testing.T) {
+	output := RenderRows([]gitdata.Worktree{
+		{Branch: "main", IsActive: true, IsMain: true},
+	}, Options{
+		Width:             100,
+		Color:             true,
+		ShowHeader:        true,
+		ShowSeparators:    true,
+		HighlightSelected: true,
+		SelectedIndex:     0,
+	}, time.Now())
+	lines := strings.Split(output, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
+	}
+	styledSeparator := headerRuleStyle.Render("│")
+	if styledSeparator != "│" && strings.Contains(lines[1], styledSeparator) {
+		t.Fatalf("selected row should not contain independently styled separators:\n%q", lines[1])
+	}
+	if width := lipgloss.Width(lines[1]); width != 100 {
+		t.Fatalf("selected row width = %d, want 100:\n%q", width, lines[1])
 	}
 }
 
