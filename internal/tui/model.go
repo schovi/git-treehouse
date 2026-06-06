@@ -365,7 +365,7 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 		model.selected = 0
 	case "G":
 		model.selected = max(0, len(model.visibleIndexes())-1)
-	case "m":
+	case "h":
 		model.selectMatching(func(row gitdata.Worktree) bool { return row.IsMain })
 	case "a":
 		model.selectMatching(func(row gitdata.Worktree) bool { return row.IsActive })
@@ -463,6 +463,9 @@ func (model Model) updateSearch(message tea.KeyMsg) (Model, tea.Cmd) {
 		return model, nil
 	case "enter":
 		model.searching = false
+		return model, nil
+	case "tab":
+		model.cycleFilter()
 		return model, nil
 	}
 	var cmd tea.Cmd
@@ -1237,7 +1240,7 @@ func (model Model) statusBarAtWidth(width int) string {
 }
 
 func (model Model) statusLeftParts() []string {
-	leftParts := []string{"m main", "a active", "Esc close/clear"}
+	leftParts := []string{"Esc close/clear"}
 	if model.loading != "" {
 		leftParts = append(leftParts, model.loading)
 	}
@@ -1246,9 +1249,9 @@ func (model Model) statusLeftParts() []string {
 
 func (model Model) listFooterHints() string {
 	if model.searching {
-		return "search " + model.search.Value() + " · Esc clear · Tab filter: " + model.filter.label()
+		return "search " + model.search.Value() + "▌ · Esc clear · Tab filter: " + model.filter.label()
 	}
-	return "Tab filter: " + model.filter.label() + " · s search"
+	return "h root · a active · Tab filter: " + model.filter.label() + " · s search"
 }
 
 func dirtyLegendParts() []string {
@@ -1601,7 +1604,7 @@ func (model Model) renderHelp() string {
 	return box("Help", strings.Join([]string{
 		"↑/↓ k/j move",
 		"g/G jump top/bottom",
-		"m jump main worktree",
+		"h jump root repository",
 		"a jump active worktree",
 		"Tab filter: all, modified, prunable, locked, detached",
 		"Enter cd to worktree",

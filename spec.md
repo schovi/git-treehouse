@@ -117,9 +117,9 @@ Each async result patches its cell in place; no full-table flicker.
 
 Below the table:
 
-- **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. For v1 this shows `Tab filter: <state> · s search`; while searching, it shows the live search text plus `Esc clear`.
+- **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. In normal mode this shows `h root · a active · Tab filter: <state> · s search`. While searching, letter keys feed the live search input, so the footer shows `search <text>▌ · Esc clear · Tab filter: <state>`.
 - **Detail panel:** full info for the selected row: branch name, explicit `HEAD`, root/current state, absolute path, full status counts, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes.
-- **Status bar:** context-sensitive global hints, e.g. `m main · a active · Esc close/clear`, plus the row-state legend. The top controls show `n new`, refresh age, help, and quit. During async loading the status bar appends a small progress note (`fetching PRs…`).
+- **Status bar:** context-sensitive global hints, e.g. `Esc close/clear`, plus the row-state legend. The top controls show `n new`, refresh age, help, and quit. During async loading the status bar appends a small progress note (`fetching PRs…`).
 - `g/G` remains available and documented in help, but is not shown in the main view.
 
 ### 3.9 Sorting, search, and filtering
@@ -140,6 +140,8 @@ Below the table:
 | `p` | Open selected row's PR in browser (`gh pr view --web`); no PR → open repo page for the branch |
 | `y` | Copy selected worktree's absolute path to clipboard; brief `copied` flash in status bar |
 | `r` / `f` | `git fetch --prune` + full reload of all rows |
+| `h` | Jump to the root repository worktree |
+| `a` | Jump to the active worktree |
 | `s` | Fuzzy branch search |
 | `Tab` | Cycle filter: all → modified → prunable → locked → detached |
 | `Esc` | Ladder: close topmost dialog → clear filter → clear branch search → quit app |

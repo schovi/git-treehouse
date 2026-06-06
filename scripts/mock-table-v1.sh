@@ -184,6 +184,29 @@ frame_bottom() {
 	printf '╯ │%s\n' "$reset"
 }
 
+worktrees_frame_bottom() {
+	local footer_plain='h root · a active · Tab filter: all · s search'
+	local label_plain=" $footer_plain "
+	local label_colored=" ${blue}h${reset} root ${dim}·${reset} ${blue}a${reset} active ${dim}·${reset} ${blue}Tab${reset} filter: all ${dim}·${reset} ${blue}s${reset} search "
+	local max_label_width=$((box_width - 3))
+	local filler
+
+	if ((${#label_plain} > max_label_width)); then
+		footer_plain="$(truncate_text "$footer_plain" "$((max_label_width - 2))")"
+		label_plain=" $footer_plain "
+		label_colored="${blue}${label_plain}${reset}"
+	fi
+
+	filler=$((box_width - 3 - ${#label_plain}))
+	if ((filler < 0)); then
+		filler=0
+	fi
+
+	printf '%s│ ╰─%s%s%s' "$green" "$reset" "$label_colored" "$green"
+	repeat_char '─' "$filler"
+	printf '╯ │%s\n' "$reset"
+}
+
 top_rule() {
 	local left_plain=' treehouse  git-treehouse  8 worktrees  root: codex/list-rendering-polish '
 	local left_colored=" ${blue}treehouse${reset}  git-treehouse  ${dim}8 worktrees${reset}  ${dim}root:${reset} ${bold}codex/list-rendering-polish${reset} "
@@ -208,7 +231,7 @@ top_rule() {
 }
 
 bottom_rule() {
-	local left_plain=' g/G top/bottom · m main · a active · Tab filter: all · s search · Esc close/clear '
+	local left_plain=' Esc close/clear '
 	local right_plain=' ⌂ root · ! locked · × prunable · remote ✓/-/gone · + staged · ~ modified · ? untracked '
 	local left_colored="${blue}${left_plain}${reset}"
 	local right_colored="${dim}${right_plain}${reset}"
@@ -396,7 +419,7 @@ table_row no '×' "${red}×${reset}" \
 	'' '' \
 	'' '' \
 	'…' "${dim}…${reset}"
-frame_bottom
+worktrees_frame_bottom
 
 frame_title 'Details' "${blue}${bold}Details${reset}"
 detail_row 'Branch' 'codex/list-rendering-polish' "${bold}${blue}codex/list-rendering-polish${reset}" 'Current root repository' "${blue}${bold}Current${reset} root repository"
