@@ -73,6 +73,22 @@ func (sync SyncState) Compact() string {
 	return strings.Join(parts, " ")
 }
 
+func (sync SyncState) RemoteCompact(upstreamGone bool) string {
+	if upstreamGone {
+		return "gone"
+	}
+	if sync.NoUpstream {
+		return "-"
+	}
+	if !sync.Available {
+		return ""
+	}
+	if sync.Ahead == 0 && sync.Behind == 0 {
+		return "✓"
+	}
+	return sync.Compact()
+}
+
 type PullRequest struct {
 	Number int
 	State  string
@@ -125,48 +141,37 @@ type Worktree struct {
 func (worktree Worktree) DisplayBranch() string {
 	if worktree.Detached {
 		if worktree.Head == "" {
-			return "(detached)"
+			return "detached"
 		}
-		return "(detached) " + shortHash(worktree.Head)
+		return shortHash(worktree.Head) + " detached"
 	}
 	if worktree.Branch == "" {
 		return "(unknown)"
 	}
-	return worktree.Branch
+	branch := worktree.Branch
+	if worktree.Locked {
+		branch += " locked"
+	}
+	if worktree.Prunable {
+		branch += " prunable"
+	}
+	return branch
 }
 
 func (worktree Worktree) Marker() string {
 	if worktree.Prunable {
-		return "✗"
+		return "×"
 	}
 	if worktree.Locked {
-		return "🔒"
-	}
-	if worktree.IsMain && worktree.IsActive {
-		return "◉"
+		return "!"
 	}
 	if worktree.IsMain {
 		return "⌂"
 	}
-	if worktree.IsActive {
-		return "●"
-	}
-	return "○"
+	return ""
 }
 
 func (worktree Worktree) StatusText() string {
-	if worktree.Prunable {
-		return "prunable"
-	}
-	if worktree.Locked {
-		return "locked"
-	}
-	if worktree.Detached {
-		return "detached"
-	}
-	if worktree.UpstreamGone {
-		return "⚠ gone"
-	}
 	if worktree.Status.Clean() {
 		return "✓"
 	}

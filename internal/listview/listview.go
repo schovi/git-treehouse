@@ -17,7 +17,6 @@ type Options struct {
 	Color             bool
 	Hyperlinks        bool
 	ShowHeader        bool
-	ShowSeparators    bool
 	ShowPR            bool
 	Pending           string
 	PRPending         bool
@@ -58,7 +57,7 @@ func RenderRows(rows []gitdata.Worktree, options Options, now time.Time) string 
 func chooseColumns(width int, showPR bool, gap int) []column {
 	columns := []column{
 		{key: "branch", title: "  branch", width: 20, elastic: true},
-		{key: "status", title: "status", width: 12},
+		{key: "status", title: "status", width: 8},
 	}
 	if width < 40 {
 		statusWidth := min(10, max(6, width/3))
@@ -67,7 +66,7 @@ func chooseColumns(width int, showPR bool, gap int) []column {
 		return columns
 	}
 	optional := []column{
-		{key: "head", title: "head±", width: 8},
+		{key: "remote", title: "remote", width: 7},
 		{key: "main", title: "main±", width: 8},
 		{key: "commit", title: "commit", width: 28, elastic: true},
 	}
@@ -114,39 +113,28 @@ func chooseColumns(width int, showPR bool, gap int) []column {
 
 func renderHeader(columns []column, options Options) string {
 	cells := make([]string, 0, len(columns))
-	separator := headerSeparator(options)
-	for index, column := range columns {
+	for _, column := range columns {
 		cell := pad(column.title, column.width, column.align)
 		if options.Color {
 			cell = headerStyle.Render(cell)
 		}
 		cells = append(cells, cell)
-		if index < len(columns)-1 {
-			cells = append(cells, separator)
-		}
 	}
-	return strings.Join(cells, "")
+	return strings.Join(cells, strings.Repeat(" ", columnGap(options)))
 }
 
 func renderRow(row gitdata.Worktree, columns []column, options Options, now time.Time, rowIndex int) string {
 	cells := make([]string, 0, len(columns))
 	selected := options.HighlightSelected && rowIndex == options.SelectedIndex
-	separator := rowSeparator(options, selected)
-	for index, column := range columns {
+	for _, column := range columns {
 		value := cellValue(row, column.key, now, options)
 		cell := pad(value, column.width, column.align)
-		if options.Color && !selected {
+		if options.Color {
 			cell = colorCell(row, column.key, value, cell)
 		}
 		cells = append(cells, cell)
-		if options.ShowSeparators && index < len(columns)-1 {
-			cells = append(cells, separator)
-		}
 	}
 	joiner := strings.Repeat(" ", columnGap(options))
-	if options.ShowSeparators {
-		joiner = ""
-	}
 	line := strings.Join(cells, joiner)
 	if options.Color && selected {
 		return selectedRowStyle.Render(padStyledWidth(line, options.Width))
@@ -160,15 +148,16 @@ func renderRow(row gitdata.Worktree, columns []column, options Options, now time
 func cellValue(row gitdata.Worktree, key string, now time.Time, options Options) string {
 	switch key {
 	case "branch":
-		return row.Marker() + " " + row.DisplayBranch()
+		marker := row.Marker()
+		if marker == "" {
+			return "  " + row.DisplayBranch()
+		}
+		return marker + " " + row.DisplayBranch()
 	case "status":
 		return row.StatusText()
-	case "head":
-		return row.HeadSync.Compact()
+	case "remote":
+		return row.HeadSync.RemoteCompact(row.UpstreamGone)
 	case "main":
-		if row.IsMain {
-			return ""
-		}
 		return row.MainSync.Compact()
 	case "commit":
 		if row.CommitShort == "" {
@@ -204,14 +193,10 @@ func cellValue(row gitdata.Worktree, key string, now time.Time, options Options)
 
 var (
 	headerStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
-	headerRuleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	inactiveRowStyle = lipgloss.NewStyle()
 	selectedRowStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("62")).
-				Foreground(lipgloss.Color("230")).
-				Bold(true)
+				Background(lipgloss.Color("62"))
 	branchStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	activeMarkerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
 	inactiveMarkerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	mainMarkerStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
 	cleanStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
@@ -234,8 +219,8 @@ func colorCell(row gitdata.Worktree, key, raw, value string) string {
 		return colorBranchCell(row, raw, value)
 	case "status":
 		return colorStatusCell(row, raw, value)
-	case "head":
-		return colorSyncCell(row.HeadSync, raw, value)
+	case "remote":
+		return colorRemoteCell(row, raw, value)
 	case "main":
 		return colorSyncCell(row.MainSync, raw, value)
 	case "commit":
@@ -256,22 +241,60 @@ func colorBranchCell(row gitdata.Worktree, raw, padded string) string {
 		return padding
 	}
 	marker, rest := splitFirstRune(content)
-	return markerStyle(row).Render(marker) + branchStyleFor(row).Render(rest) + padding
+	if marker == " " {
+		return marker + colorBranchText(row, rest) + padding
+	}
+	return markerStyle(row).Render(marker) + colorBranchText(row, rest) + padding
 }
 
 func markerStyle(row gitdata.Worktree) lipgloss.Style {
 	switch {
-	case row.Prunable || row.UpstreamGone:
+	case row.Prunable:
 		return warningStyle
 	case row.Locked:
 		return lockedStyle
-	case row.IsActive:
-		return activeMarkerStyle
 	case row.IsMain:
 		return mainMarkerStyle
 	default:
 		return inactiveMarkerStyle
 	}
+}
+
+func colorBranchText(row gitdata.Worktree, value string) string {
+	if value == "" {
+		return value
+	}
+	prefix := ""
+	if strings.HasPrefix(value, " ") {
+		prefix = " "
+		value = strings.TrimPrefix(value, " ")
+	}
+	boldStyle := func(style lipgloss.Style) lipgloss.Style {
+		if row.IsActive {
+			return style.Bold(true)
+		}
+		return style
+	}
+	if row.Detached {
+		head, state, found := strings.Cut(value, " ")
+		if found {
+			return prefix + boldStyle(commitHashStyle).Render(head) + boldStyle(detachedStyle).Render(" "+state)
+		}
+		return prefix + boldStyle(detachedStyle).Render(value)
+	}
+	if row.Prunable {
+		branch, _, found := strings.Cut(value, " prunable")
+		if found {
+			return prefix + boldStyle(mutedStyle).Render(branch) + boldStyle(warningStyle).Render(" prunable")
+		}
+	}
+	if row.Locked {
+		branch, _, found := strings.Cut(value, " locked")
+		if found {
+			return prefix + boldStyle(branchStyle).Render(branch) + boldStyle(lockedStyle).Render(" locked")
+		}
+	}
+	return prefix + boldStyle(branchStyleFor(row)).Render(value)
 }
 
 func branchStyleFor(row gitdata.Worktree) lipgloss.Style {
@@ -287,17 +310,22 @@ func colorStatusCell(row gitdata.Worktree, raw, padded string) string {
 		padding = ""
 	}
 	switch {
-	case row.Prunable || row.UpstreamGone:
-		return warningStyle.Render(raw) + padding
-	case row.Locked:
-		return lockedStyle.Render(raw) + padding
-	case row.Detached:
-		return detachedStyle.Render(raw) + padding
 	case row.Status.Clean():
 		return cleanStyle.Render(raw) + padding
 	default:
 		return colorDirtyTokens(raw) + padding
 	}
+}
+
+func colorRemoteCell(row gitdata.Worktree, raw, padded string) string {
+	content, padding := splitPadding(raw, padded)
+	if content == "" {
+		return padding
+	}
+	if row.UpstreamGone || content == "gone" {
+		return warningStyle.Render(content) + padding
+	}
+	return colorSyncCell(row.HeadSync, raw, padded)
 }
 
 func colorDirtyTokens(value string) string {
@@ -406,30 +434,6 @@ func splitFirstRune(value string) (string, string) {
 	}
 	_, size := utf8.DecodeRuneInString(value)
 	return value[:size], value[size:]
-}
-
-func headerSeparator(options Options) string {
-	gap := columnGap(options)
-	separator := "│"
-	if options.Color {
-		separator = headerRuleStyle.Render(separator)
-	}
-	if gap <= 1 {
-		return separator
-	}
-	return separator + strings.Repeat(" ", gap-1)
-}
-
-func rowSeparator(options Options, selected bool) string {
-	gap := columnGap(options)
-	separator := "│"
-	if options.Color && !selected {
-		separator = headerRuleStyle.Render(separator)
-	}
-	if gap <= 1 {
-		return separator
-	}
-	return separator + strings.Repeat(" ", gap-1)
 }
 
 func columnGap(options Options) int {

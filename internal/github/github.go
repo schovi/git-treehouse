@@ -31,6 +31,10 @@ func LoadPullRequests(ctx context.Context, repoRoot string, runner gitdata.Runne
 	if !Available(ctx, repoRoot, runner) {
 		return nil, false
 	}
+	return LoadPullRequestsFromAuthenticatedCLI(ctx, repoRoot, runner)
+}
+
+func LoadPullRequestsFromAuthenticatedCLI(ctx context.Context, repoRoot string, runner gitdata.Runner) (map[string]gitdata.PullRequest, bool) {
 	output, err := runner.Run(ctx, repoRoot, "gh", "pr", "list", "--limit", "200", "--state", "all", "--json", "number,state,isDraft,headRefName,url,statusCheckRollup")
 	if err != nil {
 		return nil, false

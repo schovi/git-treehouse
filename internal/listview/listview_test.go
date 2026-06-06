@@ -50,6 +50,7 @@ func TestRenderRowsOmitsAnsiAndHyperlinksWhenDisabled(t *testing.T) {
 	}
 	for _, want := range []string{
 		"branch",
+		"remote",
 		"feature/plain",
 		"+1 ~2 ?3",
 		"↑1 ↓2",
@@ -149,31 +150,12 @@ func TestRenderRowsSelectedColorPadsToWidth(t *testing.T) {
 	}
 }
 
-func TestRenderRowsCanShowSeparatorsInRows(t *testing.T) {
-	output := RenderRows([]gitdata.Worktree{
-		{Branch: "main", IsActive: true, IsMain: true},
-	}, Options{
-		Width:          100,
-		ShowHeader:     true,
-		ShowSeparators: true,
-	}, time.Now())
-
-	lines := strings.Split(output, "\n")
-	if len(lines) < 2 {
-		t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
-	}
-	if strings.Count(lines[0], "│") == 0 || strings.Count(lines[1], "│") == 0 {
-		t.Fatalf("RenderRows() should include separators in header and rows:\n%s", output)
-	}
-}
-
 func TestRenderRowsFoldsMarkerIntoBranchColumn(t *testing.T) {
 	output := RenderRows([]gitdata.Worktree{
 		{Branch: "main", IsActive: true, IsMain: true},
 	}, Options{
-		Width:          100,
-		ShowHeader:     true,
-		ShowSeparators: true,
+		Width:      100,
+		ShowHeader: true,
 	}, time.Now())
 
 	lines := strings.Split(output, "\n")
@@ -183,8 +165,52 @@ func TestRenderRowsFoldsMarkerIntoBranchColumn(t *testing.T) {
 	if strings.HasPrefix(lines[0], "│") || strings.HasPrefix(lines[1], "│") {
 		t.Fatalf("RenderRows() should not start with a marker separator:\n%s", output)
 	}
-	if !strings.Contains(lines[1], "◉ main") {
+	if !strings.Contains(lines[1], "⌂ main") {
 		t.Fatalf("RenderRows() should render marker inside branch column:\n%s", output)
+	}
+}
+
+func TestRenderRowsUsesBlankMarkerForNormalWorktrees(t *testing.T) {
+	output := RenderRows([]gitdata.Worktree{
+		{Branch: "feature/plain"},
+	}, Options{
+		Width:      100,
+		ShowHeader: true,
+	}, time.Now())
+
+	lines := strings.Split(output, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
+	}
+	headerColumn := visualIndex(lines[0], "branch")
+	rowColumn := visualIndex(lines[1], "feature/plain")
+	if rowColumn != headerColumn {
+		t.Fatalf("branch column = %d, row branch column = %d:\n%s", headerColumn, rowColumn, output)
+	}
+}
+
+func TestRenderRowsShowsLifecycleSuffixesAndRemoteState(t *testing.T) {
+	output := RenderRows([]gitdata.Worktree{
+		{Branch: "experiment/locked", Locked: true},
+		{Branch: "stale/abandoned", Prunable: true, UpstreamGone: true},
+		{Head: "abcdef123456", Detached: true, HeadSync: gitdata.SyncState{NoUpstream: true}},
+		{Branch: "feature/remote", HeadSync: gitdata.SyncState{Available: true}},
+	}, Options{
+		Width:      120,
+		ShowHeader: true,
+	}, time.Now())
+
+	for _, want := range []string{
+		"! experiment/locked locked",
+		"× stale/abandoned prunable",
+		"abcdef1 detached",
+		"gone",
+		"✓",
+		"-",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("RenderRows() missing %q:\n%s", want, output)
+		}
 	}
 }
 
@@ -197,14 +223,13 @@ func TestRenderRowsHeaderIsBoldWhite(t *testing.T) {
 	}
 }
 
-func TestRenderRowsSelectedRowDoesNotContainStyledSeparators(t *testing.T) {
+func TestRenderRowsDoesNotContainColumnSeparators(t *testing.T) {
 	output := RenderRows([]gitdata.Worktree{
 		{Branch: "main", IsActive: true, IsMain: true},
 	}, Options{
 		Width:             100,
 		Color:             true,
 		ShowHeader:        true,
-		ShowSeparators:    true,
 		HighlightSelected: true,
 		SelectedIndex:     0,
 	}, time.Now())
@@ -212,9 +237,8 @@ func TestRenderRowsSelectedRowDoesNotContainStyledSeparators(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
 	}
-	styledSeparator := headerRuleStyle.Render("│")
-	if styledSeparator != "│" && strings.Contains(lines[1], styledSeparator) {
-		t.Fatalf("selected row should not contain independently styled separators:\n%q", lines[1])
+	if strings.Contains(output, "│") {
+		t.Fatalf("RenderRows() should not contain column separators:\n%s", output)
 	}
 	if width := lipgloss.Width(lines[1]); width != 100 {
 		t.Fatalf("selected row width = %d, want 100:\n%q", width, lines[1])

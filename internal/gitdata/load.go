@@ -121,7 +121,7 @@ func enrichWorktree(ctx context.Context, repo Repository, row *Worktree, runner 
 			row.HeadSync = SyncState{Available: ok, Ahead: ahead, Behind: behind}
 		}
 	}
-	if !row.IsMain && repo.MainBranch != "" && refExists(ctx, repo.Root, "refs/heads/"+repo.MainBranch, runner) {
+	if (row.Detached || row.Branch != repo.MainBranch) && repo.MainBranch != "" && refExists(ctx, repo.Root, "refs/heads/"+repo.MainBranch, runner) {
 		if output, err := runner.Run(ctx, row.Path, "git", "rev-list", "--left-right", "--count", "HEAD...refs/heads/"+repo.MainBranch); err == nil {
 			ahead, behind, ok := ParseAheadBehind(string(output))
 			row.MainSync = SyncState{Available: ok, Ahead: ahead, Behind: behind}

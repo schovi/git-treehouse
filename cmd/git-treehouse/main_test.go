@@ -89,3 +89,27 @@ func TestShouldShowShellWelcome(t *testing.T) {
 		t.Fatal("shouldShowShellWelcome() should be false after persisted skip")
 	}
 }
+
+func TestTerminalWidthUsesColumnsFallback(t *testing.T) {
+	t.Setenv("COLUMNS", "142")
+
+	if got := terminalWidth(100); got != 142 {
+		t.Fatalf("terminalWidth() = %d, want 142", got)
+	}
+}
+
+func TestTerminalWidthFallsBackWhenColumnsIsInvalid(t *testing.T) {
+	t.Setenv("COLUMNS", "wide")
+
+	if got := terminalWidth(100); got != 100 {
+		t.Fatalf("terminalWidth() = %d, want 100", got)
+	}
+}
+
+func TestTerminalWidthFallsBackWhenColumnsIsBlank(t *testing.T) {
+	t.Setenv("COLUMNS", "")
+
+	if got := terminalWidth(100); got != 100 {
+		t.Fatalf("terminalWidth() = %d, want 100", got)
+	}
+}

@@ -30,6 +30,7 @@ func TestSelectedInspectorUsesLabeledRelativeFields(t *testing.T) {
 			Repo: gitdata.Repository{
 				Root:           "/repo/main",
 				ActiveWorktree: "/repo/main",
+				MainBranch:     "main",
 			},
 		},
 	}
@@ -37,6 +38,7 @@ func TestSelectedInspectorUsesLabeledRelativeFields(t *testing.T) {
 	row := gitdata.Worktree{
 		Path:          "/repo/main",
 		Branch:        "main",
+		Head:          "c00b701abcdef",
 		Status:        gitdata.StatusCounts{Modified: 2, Untracked: 1},
 		Upstream:      "origin/main",
 		HeadSync:      gitdata.SyncState{Available: true},
@@ -50,14 +52,18 @@ func TestSelectedInspectorUsesLabeledRelativeFields(t *testing.T) {
 	for _, want := range []string{
 		"Branch",
 		"main",
+		"HEAD",
+		"c00b70",
 		"Path",
 		".",
 		"Status",
 		"dirty",
 		"Dirty",
 		"~ modified 2  ? untracked 1",
-		"Sync",
+		"Remote",
 		"origin/main, synced",
+		"Main",
+		"on local main",
 		"Commit",
 		"c00b701 Add strategy-review analysis artifacts, 4h",
 		"PR",
@@ -78,6 +84,7 @@ func TestSelectedInspectorKeepsDirtyFieldForCleanRows(t *testing.T) {
 			Repo: gitdata.Repository{
 				Root:           "/repo/main",
 				ActiveWorktree: "/repo/main",
+				MainBranch:     "main",
 			},
 		},
 	}
@@ -106,8 +113,10 @@ func TestDetailPanelSplitsInspectorAndKeybindings(t *testing.T) {
 		},
 	}
 	row := gitdata.Worktree{
-		Path:   "/repo/main",
-		Branch: "main",
+		Path:     "/repo/main",
+		Branch:   "main",
+		IsActive: true,
+		IsMain:   true,
 	}
 
 	output := model.detailPanel(row, time.Now())
@@ -131,13 +140,13 @@ func TestTitleLineIncludesHelpAndQuit(t *testing.T) {
 		lastRefreshAt: now.Add(-12 * time.Second),
 		state: gitdata.State{
 			Repo: gitdata.Repository{Root: "/repo/main"},
-			Rows: []gitdata.Worktree{{Branch: "main"}},
+			Rows: []gitdata.Worktree{{Branch: "main", IsMain: true}},
 		},
 	}
 
 	output := model.titleContentAtWidthAtTime(1, model.width, now)
 
-	for _, want := range []string{"treehouse", "main", "1 worktrees", "n", "new", "r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
+	for _, want := range []string{"treehouse", "main", "1 worktrees", "root:", "n", "new", "r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("titleLine() missing %q:\n%s", want, output)
 		}
@@ -195,7 +204,7 @@ func TestAppTopLineIncludesRefreshAgeWhenWide(t *testing.T) {
 		lastRefreshAt: now.Add(-12 * time.Second),
 		state: gitdata.State{
 			Repo: gitdata.Repository{Root: "/repo/git-treehouse"},
-			Rows: []gitdata.Worktree{{Branch: "main"}},
+			Rows: []gitdata.Worktree{{Branch: "main", IsMain: true}},
 		},
 	}
 
@@ -212,22 +221,49 @@ func TestAppTopLineIncludesRefreshAgeWhenWide(t *testing.T) {
 }
 
 func TestStatusBarSplitsAppControlsAndDirtyLegend(t *testing.T) {
-	model := Model{width: 120}
+	model := Model{width: 180}
 
 	output := model.statusBar()
 
-	for _, want := range []string{"g/G", "top/bottom", "m", "main", "a", "active", "Tab", "filter:", "all", "s", "search", "Esc", "close/clear", "+", "staged", "~", "modified", "untracked"} {
+	for _, want := range []string{"m", "main", "a", "active", "Esc", "close/clear", "⌂", "root", "!", "locked", "×", "prunable", "remote", "+", "staged", "~", "modified", "untracked"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("statusBar() missing %q:\n%s", want, output)
 		}
 	}
-	for _, unwanted := range []string{"help", "quit"} {
+	for _, unwanted := range []string{"help", "quit", "g/G", "top/bottom", "Tab", "filter:", "s search"} {
 		if strings.Contains(output, unwanted) {
-			t.Fatalf("statusBar() should not include header controls %q:\n%s", unwanted, output)
+			t.Fatalf("statusBar() should not include hidden or moved controls %q:\n%s", unwanted, output)
 		}
 	}
 	if strings.Contains(output, "delete") || strings.Contains(output, "editor") {
 		t.Fatalf("statusBar() should not contain persistent keybindings:\n%s", output)
+	}
+}
+
+func TestSearchInputRendersInWorktreesFooter(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+	})
+	model.width = 120
+	model.height = 14
+	model.searching = true
+	model.search.SetValue("docs")
+
+	output := model.View()
+
+	for _, want := range []string{"search", "docs", "Esc", "clear", "Tab", "filter:"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("View() missing search footer element %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "Enter apply") {
+		t.Fatalf("View() should not show apply for live search:\n%s", output)
+	}
+	status := model.statusBar()
+	for _, unwanted := range []string{"search docs", "Enter apply", "Esc clear"} {
+		if strings.Contains(status, unwanted) {
+			t.Fatalf("statusBar() should not include search footer element %q:\n%s", unwanted, status)
+		}
 	}
 }
 
@@ -270,8 +306,8 @@ func TestTabSkipsEmptyFilters(t *testing.T) {
 	if model.filter != filterLocked {
 		t.Fatalf("filter after Tab = %q, want locked", model.filter.label())
 	}
-	if got := strings.Join(visibleBranches(model), ","); got != "locked" {
-		t.Fatalf("visible branches = %q, want locked", got)
+	if got := strings.Join(visibleBranches(model), ","); got != "locked locked" {
+		t.Fatalf("visible branches = %q, want locked locked", got)
 	}
 
 	model = pressTab(model)
@@ -377,10 +413,13 @@ func TestViewRendersBoxedAppSections(t *testing.T) {
 
 	output := model.View()
 
-	for _, want := range []string{"treehouse", "Worktrees", "Details", "╭─", "╰", "Current", "g/G", "staged", " · "} {
+	for _, want := range []string{"treehouse", "Worktrees", "Details", "╭─", "╰", "Current", "Tab", "filter:", "s", "search", " · "} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("View() missing boxed app element %q:\n%s", want, output)
 		}
+	}
+	if strings.Contains(output, "g/G") || strings.Contains(output, "top/bottom") {
+		t.Fatalf("View() should hide top/bottom hint outside help:\n%s", output)
 	}
 	for _, unwanted := range []string{"╭─┐", "└┘", "└─╯"} {
 		if strings.Contains(output, unwanted) {
@@ -667,13 +706,18 @@ func TestConfigReloadedMessageUpdatesCreatePathPreview(t *testing.T) {
 }
 
 func TestAppBottomLineEmbedsStatusWithDotSeparators(t *testing.T) {
-	model := Model{width: 100}
+	model := Model{width: 200}
 
-	output := model.appBottomLine(100)
+	output := model.appBottomLine(200)
 
-	for _, want := range []string{"╰─ ", "g/G", "top/bottom", " · ", "m", "main", "+", "staged", "~", "modified", "? untracked", " ─╯"} {
+	for _, want := range []string{"╰─ ", " · ", "m", "main", "+", "staged", "~", "modified", "? untracked", " ─╯"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("appBottomLine() missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"g/G", "top/bottom", "Tab filter", "s search"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("appBottomLine() should not include moved or hidden control %q:\n%s", unwanted, output)
 		}
 	}
 	if strings.Contains(output, "g/G top/bottom ─ m main") {
@@ -684,8 +728,8 @@ func TestAppBottomLineEmbedsStatusWithDotSeparators(t *testing.T) {
 			t.Fatalf("appBottomLine() should not contain cap separator %q:\n%s", unwanted, output)
 		}
 	}
-	if width := lipgloss.Width(output); width != 100 {
-		t.Fatalf("appBottomLine() width = %d, want 100:\n%s", width, output)
+	if width := lipgloss.Width(output); width != 200 {
+		t.Fatalf("appBottomLine() width = %d, want 200:\n%s", width, output)
 	}
 }
 

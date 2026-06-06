@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/schovi/git-treehouse/internal/config"
 	"github.com/schovi/git-treehouse/internal/gitdata"
@@ -99,7 +100,7 @@ func runList(args []string) error {
 		defer cancel()
 		if github.Available(ctx, state.Repo.Root, runner) {
 			showPR = true
-			pullRequests, enabled := github.LoadPullRequests(ctx, state.Repo.Root, runner)
+			pullRequests, enabled := github.LoadPullRequestsFromAuthenticatedCLI(ctx, state.Repo.Root, runner)
 			if enabled {
 				state.Rows = github.AttachPullRequests(state.Rows, pullRequests)
 			} else {
@@ -309,6 +310,12 @@ func stdoutIsTTY() bool {
 }
 
 func terminalWidth(fallback int) int {
+	if stdoutIsTTY() {
+		width, _, err := term.GetSize(os.Stdout.Fd())
+		if err == nil && width > 0 {
+			return width
+		}
+	}
 	value, err := strconv.Atoi(os.Getenv("COLUMNS"))
 	if err == nil && value > 0 {
 		return value

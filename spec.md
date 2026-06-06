@@ -41,41 +41,61 @@ Borderless table, one row per worktree. Columns left to right:
 | Column | Content |
 |---|---|
 | marker | Row state glyph (see 3.2) |
-| branch | Branch name; `(detached)` + short SHA when detached |
-| status | Working-tree state, compact (see 3.3) |
-| head± | Ahead/behind vs upstream, e.g. `↑2 ↓1`; blank when synced; `–` when no upstream |
-| main± | Ahead/behind vs the main branch, e.g. `↑5 ↓12`; blank for the main row |
+| branch | Branch name, with lifecycle state suffixes for `locked`, `prunable`, or `detached` rows, e.g. `cd5e190 detached` |
+| status | Working-tree state, compact (see 3.4) |
+| remote | Ahead/behind vs upstream, e.g. `↑2 ↓1`; `✓` when synced; `gone` when upstream was deleted; `-` when no upstream |
+| main± | Ahead/behind vs the local main branch, e.g. `↑5 ↓12`; blank only for rows already on the main branch |
 | commit | Short SHA + truncated subject line |
 | age | Relative last-commit time (`3h`, `2d`, `5w`) |
-| PR | PR number + state + CI (see 3.4), rendered as a clickable OSC 8 hyperlink |
-| size | Disk usage, computed lazily (see 3.5) |
+| PR | PR number + state + CI (see 3.6), rendered as a clickable OSC 8 hyperlink |
+| size | Disk usage, computed lazily (see 3.7) |
 
-Column sizing: branch and commit are elastic; commit truncates first, then size, PR, and age drop entirely on narrow terminals. Marker, branch, and status always survive.
+Column sizing: branch and commit are elastic; commit truncates first, then size, PR, and age drop entirely on narrow terminals. Marker, branch, status, and remote survive until the minimum compact layout.
 
-There was a dedicated `remote` column in the original sketch; it is dropped — upstream state folds into the status column (3.3).
+The header includes the root repository branch, e.g. `root: codex/list-rendering-polish`, because the root repository can be checked out to a non-main branch.
 
 ### 3.2 Row markers
 
+Markers are reserved for important type or lifecycle state. Selection and current-worktree state are rendered with text style, not marker glyphs.
+
 | Glyph | Meaning |
 |---|---|
-| `●` | Active worktree (where `git-treehouse` was started) |
-| `○` | Other worktree |
-| `⌂` | Main worktree (combined with active state: `◉` if main is also active) |
-| `✗` | Prunable: directory missing on disk |
-| `🔒` (`⊘` fallback) | Locked worktree |
+| `⌂` | Root repository, the primary checkout that owns the worktree set |
+| `!` | Locked worktree |
+| `×` | Prunable worktree, directory missing on disk |
+| blank | Normal worktree |
 
-### 3.3 Status column
+The marker column is one character wide with one space before the branch name.
 
-Compact, info-dense:
+### 3.3 Selection and current worktree
 
-- `✓` — clean
+- The current worktree, where `git-treehouse` was started, uses bold branch text.
+- The selected row uses a full-row background only. Selection does not add bold text or a row marker.
+- If the current row is selected, both styles apply: full-row background plus bold branch text.
+
+### 3.4 Status column
+
+The status column is only for working-tree file changes:
+
+- `✓` means clean
 - Counts for dirty trees: `+2 ~3 ?1` (staged / modified / untracked); only non-zero parts shown
-- `⚠ gone` — upstream branch deleted on remote (typical after PR merge)
-- `detached`, `locked`, `prunable` — special states as words when they apply
 
-The **selected row's full detail** is rendered in the detail line above the status bar (see 3.6) — the table stays compact, nothing is hidden.
+Lifecycle and Git state words do not appear in this column. `locked`, `prunable`, and `detached` are rendered as branch suffixes. Upstream state is rendered in `remote`.
 
-### 3.4 GitHub data (PR column)
+### 3.5 Remote and main sync
+
+`remote` compares `HEAD` to the upstream ref (`@{u}`):
+
+- `✓` means upstream exists and `HEAD` is synced with it
+- `↑2` means local has two commits not on upstream
+- `↓1` means upstream has one commit not in local
+- `↑2 ↓1` means local and upstream diverged
+- `gone` means the configured upstream branch was deleted on the remote
+- `-` means no upstream, no remote, or detached `HEAD`
+
+`main±` compares `HEAD` to the detected local main branch. This is independent from the root repository. If the root repository is currently on a feature branch, it still gets a `main±` value. The column is blank only when the row is already on the detected main branch.
+
+### 3.6 GitHub data (PR column)
 
 Loaded via the `gh` CLI (one `gh pr list`-style call for all branches), only if `gh` exists and is authed.
 
@@ -83,26 +103,28 @@ Loaded via the `gh` CLI (one `gh pr list`-style call for all branches), only if 
 - PR number is an OSC 8 hyperlink to the PR page (clickable in supporting terminals).
 - `gh` missing/unauthed → column hidden entirely, no error noise.
 
-### 3.5 Data loading model
+### 3.7 Data loading model
 
 Instant local render, async enrichment:
 
-1. **Synchronous (must be <50ms):** `git worktree list`, branch names, dirty status, local ahead/behind (computed against already-fetched refs), commit + age. Table renders immediately.
+1. **Synchronous (must be <50ms):** `git worktree list`, branch names, dirty status, remote/main ahead-behind comparisons computed against already-fetched refs, commit + age. Table renders immediately.
 2. **Async, streamed in as each resolves:** PR + CI data via `gh`; disk usage (`du`-equivalent walk per worktree, lowest priority). Pending cells show a subtle spinner/`…`.
-3. **No `git fetch` on startup.** Ahead/behind reflects the last fetch. The TUI reloads local state every 30 seconds while idle; `r` triggers fetch + full reload (3.7).
+3. **No `git fetch` on startup.** Ahead/behind reflects the last fetch. The TUI reloads local state every 30 seconds while idle; `r` triggers fetch + full reload.
 
 Each async result patches its cell in place; no full-table flicker.
 
-### 3.6 Detail line + status bar
+### 3.8 Detail panel, local hints, and status bar
 
 Below the table:
 
-- **Detail line:** full info for the selected row — absolute path, full status counts, upstream name and sync state, full commit subject.
-- **Status bar:** context-sensitive key hints, e.g. `↵ go · n new · d delete · o editor · p PR · y path · r refresh · s search · q quit`. The top controls show the last successful refresh age. During async loading it appends a small progress note (`fetching PRs…`).
+- **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. For v1 this shows `Tab filter: <state> · s search`; while searching, it shows the live search text plus `Esc clear`.
+- **Detail panel:** full info for the selected row: branch name, explicit `HEAD`, root/current state, absolute path, full status counts, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes.
+- **Status bar:** context-sensitive global hints, e.g. `m main · a active · Esc close/clear`, plus the row-state legend. The top controls show `n new`, refresh age, help, and quit. During async loading the status bar appends a small progress note (`fetching PRs…`).
+- `g/G` remains available and documented in help, but is not shown in the main view.
 
-### 3.7 Sorting, search, and filtering
+### 3.9 Sorting, search, and filtering
 
-- **Order:** main worktree pinned first, remaining rows by last-commit date, newest first.
+- **Order:** root repository pinned first, remaining rows by last-commit date, newest first.
 - **Search:** `s` opens a fuzzy search over branch names.
 - **Filter:** `Tab` cycles filters across all, modified, prunable, locked, and detached rows. Search and filters compose, and `Esc` clears the filter before the branch search.
 
@@ -158,7 +180,7 @@ Checking out an *existing* branch into a new worktree is intentionally out of sc
 
 ## 6. Delete flow
 
-`Delete`/`Backspace`/`d` on a row opens a confirmation dialog. Never on the active or main row (status bar explains why).
+`Delete`/`Backspace`/`d` on a row opens a confirmation dialog. Never on the active or root repository row (status bar explains why).
 
 The dialog states exactly what will happen:
 
@@ -191,10 +213,10 @@ main_branch = ""                           # default: auto-detect (origin/HEAD, 
 ## 9. Edge cases & errors
 
 - **Main branch detection:** `origin/HEAD` symref; fallback to local `main`, then `master`. Override via config.
-- **Detached HEAD rows:** branch column shows `(detached) <sha>`; head±/main± computed against the commit; create-base option 2 omitted.
-- **No remotes at all:** head± shows `–`, PR column hidden, create dialog offers only local bases.
+- **Detached HEAD rows:** branch column shows `<sha> detached`; `remote` shows `-`; `main±` is computed against the commit; create-base option 2 omitted.
+- **No remotes at all:** `remote` shows `-`, PR column hidden, create dialog offers only local bases.
 - **Worktree path with uncommitted submodule/locked state:** surface git's own error verbatim in the status bar, never swallow it.
-- **Terminal too narrow (<60 cols):** drop columns per 3.1 priority; below ~40 cols show branch + status only.
+- **Terminal too narrow (<60 cols):** drop columns per 3.1 priority; below ~40 cols show marker + branch + status only.
 - All git interaction shells out to `git` (no libgit2): behavior matches the user's git version and config, and porcelain formats keep parsing stable.
 
 ## 10. Out of scope (v1)

@@ -664,7 +664,6 @@ func (model Model) View() string {
 		Color:             true,
 		Hyperlinks:        true,
 		ShowHeader:        true,
-		ShowSeparators:    true,
 		ShowPR:            model.showPR,
 		HighlightSelected: true,
 		SelectedIndex:     model.selected - start,
@@ -675,7 +674,7 @@ func (model Model) View() string {
 	}
 	parts := []string{
 		model.appTopLine(len(rows), outerWidth),
-		model.wrapOuter(sectionBox("Worktrees", lines, panelWidth), outerWidth),
+		model.wrapOuter(sectionBoxWithFooter("Worktrees", lines, model.listFooterHints(), panelWidth), outerWidth),
 	}
 	if detail != "" {
 		parts = append(parts, model.wrapOuter(sectionBox("Details", strings.Split(detail, "\n"), panelWidth), outerWidth))
@@ -706,14 +705,16 @@ func (model Model) selectedInspectorAtWidth(row gitdata.Worktree, now time.Time,
 		model.inspectorRenderedFieldAtWidth("Branch", branchText(row), func(value string) string {
 			return branchStyle(row).Render(value)
 		}, width),
+		model.inspectorRenderedFieldAtWidth("HEAD", headText(row), renderHeadValue, width),
 		model.inspectorFieldAtWidth("Path", model.relativePath(row.Path), inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Status", statusText(row), statusStyle(row), width),
 		model.inspectorRenderedFieldAtWidth("Dirty", dirtyDetailText(row.Status), renderDirtyDetailValue, width),
 	}
 	lines = append(lines,
-		model.inspectorRenderedFieldAtWidth("Sync", syncText(row), func(value string) string {
+		model.inspectorRenderedFieldAtWidth("Remote", remoteText(row), func(value string) string {
 			return syncStyle(row).Render(value)
 		}, width),
+		model.inspectorRenderedFieldAtWidth("Main", model.mainText(row), renderMainValue, width),
 		model.inspectorRenderedFieldAtWidth("Commit", commitText(row, now), renderCommitValue, width),
 		model.inspectorFieldAtWidth("PR", prText(row), inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Delete", deleteSafetyText(row), deleteSafetyStyle(row), width),
@@ -753,7 +754,7 @@ func (model Model) detailPanelAtWidth(row gitdata.Worktree, now time.Time, width
 	leftWidth = clamp(leftWidth, 34, width-34)
 	rightWidth := width - leftWidth - 3
 	leftLines := strings.Split(model.selectedInspectorAtWidth(row, now, leftWidth), "\n")
-	rightLines := keybindingLines(rightWidth)
+	rightLines := keybindingLines(row, rightWidth)
 	lineCount := max(len(leftLines), len(rightLines))
 	lines := make([]string, 0, lineCount)
 	divider := separatorStyle.Render("│")
@@ -771,9 +772,9 @@ func (model Model) detailPanelAtWidth(row gitdata.Worktree, now time.Time, width
 	return strings.Join(lines, "\n")
 }
 
-func keybindingLines(width int) []string {
+func keybindingLines(row gitdata.Worktree, width int) []string {
 	items := []string{
-		"Current",
+		selectionContextText(row),
 		"↵ go",
 		"o editor",
 		"d delete",
@@ -835,14 +836,37 @@ func renderCommitValue(value string) string {
 	return inspectorCommitStyle.Render(hash) + inspectorSubjectStyle.Render(" "+rest)
 }
 
+func renderHeadValue(value string) string {
+	head, rest, found := strings.Cut(value, " ")
+	if !found {
+		return inspectorCommitStyle.Render(value)
+	}
+	return inspectorCommitStyle.Render(head) + inspectorSubjectStyle.Render(" "+rest)
+}
+
+func renderMainValue(value string) string {
+	if strings.HasPrefix(value, "↑") || strings.Contains(value, " ↑") || strings.Contains(value, "↓") {
+		parts := strings.Split(value, " ")
+		for index, part := range parts {
+			switch {
+			case strings.HasPrefix(part, "↑"):
+				parts[index] = inspectorWarnStyle.Render(part)
+			case strings.HasPrefix(part, "↓"):
+				parts[index] = inspectorWarnStyle.Render(part)
+			default:
+				parts[index] = inspectorValueStyle.Render(part)
+			}
+		}
+		return strings.Join(parts, " ")
+	}
+	return inspectorValueStyle.Render(value)
+}
+
 func statusStyle(row gitdata.Worktree) lipgloss.Style {
-	if row.Status.Clean() && !row.Prunable && !row.Locked && !row.UpstreamGone {
+	if row.Status.Clean() {
 		return inspectorCleanStyle
 	}
-	if row.Prunable || row.Locked || row.UpstreamGone || !row.Status.Clean() {
-		return inspectorWarnStyle
-	}
-	return inspectorValueStyle
+	return inspectorWarnStyle
 }
 
 func branchStyle(row gitdata.Worktree) lipgloss.Style {
@@ -862,7 +886,7 @@ func syncStyle(row gitdata.Worktree) lipgloss.Style {
 	return inspectorValueStyle
 }
 
-func syncText(row gitdata.Worktree) string {
+func remoteText(row gitdata.Worktree) string {
 	if row.Upstream == "" {
 		return "no upstream"
 	}
@@ -877,29 +901,63 @@ func syncText(row gitdata.Worktree) string {
 }
 
 func branchText(row gitdata.Worktree) string {
-	if row.Detached {
-		if row.Head == "" {
-			return "detached"
-		}
-		return "detached at " + shortRef(row.Head)
-	}
 	return row.DisplayBranch()
 }
 
+func headText(row gitdata.Worktree) string {
+	if row.Head == "" {
+		if row.Detached {
+			return "detached"
+		}
+		if row.Branch != "" {
+			return "on " + row.Branch
+		}
+		return "-"
+	}
+	if row.Detached {
+		return shortRef(row.Head) + " detached"
+	}
+	if row.Branch != "" {
+		return shortRef(row.Head) + " on " + row.Branch
+	}
+	return shortRef(row.Head)
+}
+
 func statusText(row gitdata.Worktree) string {
-	if row.Prunable {
-		return "prunable"
-	}
-	if row.Locked {
-		return "locked"
-	}
-	if row.UpstreamGone {
-		return "upstream gone"
-	}
 	if row.Status.Clean() {
 		return "clean"
 	}
 	return "dirty"
+}
+
+func (model Model) mainText(row gitdata.Worktree) string {
+	if model.state.Repo.MainBranch == "" {
+		return "unknown"
+	}
+	if row.Branch == model.state.Repo.MainBranch && !row.Detached {
+		return "on local " + model.state.Repo.MainBranch
+	}
+	state := row.MainSync.Compact()
+	if state == "" {
+		if row.MainSync.Available {
+			return "synced with local " + model.state.Repo.MainBranch
+		}
+		return "- vs local " + model.state.Repo.MainBranch
+	}
+	return state + " vs local " + model.state.Repo.MainBranch
+}
+
+func selectionContextText(row gitdata.Worktree) string {
+	switch {
+	case row.IsActive && row.IsMain:
+		return "Current root repository"
+	case row.IsActive:
+		return "Current worktree"
+	case row.IsMain:
+		return "Root repository"
+	default:
+		return "Actions"
+	}
 }
 
 func dirtyDetailText(counts gitdata.StatusCounts) string {
@@ -932,10 +990,12 @@ func prText(row gitdata.Worktree) string {
 
 func deleteSafetyText(row gitdata.Worktree) string {
 	switch {
+	case row.IsActive && row.IsMain:
+		return "blocked, active root repository"
 	case row.IsActive:
 		return "blocked, active worktree"
 	case row.IsMain:
-		return "blocked, main worktree"
+		return "blocked, root repository"
 	case row.Prunable:
 		return "allowed, prunes missing worktree metadata"
 	case !row.Status.Clean():
@@ -1028,15 +1088,12 @@ func (model Model) appBottomLine(width int) string {
 		return appBorderStyle.Render("╰" + strings.Repeat("─", width-2) + "╯")
 	}
 	leftParts := model.statusLeftParts()
-	right := colorDirtyLegend(strings.Join(dirtyLegendParts(), " · "))
-	maxLeftWidth := contentWidth - lipgloss.Width(right) - 3
-	if maxLeftWidth < 12 {
-		leftText := joinPartsWithin(leftParts, contentWidth)
-		left := colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
+	leftText := joinPartsWithin(leftParts, contentWidth)
+	left := colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
+	right := statusLegendForWidth(contentWidth - lipgloss.Width(left) - 3)
+	if right == "" {
 		return bottomLineWithContent(left, width)
 	}
-	leftText := joinPartsWithin(leftParts, maxLeftWidth)
-	left := colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
 	return bottomLineWithSplit(left, right, width)
 }
 
@@ -1072,6 +1129,10 @@ func (model Model) wrapOuter(content string, width int) string {
 }
 
 func sectionBox(title string, bodyLines []string, width int) string {
+	return sectionBoxWithFooter(title, bodyLines, "", width)
+}
+
+func sectionBoxWithFooter(title string, bodyLines []string, footer string, width int) string {
 	if width < 4 {
 		return strings.Join(bodyLines, "\n")
 	}
@@ -1081,7 +1142,7 @@ func sectionBox(title string, bodyLines []string, width int) string {
 	for _, line := range bodyLines {
 		lines = append(lines, panelBorderStyle.Render("│")+padStyled(line, innerWidth)+panelBorderStyle.Render("│"))
 	}
-	lines = append(lines, panelBorderStyle.Render("╰"+strings.Repeat("─", innerWidth)+"╯"))
+	lines = append(lines, sectionBottomLine(footer, width))
 	return strings.Join(lines, "\n")
 }
 
@@ -1098,6 +1159,22 @@ func sectionTopLine(title string, width int) string {
 		ruleWidth = 0
 	}
 	return panelBorderStyle.Render("╭─") + panelTitleStyle.Render(label) + panelBorderStyle.Render(strings.Repeat("─", ruleWidth)+"╮")
+}
+
+func sectionBottomLine(footer string, width int) string {
+	innerWidth := width - 2
+	if footer == "" {
+		return panelBorderStyle.Render("╰" + strings.Repeat("─", innerWidth) + "╯")
+	}
+	maxLabelWidth := max(0, innerWidth-1)
+	footer = truncatePlain(footer, maxLabelWidth)
+	label := " " + colorKeyHints(footer, false) + " "
+	labelWidth := lipgloss.Width(label)
+	ruleWidth := innerWidth - 1 - labelWidth
+	if ruleWidth < 0 {
+		ruleWidth = 0
+	}
+	return panelBorderStyle.Render("╰─") + label + panelBorderStyle.Render(strings.Repeat("─", ruleWidth)+"╯")
 }
 
 func padRight(value string, width int) string {
@@ -1146,14 +1223,12 @@ func (model Model) statusBar() string {
 
 func (model Model) statusBarAtWidth(width int) string {
 	leftParts := model.statusLeftParts()
-	right := colorDirtyLegend(strings.Join(dirtyLegendParts(), " · "))
-	maxLeftWidth := width - lipgloss.Width(right) - 2
-	if maxLeftWidth < 12 {
-		leftText := joinPartsWithin(leftParts, width)
-		return colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
-	}
-	leftText := joinPartsWithin(leftParts, maxLeftWidth)
+	leftText := joinPartsWithin(leftParts, width)
 	left := colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
+	right := statusLegendForWidth(width - lipgloss.Width(left) - 2)
+	if right == "" {
+		return left
+	}
 	spacerWidth := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if spacerWidth < 1 {
 		spacerWidth = 1
@@ -1162,18 +1237,33 @@ func (model Model) statusBarAtWidth(width int) string {
 }
 
 func (model Model) statusLeftParts() []string {
-	leftParts := []string{"g/G top/bottom", "m main", "a active", "Tab filter: " + model.filter.label(), "s search", "Esc close/clear"}
-	if model.searching {
-		leftParts = append([]string{"search " + model.search.Value(), "Enter apply", "Esc clear"}, leftParts...)
-	}
+	leftParts := []string{"m main", "a active", "Esc close/clear"}
 	if model.loading != "" {
 		leftParts = append(leftParts, model.loading)
 	}
 	return leftParts
 }
 
+func (model Model) listFooterHints() string {
+	if model.searching {
+		return "search " + model.search.Value() + " · Esc clear · Tab filter: " + model.filter.label()
+	}
+	return "Tab filter: " + model.filter.label() + " · s search"
+}
+
 func dirtyLegendParts() []string {
-	return []string{"+ staged", "~ modified", "? untracked"}
+	return []string{"⌂ root", "! locked", "× prunable", "remote ✓/-/gone", "+ staged", "~ modified", "? untracked"}
+}
+
+func statusLegendForWidth(width int) string {
+	if width < 12 {
+		return ""
+	}
+	plain := strings.Join(dirtyLegendParts(), " · ")
+	if runewidth.StringWidth(plain) > width {
+		plain = truncatePlain(plain, width)
+	}
+	return colorDirtyLegend(plain)
 }
 
 func joinPartsWithin(parts []string, width int) string {
@@ -1222,6 +1312,15 @@ func colorStatusBar(text string, hasStatus bool) string {
 
 func colorDirtyLegendPartWithStatus(part string, isStatus bool) string {
 	key, rest, found := strings.Cut(part, " ")
+	if key == "⌂" {
+		return inspectorCommitStyle.Render(key) + hintStyle.Render(" "+rest)
+	}
+	if key == "!" {
+		return inspectorWarnStyle.Render(key) + hintStyle.Render(" "+rest)
+	}
+	if key == "×" {
+		return inspectorWarnStyle.Render(key) + hintStyle.Render(" "+rest)
+	}
 	if key == "+" {
 		return inspectorCleanStyle.Render(key) + hintStyle.Render(" "+rest)
 	}
@@ -1273,10 +1372,14 @@ func (model Model) titleLeftContentAtWidth(visibleCount, width int) string {
 	if model.search.Value() != "" || model.filter != filterAll {
 		count = fmt.Sprintf("%d/%d worktrees", visibleCount, len(model.state.Rows))
 	}
+	rootBranch := model.rootBranchTitle()
 	if width <= runewidth.StringWidth(appTitle) {
 		return titleNameStyle.Render(truncatePlain(appTitle, width))
 	}
 	staticWidth := runewidth.StringWidth(appTitle+"  ") + runewidth.StringWidth("  ") + runewidth.StringWidth(count)
+	if rootBranch != "" {
+		staticWidth += runewidth.StringWidth("  root: ")
+	}
 	repoWidth := width - staticWidth
 	if repoWidth < 4 {
 		compactWidth := width - runewidth.StringWidth(appTitle+"  ") - runewidth.StringWidth(count)
@@ -1295,7 +1398,23 @@ func (model Model) titleLeftContentAtWidth(visibleCount, width int) string {
 	title := titleNameStyle.Render(appTitle)
 	repo := titleRepoStyle.Render(repoName)
 	meta := titleMetaStyle.Render(count)
-	return title + "  " + repo + "  " + meta
+	if rootBranch == "" {
+		return title + "  " + repo + "  " + meta
+	}
+	rootWidth := width - lipgloss.Width(title+"  "+repo+"  "+meta+"  "+titleMetaStyle.Render("root: "))
+	if rootWidth < 3 {
+		return title + "  " + repo + "  " + meta
+	}
+	return title + "  " + repo + "  " + meta + "  " + titleMetaStyle.Render("root: ") + titleRepoStyle.Render(truncatePlain(rootBranch, rootWidth))
+}
+
+func (model Model) rootBranchTitle() string {
+	for _, row := range model.state.Rows {
+		if row.IsMain {
+			return row.DisplayBranch()
+		}
+	}
+	return ""
 }
 
 func (model Model) appControlsAtWidthAtTime(width int, now time.Time) string {
