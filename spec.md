@@ -100,7 +100,7 @@ Lifecycle and Git state words do not appear in this column. `locked`, `prunable`
 
 Loaded via the `gh` CLI (one `gh pr list`-style call for all branches), only if `gh` exists and is authed.
 
-- Shows: `#123` + state glyph (open `○`, draft `◌`, merged `⬡`, closed `✕`) + CI status (`✓` passing, `✗` failing, `●` running).
+- Shows: `#123` + state glyph (open/ready `○`, draft `◌`, approved `◆`, merged `⬡`, closed `✕`) + CI status (`✓` passing, `✗` failing, `●` running).
 - PR number is an OSC 8 hyperlink to the PR page (clickable in supporting terminals).
 - No configured remote → column hidden entirely.
 - `gh` missing/unauthed → column remains reserved but empty, no error noise.
@@ -121,16 +121,17 @@ Stale async results are ignored after reloads. PR data is cached for the current
 
 Below the table:
 
-- **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. In normal mode this shows `h root · a active · Tab filter: <state> · s search`. While searching, letter keys feed the live search input, so the footer shows `search <text>▌ · Esc clear · Tab filter: <state>`.
+- **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. In normal mode this shows `h root · a active · Tab filter: <state> · s search`. With an active filter, it also shows `Esc clear filter`. While searching, letter keys feed the live search input, so the footer shows `search <text>▌ · Esc clear · Tab filter: <state>`.
 - **Detail panel:** full info for the selected row: branch name, explicit `HEAD`, root/current state, absolute path, full status counts, Git-aware and full size when loaded, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes. Root/current context appears next to the Details title, for example `Details · Current root repository`; selected-row actions live in the bottom border: `↵ go · o editor · d delete · y abs path · p PR`.
-- **Status bar:** context-sensitive global hints, e.g. `Esc close/clear`, plus the row-state legend. The app frame title starts with `Git treehouse · <repo>`. The top controls show `n new`, refresh age, help, and quit. During async loading the status bar appends a small progress note (`fetching PRs…`).
+- **Status bar:** transient progress and flash messages only. The app frame title starts with `Git treehouse · <repo>`. The top controls show `n new`, refresh age, help, and quit. During async loading the status bar appends a small progress note (`fetching PRs…`).
+- **Help overlay:** groups shortcuts by context (`Global`, `Worktree List`, `Worktree Detail`) and groups visual legends (`Worktree Markers`, `Git Status`, `Pull Requests`). Category headers are bold white. The row-state and PR legends live here instead of the status bar.
 - `g/G` remains available and documented in help, but is not shown in the main view.
 
 ### 3.9 Sorting, search, and filtering
 
 - **Order:** root repository pinned first, remaining rows by last-commit date, newest first.
 - **Search:** `s` opens a fuzzy search over branch names.
-- **Filter:** `Tab` cycles filters across all, modified, prunable, locked, and detached rows. Search and filters compose, and `Esc` clears the filter before the branch search.
+- **Filter:** `Tab` cycles filters across all, modified, prunable, locked, and detached rows. Search and filters compose. `Esc` clears the current search while searching; otherwise it clears the active filter. Bare `Esc` does not quit.
 
 ## 4. Actions & keybindings
 
@@ -143,13 +144,13 @@ Below the table:
 | `o` | Open selected worktree in editor (config → `$EDITOR` fallback); TUI stays open |
 | `p` | Open selected row's PR in browser (`gh pr view --web`); no PR → open repo page for the branch |
 | `y` | Copy selected worktree's absolute path to clipboard; brief `copied` flash in status bar |
-| `r` / `f` | `git fetch --prune` + full reload of all rows |
+| `r` | `git fetch --prune` + full reload of all rows |
 | `h` | Jump to the root repository worktree |
 | `a` | Jump to the active worktree |
 | `s` | Fuzzy branch search |
 | `Tab` | Cycle filter: all → modified → prunable → locked → detached |
 | `Ctrl+P` | Open command palette |
-| `Esc` | Ladder: close topmost dialog → clear filter → clear branch search → quit app |
+| `Esc` | Contextual cancel or clear: close topmost dialog, clear current search, or clear active filter. Does not quit. |
 | `q`, `Ctrl+C` | Quit immediately from list view (no cd) |
 | `?` | Toggle a help overlay with the full key list |
 

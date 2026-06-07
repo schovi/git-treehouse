@@ -427,9 +427,9 @@ func colorPullRequestCell(raw, padded string, selected bool) string {
 		switch {
 		case strings.HasPrefix(part, "#"):
 			parts[index] = styleForSelected(prStyle, selected).Render(part)
-		case part == "✓":
+		case part == "✓" || part == "◆":
 			parts[index] = styleForSelected(cleanStyle, selected).Render(part)
-		case part == "×" || part == "✗":
+		case part == "×" || part == "✗" || part == "✕" || part == "●":
 			parts[index] = styleForSelected(warningStyle, selected).Render(part)
 		default:
 			parts[index] = styleForSelected(mutedStyle, selected).Render(part)

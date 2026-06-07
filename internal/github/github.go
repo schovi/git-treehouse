@@ -16,6 +16,7 @@ type rawPullRequest struct {
 	IsDraft           bool              `json:"isDraft"`
 	HeadRefName       string            `json:"headRefName"`
 	URL               string            `json:"url"`
+	ReviewDecision    string            `json:"reviewDecision"`
 	StatusCheckRollup []json.RawMessage `json:"statusCheckRollup"`
 }
 
@@ -35,7 +36,7 @@ func LoadPullRequests(ctx context.Context, repoRoot string, runner gitdata.Runne
 }
 
 func LoadPullRequestsFromAuthenticatedCLI(ctx context.Context, repoRoot string, runner gitdata.Runner) (map[string]gitdata.PullRequest, bool) {
-	output, err := runner.Run(ctx, repoRoot, "gh", "pr", "list", "--limit", "200", "--state", "all", "--json", "number,state,isDraft,headRefName,url,statusCheckRollup")
+	output, err := runner.Run(ctx, repoRoot, "gh", "pr", "list", "--limit", "200", "--state", "all", "--json", "number,state,isDraft,headRefName,url,reviewDecision,statusCheckRollup")
 	if err != nil {
 		return nil, false
 	}
@@ -50,7 +51,7 @@ func LoadPullRequestsFromAuthenticatedCLI(ctx context.Context, repoRoot string, 
 		}
 		pullRequests[raw.HeadRefName] = gitdata.PullRequest{
 			Number: raw.Number,
-			State:  stateGlyph(raw.State, raw.IsDraft),
+			State:  stateGlyph(raw.State, raw.IsDraft, raw.ReviewDecision),
 			CI:     ciGlyph(raw.StatusCheckRollup),
 			URL:    raw.URL,
 		}
@@ -80,12 +81,15 @@ func OpenPullRequestOrBranch(ctx context.Context, repoRoot string, row gitdata.W
 	return err
 }
 
-func stateGlyph(state string, draft bool) string {
+func stateGlyph(state string, draft bool, reviewDecision string) string {
 	if draft {
 		return "◌"
 	}
 	switch strings.ToUpper(state) {
 	case "OPEN":
+		if strings.ToUpper(reviewDecision) == "APPROVED" {
+			return "◆"
+		}
 		return "○"
 	case "MERGED":
 		return "⬡"

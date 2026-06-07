@@ -36,11 +36,33 @@ func TestLoadPullRequestsFromAuthenticatedCLISkipsAuthStatus(t *testing.T) {
 	if !strings.HasPrefix(runner.commands[0], "gh pr list ") {
 		t.Fatalf("command = %q, want gh pr list", runner.commands[0])
 	}
+	if !strings.Contains(runner.commands[0], "reviewDecision") {
+		t.Fatalf("command = %q, want reviewDecision JSON field", runner.commands[0])
+	}
 	pullRequest, ok := pullRequests["feature/login"]
 	if !ok {
 		t.Fatalf("missing pull request for feature/login: %#v", pullRequests)
 	}
 	if pullRequest.Number != 12 || pullRequest.State != "○" || pullRequest.URL == "" {
 		t.Fatalf("pull request = %#v, want parsed PR 12", pullRequest)
+	}
+}
+
+func TestLoadPullRequestsFromAuthenticatedCLIShowsApprovedPullRequest(t *testing.T) {
+	runner := &fakeRunner{
+		output: []byte(`[{"number":24,"state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","headRefName":"feature/approved","url":"https://github.com/acme/repo/pull/24","statusCheckRollup":[]}]`),
+	}
+
+	pullRequests, enabled := LoadPullRequestsFromAuthenticatedCLI(context.Background(), "/repo", runner)
+
+	if !enabled {
+		t.Fatal("LoadPullRequestsFromAuthenticatedCLI() enabled = false, want true")
+	}
+	pullRequest, ok := pullRequests["feature/approved"]
+	if !ok {
+		t.Fatalf("missing pull request for feature/approved: %#v", pullRequests)
+	}
+	if pullRequest.State != "◆" {
+		t.Fatalf("pull request state = %q, want approved glyph", pullRequest.State)
 	}
 }

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
 	appconfig "github.com/schovi/git-treehouse/internal/config"
@@ -408,23 +410,34 @@ func TestAppTopLineIncludesRefreshAgeWhenWide(t *testing.T) {
 	}
 }
 
-func TestStatusBarSplitsAppControlsAndDirtyLegend(t *testing.T) {
+func TestStatusBarIsEmptyWithoutTransientStatus(t *testing.T) {
 	model := Model{width: 180}
 
 	output := model.statusBar()
 
-	for _, want := range []string{"Esc", "close/clear", "⌂", "root", "!", "locked", "×", "prunable", "remote", "+", "staged", "~", "modified", "untracked"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("statusBar() missing %q:\n%s", want, output)
-		}
+	if output != "" {
+		t.Fatalf("statusBar() = %q, want empty default status", output)
 	}
-	for _, unwanted := range []string{"help", "quit", "g/G", "top/bottom", "h root", "m main", "a active", "Tab", "filter:", "s search"} {
+	for _, unwanted := range []string{"help", "quit", "g/G", "top/bottom", "h root", "m main", "a active", "Tab", "filter:", "s search", "⌂", "locked", "prunable", "remote", "+ staged", "~ modified", "? untracked"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("statusBar() should not include hidden or moved controls %q:\n%s", unwanted, output)
 		}
 	}
 	if strings.Contains(output, "delete") || strings.Contains(output, "editor") {
 		t.Fatalf("statusBar() should not contain persistent keybindings:\n%s", output)
+	}
+}
+
+func TestStatusBarShowsLoadingStatus(t *testing.T) {
+	model := Model{width: 180, loading: "fetching…"}
+
+	output := model.statusBar()
+
+	if !strings.Contains(output, "fetching…") {
+		t.Fatalf("statusBar() missing loading status:\n%s", output)
+	}
+	if strings.Contains(output, "Esc") {
+		t.Fatalf("statusBar() should not show Esc in default frame:\n%s", output)
 	}
 }
 
@@ -462,6 +475,24 @@ func TestSearchInputRendersInWorktreesFooter(t *testing.T) {
 	for _, unwanted := range []string{"h root", "a active", "search docs", "Enter apply", "Esc clear"} {
 		if strings.Contains(status, unwanted) {
 			t.Fatalf("statusBar() should not include search footer element %q:\n%s", unwanted, status)
+		}
+	}
+}
+
+func TestFilterFooterRendersEscClearFilter(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+		{Path: "/repo/dirty", Branch: "dirty", Status: gitdata.StatusCounts{Modified: 1}},
+	})
+	model.width = 120
+	model.height = 14
+	model = pressTab(model)
+
+	output := model.View()
+
+	for _, want := range []string{"Tab", "filter:", "modified", "Esc", "clear filter"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("View() missing filter footer element %q:\n%s", want, output)
 		}
 	}
 }
@@ -618,7 +649,7 @@ func TestASelectsActiveWorktree(t *testing.T) {
 	}
 }
 
-func TestEscClearsFilterBeforeQuitting(t *testing.T) {
+func TestEscClearsFilterWithoutQuitting(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main"},
 		{Path: "/repo/dirty", Branch: "dirty", Status: gitdata.StatusCounts{Modified: 1}},
@@ -636,8 +667,35 @@ func TestEscClearsFilterBeforeQuitting(t *testing.T) {
 	}
 
 	_, cmd = model.updateList(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Fatalf("Esc after clearing filter returned a command, want nil")
+	}
+}
+
+func TestQQuitsFromList(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main"},
+	})
+
+	_, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+
 	if cmd == nil {
-		t.Fatalf("Esc after clearing filter returned nil command, want quit command")
+		t.Fatalf("q returned nil command, want quit command")
+	}
+}
+
+func TestFDoesNotRefresh(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main"},
+	})
+
+	updated, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+
+	if cmd != nil {
+		t.Fatalf("f returned a command, want nil")
+	}
+	if updated.refreshInFlight || updated.loading != "" {
+		t.Fatalf("f should not refresh, got loading=%q refreshInFlight=%v", updated.loading, updated.refreshInFlight)
 	}
 }
 
@@ -781,9 +839,12 @@ func TestNewReservesPullRequestColumnForRemoteRepository(t *testing.T) {
 }
 
 func TestHelpRendersCenteredOverlayInAppFrame(t *testing.T) {
-	model := testModelWithRows([]gitdata.Worktree{
-		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
-	})
+	rows := make([]gitdata.Worktree, 24)
+	rows[0] = gitdata.Worktree{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true}
+	for index := 1; index < len(rows); index++ {
+		rows[index] = gitdata.Worktree{Path: fmt.Sprintf("/repo/worktree-%d", index), Branch: fmt.Sprintf("worktree-%d", index)}
+	}
+	model := testModelWithRows(rows)
 	model.width = 100
 	model.height = 40
 	model.help = true
@@ -804,8 +865,65 @@ func TestHelpRendersCenteredOverlayInAppFrame(t *testing.T) {
 	if helpLine >= model.height/2 {
 		t.Fatalf("Help dialog line = %d, should not be centered in terminal viewport:\n%s", helpLine, output)
 	}
-	if !strings.Contains(output, "Worktrees") || !strings.Contains(output, "ctrl+p command palette") {
+	plainOutput := ansi.Strip(output)
+	if !strings.Contains(plainOutput, "Worktrees") || !strings.Contains(plainOutput, "ctrl+p commands") {
 		t.Fatalf("Help overlay should preserve app content and show palette hint:\n%s", output)
+	}
+}
+
+func TestHelpRendersGroupedKeysAndLegends(t *testing.T) {
+	model := Model{}
+
+	output := ansi.Strip(model.renderHelpAtWidth(68))
+
+	for _, want := range []string{
+		"Global",
+		"Worktree List",
+		"Worktree Detail",
+		"Worktree Markers",
+		"Git Status",
+		"Pull Requests",
+		"ctrl+p",
+		"Esc close/cancel",
+		"top/bottom",
+		"PR/branch",
+		"bold active branch",
+		"remote gone",
+		"◌ draft",
+		"○ ready/open",
+		"◆ approved",
+		"⬡ merged",
+		"✗ CI error",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("renderHelpAtWidth() missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"r/f", "close/clear/quit"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("renderHelpAtWidth() should not contain %q:\n%s", unwanted, output)
+		}
+	}
+	markerOrder := []string{"⌂ root", "! locked", "× prunable", "bold active branch", "detached HEAD"}
+	previousIndex := -1
+	for _, marker := range markerOrder {
+		index := strings.Index(output, marker)
+		if index < 0 {
+			t.Fatalf("renderHelpAtWidth() missing marker %q:\n%s", marker, output)
+		}
+		if index <= previousIndex {
+			t.Fatalf("renderHelpAtWidth() marker %q is out of order:\n%s", marker, output)
+		}
+		previousIndex = index
+	}
+}
+
+func TestHelpCategoryStyleIsBoldWhite(t *testing.T) {
+	if !helpCategoryStyle.GetBold() {
+		t.Fatal("helpCategoryStyle should be bold")
+	}
+	if got := fmt.Sprint(helpCategoryStyle.GetForeground()); got != "255" {
+		t.Fatalf("helpCategoryStyle foreground = %q, want 255", got)
 	}
 }
 
@@ -992,6 +1110,38 @@ func TestDialogBottomLineKeepsRightBorderRuleAfterHints(t *testing.T) {
 	}
 	if strings.Contains(line, "     "+appBorderStyle.Render("─╯")) {
 		t.Fatalf("dialogBottomLine() should not leave blank padding before the right corner:\n%s", line)
+	}
+}
+
+func TestBottomBorderLineHandlesEmptyStyledControls(t *testing.T) {
+	line := bottomBorderLine(40, appBorderStyle, borderControls{text: colorKeyHints("", false)}, borderControls{})
+	plainLine := ansi.Strip(line)
+
+	if strings.Contains(plainLine, "╰─  ─") {
+		t.Fatalf("bottomBorderLine() should not reserve space for zero-width styled content:\n%s", line)
+	}
+	if plainLine != "╰"+strings.Repeat("─", 38)+"╯" {
+		t.Fatalf("bottomBorderLine() = %q, want solid border", plainLine)
+	}
+}
+
+func TestBottomBorderLinePositionsLeftAndRightControls(t *testing.T) {
+	line := bottomBorderLine(72, appBorderStyle,
+		borderControls{parts: []string{"Enter run", "Esc cancel"}},
+		borderControls{parts: []string{"q quit"}},
+	)
+	plainLine := ansi.Strip(line)
+
+	for _, want := range []string{"Enter run · Esc cancel", "q quit"} {
+		if !strings.Contains(plainLine, want) {
+			t.Fatalf("bottomBorderLine() missing %q:\n%s", want, line)
+		}
+	}
+	if !strings.Contains(plainLine, "─ q quit ─╯") {
+		t.Fatalf("bottomBorderLine() should right-align right controls inside the border:\n%s", line)
+	}
+	if width := lipgloss.Width(line); width != 72 {
+		t.Fatalf("bottomBorderLine() width = %d, want 72:\n%s", width, line)
 	}
 }
 
@@ -1667,17 +1817,27 @@ func TestNextClockTickDelayUsesMinuteBoundaryAfterFirstMinute(t *testing.T) {
 	}
 }
 
-func TestAppBottomLineEmbedsStatusWithDotSeparators(t *testing.T) {
+func TestAppBottomLineEmbedsStatusOnly(t *testing.T) {
 	model := Model{width: 200}
 
 	output := model.appBottomLine(200)
+	plainOutput := ansi.Strip(output)
 
-	for _, want := range []string{"╰─ ", " · ", "Esc", "close/clear", "+", "staged", "~", "modified", "? untracked", " ─╯"} {
+	for _, want := range []string{"╰", "─", "╯"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("appBottomLine() missing %q:\n%s", want, output)
 		}
 	}
-	for _, unwanted := range []string{"g/G", "top/bottom", "h root", "m main", "a active", "Tab filter", "s search"} {
+	if strings.Contains(plainOutput, "Esc") || strings.Contains(plainOutput, "close/clear") {
+		t.Fatalf("appBottomLine() should not show default Esc hint:\n%s", output)
+	}
+	if strings.Contains(plainOutput, "╰─  ─") {
+		t.Fatalf("appBottomLine() should not leave a blank label gap:\n%s", output)
+	}
+	if !strings.HasPrefix(plainOutput, "╰") || !strings.HasSuffix(plainOutput, "╯") {
+		t.Fatalf("appBottomLine() should render the bottom frame rule:\n%s", output)
+	}
+	for _, unwanted := range []string{"g/G", "top/bottom", "h root", "m main", "a active", "Tab filter", "s search", "⌂ root", "+ staged", "~ modified", "? untracked", "remote"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("appBottomLine() should not include moved or hidden control %q:\n%s", unwanted, output)
 		}

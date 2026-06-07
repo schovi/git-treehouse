@@ -75,6 +75,7 @@ var (
 	inspectorSubjectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	keyStyle              = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
 	hintStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	helpCategoryStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
 	statusMessageStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 )
 
@@ -511,7 +512,7 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 			model.selected = 0
 			return model, nil
 		}
-		return model, tea.Quit
+		return model, nil
 	case "up", "k":
 		model.selected = clamp(model.selected-1, 0, max(0, len(model.visibleIndexes())-1))
 	case "down", "j":
@@ -564,7 +565,7 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 			return model, nil
 		}
 		return model, copyPathCmd(row.Path)
-	case "r", "f":
+	case "r":
 		model.loading = "fetching…"
 		model = model.cancelEnrichment()
 		model.refreshID++
@@ -1510,43 +1511,10 @@ func (model Model) appTopLineAtTime(visibleCount, width int, now time.Time) stri
 }
 
 func (model Model) appBottomLine(width int) string {
-	if width <= 0 {
-		return ""
-	}
-	if width < 4 {
-		return appBorderStyle.Render(strings.Repeat("─", width))
-	}
-	contentWidth := width - 6
-	if contentWidth < 1 {
-		return appBorderStyle.Render("╰" + strings.Repeat("─", width-2) + "╯")
-	}
-	leftParts := model.statusLeftParts()
-	leftText := joinPartsWithin(leftParts, contentWidth)
-	left := colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
-	right := statusLegendForWidth(contentWidth - lipgloss.Width(left) - 3)
-	if right == "" {
-		return bottomLineWithContent(left, width)
-	}
-	return bottomLineWithSplit(left, right, width)
-}
-
-func bottomLineWithContent(content string, width int) string {
-	contentWidth := width - 6
-	if contentWidth < 1 {
-		return appBorderStyle.Render("╰" + strings.Repeat("─", max(0, width-2)) + "╯")
-	}
-	return appBorderStyle.Render("╰─ ") + padStyled(content, contentWidth) + appBorderStyle.Render(" ─╯")
-}
-
-func bottomLineWithSplit(left, right string, width int) string {
-	contentWidth := width - 6
-	left = left + " "
-	right = " " + right
-	fillerWidth := contentWidth - lipgloss.Width(left) - lipgloss.Width(right)
-	if fillerWidth < 1 {
-		return bottomLineWithContent(strings.TrimSpace(left), width)
-	}
-	return appBorderStyle.Render("╰─ ") + left + appBorderStyle.Render(strings.Repeat("─", fillerWidth)) + right + appBorderStyle.Render(" ─╯")
+	return bottomBorderLine(width, appBorderStyle, borderControls{
+		parts:     model.statusLeftParts(),
+		hasStatus: model.loading != "",
+	}, borderControls{})
 }
 
 func (model Model) wrapOuter(content string, width int) string {
@@ -1591,19 +1559,65 @@ func sectionTopLine(title string, width int) string {
 }
 
 func sectionBottomLine(footer string, width int) string {
-	innerWidth := width - 2
-	if footer == "" {
-		return panelBorderStyle.Render("╰" + strings.Repeat("─", innerWidth) + "╯")
+	return bottomBorderLine(width, panelBorderStyle, borderControls{parts: hintParts(footer)}, borderControls{})
+}
+
+type borderControls struct {
+	parts     []string
+	text      string
+	hasStatus bool
+}
+
+func bottomBorderLine(width int, style lipgloss.Style, left, right borderControls) string {
+	if width <= 0 {
+		return ""
 	}
-	maxLabelWidth := max(0, innerWidth-3)
-	footer = truncatePlain(footer, maxLabelWidth)
-	label := " " + colorKeyHints(footer, false) + " "
-	labelWidth := lipgloss.Width(label)
-	ruleWidth := innerWidth - 1 - labelWidth
-	if ruleWidth < 0 {
-		ruleWidth = 0
+	if width < 4 {
+		return style.Render(strings.Repeat("─", width))
 	}
-	return panelBorderStyle.Render("╰─") + label + panelBorderStyle.Render(strings.Repeat("─", ruleWidth)+"╯")
+	contentLimit := max(0, width-6)
+	leftText := renderBorderControls(left, contentLimit)
+	rightText := renderBorderControls(right, contentLimit)
+	if leftText == "" && rightText == "" {
+		return style.Render("╰" + strings.Repeat("─", max(0, width-2)) + "╯")
+	}
+	if leftText != "" && rightText != "" {
+		ruleWidth := width - lipgloss.Width(leftText) - lipgloss.Width(rightText) - 8
+		if ruleWidth >= 1 {
+			return style.Render("╰─ ") + leftText + style.Render(" "+strings.Repeat("─", ruleWidth)+" ") + rightText + style.Render(" ─╯")
+		}
+		rightText = ""
+	}
+	if leftText != "" {
+		ruleWidth := max(1, width-lipgloss.Width(leftText)-5)
+		return style.Render("╰─ ") + leftText + style.Render(" "+strings.Repeat("─", ruleWidth)+"╯")
+	}
+	ruleWidth := max(1, width-lipgloss.Width(rightText)-5)
+	return style.Render("╰"+strings.Repeat("─", ruleWidth)+" ") + rightText + style.Render(" ─╯")
+}
+
+func renderBorderControls(controls borderControls, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if len(controls.parts) > 0 {
+		text := joinPartsWithin(controls.parts, width)
+		if text == "" {
+			return ""
+		}
+		return colorKeyHints(text, controls.hasStatus)
+	}
+	if lipgloss.Width(controls.text) == 0 {
+		return ""
+	}
+	return truncateStyled(controls.text, width)
+}
+
+func hintParts(text string) []string {
+	if text == "" {
+		return nil
+	}
+	return strings.Split(text, " · ")
 }
 
 func padRight(value string, width int) string {
@@ -1653,46 +1667,24 @@ func (model Model) statusBar() string {
 func (model Model) statusBarAtWidth(width int) string {
 	leftParts := model.statusLeftParts()
 	leftText := joinPartsWithin(leftParts, width)
-	left := colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
-	right := statusLegendForWidth(width - lipgloss.Width(left) - 2)
-	if right == "" {
-		return left
-	}
-	spacerWidth := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if spacerWidth < 1 {
-		spacerWidth = 1
-	}
-	return left + strings.Repeat(" ", spacerWidth) + right
+	return colorKeyHints(leftText, model.loading != "" && strings.Contains(leftText, model.loading))
 }
 
 func (model Model) statusLeftParts() []string {
-	leftParts := []string{"Esc close/clear"}
 	if model.loading != "" {
-		leftParts = append(leftParts, model.loading)
+		return []string{model.loading}
 	}
-	return leftParts
+	return nil
 }
 
 func (model Model) listFooterHints() string {
 	if model.searching {
 		return "search " + model.search.Value() + "▌ · Esc clear · Tab filter: " + model.filter.label()
 	}
+	if model.filter != filterAll {
+		return "h root · a active · Tab filter: " + model.filter.label() + " · Esc clear filter · s search"
+	}
 	return "h root · a active · Tab filter: " + model.filter.label() + " · s search"
-}
-
-func dirtyLegendParts() []string {
-	return []string{"⌂ root", "! locked", "× prunable", "remote ✓/-/gone", "+ staged", "~ modified", "? untracked"}
-}
-
-func statusLegendForWidth(width int) string {
-	if width < 12 {
-		return ""
-	}
-	plain := strings.Join(dirtyLegendParts(), " · ")
-	if runewidth.StringWidth(plain) > width {
-		plain = truncatePlain(plain, width)
-	}
-	return colorDirtyLegend(plain)
 }
 
 func joinPartsWithin(parts []string, width int) string {
@@ -1709,6 +1701,9 @@ func joinPartsWithin(parts []string, width int) string {
 }
 
 func colorKeyHints(text string, hasStatus bool) string {
+	if text == "" {
+		return ""
+	}
 	parts := strings.Split(text, " · ")
 	for index, part := range parts {
 		parts[index] = colorKeyHintPart(part, hasStatus && index == len(parts)-1)
@@ -1718,47 +1713,6 @@ func colorKeyHints(text string, hasStatus bool) string {
 
 func colorKeyHintPart(part string, isStatus bool) string {
 	key, rest, found := strings.Cut(part, " ")
-	if found && key != "" {
-		return keyStyle.Render(key) + hintStyle.Render(" "+rest)
-	}
-	if isStatus {
-		return statusMessageStyle.Render(part)
-	}
-	return hintStyle.Render(part)
-}
-
-func colorDirtyLegend(text string) string {
-	return colorStatusBar(text, false)
-}
-
-func colorStatusBar(text string, hasStatus bool) string {
-	parts := strings.Split(text, " · ")
-	for index, part := range parts {
-		parts[index] = colorDirtyLegendPartWithStatus(part, hasStatus && index == len(parts)-1)
-	}
-	return strings.Join(parts, hintStyle.Render(" · "))
-}
-
-func colorDirtyLegendPartWithStatus(part string, isStatus bool) string {
-	key, rest, found := strings.Cut(part, " ")
-	if key == "⌂" {
-		return inspectorCommitStyle.Render(key) + hintStyle.Render(" "+rest)
-	}
-	if key == "!" {
-		return inspectorWarnStyle.Render(key) + hintStyle.Render(" "+rest)
-	}
-	if key == "×" {
-		return inspectorWarnStyle.Render(key) + hintStyle.Render(" "+rest)
-	}
-	if key == "+" {
-		return inspectorCleanStyle.Render(key) + hintStyle.Render(" "+rest)
-	}
-	if key == "~" {
-		return inspectorWarnStyle.Render(key) + hintStyle.Render(" "+rest)
-	}
-	if key == "?" {
-		return inspectorCommitStyle.Render(key) + hintStyle.Render(" "+rest)
-	}
 	if found && key != "" {
 		return keyStyle.Render(key) + hintStyle.Render(" "+rest)
 	}
@@ -2074,51 +2028,209 @@ func (model Model) tableContentWidth() int {
 	return max(1, panelWidth-2)
 }
 
+type helpEntryKind int
+
+const (
+	helpEntryKey helpEntryKind = iota
+	helpEntryRoot
+	helpEntryActive
+	helpEntryLocked
+	helpEntryPrunable
+	helpEntryDetached
+	helpEntryClean
+	helpEntryStaged
+	helpEntryModified
+	helpEntryUntracked
+	helpEntryRemote
+	helpEntryPullRequest
+	helpEntryApproved
+	helpEntryMerged
+	helpEntryClosed
+	helpEntryRunning
+	helpEntryError
+)
+
+type helpEntry struct {
+	lead        string
+	description string
+	kind        helpEntryKind
+}
+
+type helpSection struct {
+	title   string
+	entries []helpEntry
+}
+
 func (model Model) renderHelpAtWidth(width int) string {
-	items := []string{
-		"↑/↓ k/j move",
-		"g/G jump top/bottom",
-		"h jump root repository",
-		"a jump active worktree",
-		"Tab filter: all, modified, prunable, locked, detached",
-		"Enter cd to worktree",
-		"n create worktree",
-		"d delete worktree",
-		"o open editor",
-		"p open PR or branch page",
-		"y copy absolute path",
-		"r/f fetch --prune and reload",
-		"s search branches",
-		"ctrl+p command palette",
-		"Esc close, clear filter/search, or quit",
-	}
 	contentWidth := max(1, width-4)
-	lines := helpLinesAtWidth(items, contentWidth)
+	lines := helpLinesAtWidth(contentWidth)
 	return dialogBox("Help", lines, colorKeyHints("Esc close", false), width)
 }
 
-func helpLinesAtWidth(items []string, contentWidth int) []string {
-	if contentWidth >= 56 {
-		leftCount := (len(items) + 1) / 2
-		gap := "  "
-		columnWidth := max(1, (contentWidth-runewidth.StringWidth(gap))/2)
-		lines := make([]string, 0, leftCount)
-		for index := 0; index < leftCount; index++ {
-			left := padStyled(truncatePlain(items[index], columnWidth), columnWidth)
-			right := ""
-			rightIndex := index + leftCount
-			if rightIndex < len(items) {
-				right = truncatePlain(items[rightIndex], columnWidth)
-			}
-			lines = append(lines, left+gap+right)
-		}
-		return lines
+func helpLinesAtWidth(contentWidth int) []string {
+	columns := helpColumnsForWidth(contentWidth)
+	if len(columns) == 1 {
+		return renderHelpSections(columns[0], contentWidth)
 	}
-	lines := append([]string(nil), items...)
-	for index, line := range lines {
-		lines[index] = truncatePlain(line, contentWidth)
+	gap := "  "
+	gapWidth := runewidth.StringWidth(gap) * (len(columns) - 1)
+	columnWidth := max(1, (contentWidth-gapWidth)/len(columns))
+	renderedColumns := make([][]string, 0, len(columns))
+	height := 0
+	for _, column := range columns {
+		rendered := renderHelpSections(column, columnWidth)
+		renderedColumns = append(renderedColumns, rendered)
+		height = max(height, len(rendered))
+	}
+	lines := make([]string, 0, height)
+	for row := 0; row < height; row++ {
+		parts := make([]string, 0, len(renderedColumns))
+		for _, column := range renderedColumns {
+			line := ""
+			if row < len(column) {
+				line = column[row]
+			}
+			parts = append(parts, padStyled(line, columnWidth))
+		}
+		lines = append(lines, strings.Join(parts, gap))
 	}
 	return lines
+}
+
+func helpColumnsForWidth(contentWidth int) [][]helpSection {
+	keySections := helpKeySections()
+	legendSections := helpLegendSections()
+	if contentWidth >= 62 {
+		return [][]helpSection{
+			{keySections[0], legendSections[0]},
+			{keySections[1], legendSections[1]},
+			{keySections[2], legendSections[2]},
+		}
+	}
+	if contentWidth >= 42 {
+		return [][]helpSection{
+			{keySections[0], keySections[1], keySections[2]},
+			{legendSections[0], legendSections[1], legendSections[2]},
+		}
+	}
+	sections := make([]helpSection, 0, len(keySections)+len(legendSections))
+	sections = append(sections, keySections...)
+	sections = append(sections, legendSections...)
+	return [][]helpSection{sections}
+}
+
+func helpKeySections() []helpSection {
+	return []helpSection{
+		{
+			title: "Global",
+			entries: []helpEntry{
+				{lead: "n", description: "new worktree", kind: helpEntryKey},
+				{lead: "r", description: "refresh", kind: helpEntryKey},
+				{lead: "ctrl+p", description: "commands", kind: helpEntryKey},
+				{lead: "?", description: "help", kind: helpEntryKey},
+				{lead: "Esc", description: "close/cancel", kind: helpEntryKey},
+				{lead: "q", description: "quit", kind: helpEntryKey},
+			},
+		},
+		{
+			title: "Worktree List",
+			entries: []helpEntry{
+				{lead: "↑/↓ k/j", description: "move", kind: helpEntryKey},
+				{lead: "g/G", description: "top/bottom", kind: helpEntryKey},
+				{lead: "h", description: "root", kind: helpEntryKey},
+				{lead: "a", description: "active", kind: helpEntryKey},
+				{lead: "Tab", description: "filter", kind: helpEntryKey},
+				{lead: "s", description: "search", kind: helpEntryKey},
+			},
+		},
+		{
+			title: "Worktree Detail",
+			entries: []helpEntry{
+				{lead: "Enter", description: "go", kind: helpEntryKey},
+				{lead: "o", description: "editor", kind: helpEntryKey},
+				{lead: "d", description: "delete", kind: helpEntryKey},
+				{lead: "y", description: "abs path", kind: helpEntryKey},
+				{lead: "p", description: "PR/branch", kind: helpEntryKey},
+			},
+		},
+	}
+}
+
+func helpLegendSections() []helpSection {
+	return []helpSection{
+		{
+			title: "Worktree Markers",
+			entries: []helpEntry{
+				{lead: "⌂", description: "root", kind: helpEntryRoot},
+				{lead: "!", description: "locked", kind: helpEntryLocked},
+				{lead: "×", description: "prunable", kind: helpEntryPrunable},
+				{lead: "bold", description: "active branch", kind: helpEntryActive},
+				{lead: "detached", description: "HEAD", kind: helpEntryDetached},
+			},
+		},
+		{
+			title: "Git Status",
+			entries: []helpEntry{
+				{lead: "✓", description: "clean", kind: helpEntryClean},
+				{lead: "+", description: "staged", kind: helpEntryStaged},
+				{lead: "~", description: "modified", kind: helpEntryModified},
+				{lead: "?", description: "untracked", kind: helpEntryUntracked},
+				{lead: "remote ✓", description: "synced", kind: helpEntryRemote},
+				{lead: "remote -", description: "none", kind: helpEntryRemote},
+				{lead: "remote gone", description: "deleted", kind: helpEntryRemote},
+			},
+		},
+		{
+			title: "Pull Requests",
+			entries: []helpEntry{
+				{lead: "◌", description: "draft", kind: helpEntryPullRequest},
+				{lead: "○", description: "ready/open", kind: helpEntryPullRequest},
+				{lead: "◆", description: "approved", kind: helpEntryApproved},
+				{lead: "⬡", description: "merged", kind: helpEntryMerged},
+				{lead: "✕", description: "closed", kind: helpEntryClosed},
+				{lead: "✓", description: "CI passed", kind: helpEntryClean},
+				{lead: "✗", description: "CI error", kind: helpEntryError},
+				{lead: "●", description: "CI running", kind: helpEntryRunning},
+			},
+		},
+	}
+}
+
+func renderHelpSections(sections []helpSection, width int) []string {
+	lines := make([]string, 0)
+	for sectionIndex, section := range sections {
+		if sectionIndex > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, truncateStyled(helpCategoryStyle.Render(section.title), width))
+		for _, entry := range section.entries {
+			lines = append(lines, truncateStyled(renderHelpEntry(entry), width))
+		}
+	}
+	return lines
+}
+
+func renderHelpEntry(entry helpEntry) string {
+	return helpEntryStyle(entry.kind).Render(entry.lead) + hintStyle.Render(" "+entry.description)
+}
+
+func helpEntryStyle(kind helpEntryKind) lipgloss.Style {
+	switch kind {
+	case helpEntryRoot, helpEntryDetached, helpEntryPullRequest, helpEntryMerged:
+		return inspectorCommitStyle
+	case helpEntryActive:
+		return inspectorValueStyle.Bold(true)
+	case helpEntryLocked, helpEntryPrunable, helpEntryModified, helpEntryClosed, helpEntryRunning, helpEntryError:
+		return inspectorWarnStyle
+	case helpEntryClean, helpEntryStaged, helpEntryApproved:
+		return inspectorCleanStyle
+	case helpEntryUntracked:
+		return inspectorCommitStyle
+	case helpEntryRemote:
+		return keyStyle
+	default:
+		return keyStyle
+	}
 }
 
 func (model Model) renderCreateAtWidth(width int) string {
@@ -2481,13 +2593,7 @@ func dialogTopLine(title string, width int) string {
 }
 
 func dialogBottomLine(content string, width int) string {
-	contentLimit := width - 6
-	if contentLimit < 1 || content == "" {
-		return appBorderStyle.Render("╰" + strings.Repeat("─", max(0, width-2)) + "╯")
-	}
-	content = truncateStyled(content, contentLimit)
-	ruleWidth := max(1, width-5-lipgloss.Width(content))
-	return appBorderStyle.Render("╰─ ") + content + appBorderStyle.Render(" "+strings.Repeat("─", ruleWidth)+"╯")
+	return bottomBorderLine(width, appBorderStyle, borderControls{text: content}, borderControls{})
 }
 
 func createDialogHintsAtWidth(width int) string {
