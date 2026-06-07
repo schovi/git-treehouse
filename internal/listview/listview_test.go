@@ -5,9 +5,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+	"github.com/muesli/termenv"
 
 	"github.com/schovi/git-treehouse/internal/gitdata"
 )
@@ -150,6 +152,59 @@ func TestRenderRowsSelectedColorPadsToWidth(t *testing.T) {
 	}
 }
 
+func TestRenderRowsSelectedColorCoversWholeRow(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previousProfile)
+	})
+
+	tests := []struct {
+		name string
+		row  gitdata.Worktree
+	}{
+		{
+			name: "root",
+			row:  gitdata.Worktree{Branch: "main", IsActive: true, IsMain: true, MainSync: gitdata.SyncState{Available: true, Ahead: 1}},
+		},
+		{
+			name: "branch",
+			row: gitdata.Worktree{
+				Branch:   "docs/troubleshooting",
+				Status:   gitdata.StatusCounts{Staged: 1, Modified: 1},
+				HeadSync: gitdata.SyncState{Available: true, Ahead: 1},
+				MainSync: gitdata.SyncState{Available: true, Behind: 2},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output := RenderRows([]gitdata.Worktree{test.row}, Options{
+				Width:             100,
+				Color:             true,
+				ShowHeader:        true,
+				HighlightSelected: true,
+				SelectedIndex:     0,
+			}, time.Now())
+			lines := strings.Split(output, "\n")
+			if len(lines) < 2 {
+				t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
+			}
+
+			backgrounds := selectedBackgroundColumns(lines[1])
+			if len(backgrounds) != 100 {
+				t.Fatalf("selected row columns = %d, want 100:\n%q", len(backgrounds), lines[1])
+			}
+			for column, selected := range backgrounds {
+				if !selected {
+					t.Fatalf("selected background missing at column %d:\n%q", column, lines[1])
+				}
+			}
+		})
+	}
+}
+
 func TestRenderRowsFoldsMarkerIntoBranchColumn(t *testing.T) {
 	output := RenderRows([]gitdata.Worktree{
 		{Branch: "main", IsActive: true, IsMain: true},
@@ -255,4 +310,60 @@ func visualIndex(line, needle string) int {
 		width += runewidth.RuneWidth(character)
 	}
 	return width
+}
+
+func selectedBackgroundColumns(value string) []bool {
+	columns := []bool{}
+	selected := false
+	for len(value) > 0 {
+		if strings.HasPrefix(value, "\x1b[") {
+			end := strings.IndexByte(value, 'm')
+			if end < 0 {
+				return columns
+			}
+			selected = updateSelectedBackground(selected, value[2:end])
+			value = value[end+1:]
+			continue
+		}
+		if strings.HasPrefix(value, "\x1b]") {
+			end := strings.Index(value, "\x1b\\")
+			if end < 0 {
+				return columns
+			}
+			value = value[end+2:]
+			continue
+		}
+
+		character, size := utf8.DecodeRuneInString(value)
+		if character == utf8.RuneError && size == 0 {
+			return columns
+		}
+		width := runewidth.RuneWidth(character)
+		for range width {
+			columns = append(columns, selected)
+		}
+		value = value[size:]
+	}
+	return columns
+}
+
+func updateSelectedBackground(selected bool, sequence string) bool {
+	if sequence == "" {
+		return false
+	}
+	codes := strings.Split(sequence, ";")
+	for index := 0; index < len(codes); index++ {
+		switch codes[index] {
+		case "0":
+			selected = false
+		case "49":
+			selected = false
+		case "48":
+			if index+2 < len(codes) && codes[index+1] == "5" {
+				selected = codes[index+2] == "62"
+				index += 2
+			}
+		}
+	}
+	return selected
 }
