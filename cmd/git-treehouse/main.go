@@ -94,26 +94,19 @@ func runList(args []string) error {
 		return err
 	}
 	runner := gitdata.ExecRunner{}
+	tty := stdoutIsTTY()
+	width := terminalWidth(100)
 	state, err := gitdata.Load(context.Background(), ".", config, runner)
 	if err != nil {
 		return err
 	}
-	showPR := false
-	prPending := false
-	if !*noGitHub {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		if github.Available(ctx, state.Repo.Root, runner) {
-			showPR = true
-			pullRequests, enabled := github.LoadPullRequestsFromAuthenticatedCLI(ctx, state.Repo.Root, runner)
-			if enabled {
-				state.Rows = github.AttachPullRequests(state.Rows, pullRequests)
-			} else {
-				prPending = true
-			}
-		}
-	}
-	loadDiskUsageForList(&state, 2*time.Second)
+	enrichmentContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	showPR, prPending := enrichListState(enrichmentContext, &state, runner, listEnrichmentOptions{
+		LoadPullRequests: !*noGitHub && (*jsonOutput || listview.ShowsPullRequestColumn(width)),
+		LoadGitSize:      *jsonOutput || listview.ShowsGitSizeColumn(width),
+		LoadFullSize:     *jsonOutput,
+	})
 	if *jsonOutput {
 		output, err := json.MarshalIndent(listJSONFromState(state, time.Now()), "", "  ")
 		if err != nil {
@@ -122,18 +115,100 @@ func runList(args []string) error {
 		fmt.Println(string(output))
 		return nil
 	}
-	tty := stdoutIsTTY()
 	output := listview.Render(state, listview.Options{
-		Width:      terminalWidth(100),
+		Width:      width,
 		Color:      tty,
 		Hyperlinks: tty,
 		ShowHeader: true,
 		ShowPR:     showPR,
-		Pending:    "-",
+		Pending:    listview.LoadingPlaceholder,
 		PRPending:  prPending,
 	}, time.Now())
 	fmt.Println(output)
 	return nil
+}
+
+type listEnrichmentOptions struct {
+	LoadPullRequests bool
+	LoadGitSize      bool
+	LoadFullSize     bool
+}
+
+type listSizeResult struct {
+	path           string
+	gitSize        int64
+	gitSizeLoaded  bool
+	fullSize       int64
+	fullSizeLoaded bool
+}
+
+func enrichListState(ctx context.Context, state *gitdata.State, runner gitdata.Runner, options listEnrichmentOptions) (bool, bool) {
+	type pullRequestResult struct {
+		showPR       bool
+		prPending    bool
+		pullRequests map[string]gitdata.PullRequest
+	}
+	results := make(chan any, 2)
+	var waitGroup sync.WaitGroup
+	if options.LoadPullRequests {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			result := pullRequestResult{}
+			if github.Available(ctx, state.Repo.Root, runner) {
+				result.showPR = true
+				pullRequests, enabled := github.LoadPullRequestsFromAuthenticatedCLI(ctx, state.Repo.Root, runner)
+				if enabled {
+					result.pullRequests = pullRequests
+				} else {
+					result.prPending = true
+				}
+			}
+			select {
+			case results <- result:
+			case <-ctx.Done():
+			}
+		}()
+	}
+	if options.LoadGitSize || options.LoadFullSize {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for _, result := range loadListSizes(ctx, *state, runner, options) {
+				select {
+				case results <- result:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	done := make(chan struct{})
+	go func() {
+		waitGroup.Wait()
+		close(done)
+	}()
+	showPR := false
+	prPending := false
+	for {
+		select {
+		case raw := <-results:
+			switch result := raw.(type) {
+			case pullRequestResult:
+				showPR = result.showPR
+				prPending = result.prPending
+				if len(result.pullRequests) > 0 {
+					state.Rows = github.AttachPullRequests(state.Rows, result.pullRequests)
+				}
+			case listSizeResult:
+				applyListSizeResult(state, result)
+			}
+		case <-done:
+			return showPR, prPending
+		case <-ctx.Done():
+			return showPR, prPending
+		}
+	}
 }
 
 type listJSON struct {
@@ -174,6 +249,8 @@ type listJSONWorktree struct {
 	Commit             listJSONCommit       `json:"commit"`
 	BranchMergedToMain bool                 `json:"branch_merged_to_main"`
 	PullRequest        *listJSONPullRequest `json:"pull_request,omitempty"`
+	GitSize            listJSONSize         `json:"git_size"`
+	FullSize           listJSONSize         `json:"full_size"`
 	Size               listJSONSize         `json:"size"`
 }
 
@@ -256,10 +333,9 @@ func listJSONFromState(state gitdata.State, now time.Time) listJSON {
 			RemoteSync:         syncJSON(row.HeadSync, row.HeadSync.RemoteCompact(row.UpstreamGone)),
 			MainSync:           syncJSON(row.MainSync, row.MainSync.Compact()),
 			BranchMergedToMain: row.BranchMergedToMain,
-			Size: listJSONSize{
-				Loaded: row.SizeLoaded,
-				Bytes:  row.SizeBytes,
-			},
+			GitSize:            gitSizeJSON(row),
+			FullSize:           fullSizeJSON(row),
+			Size:               fullSizeJSON(row),
 		}
 		if !row.CommitTime.IsZero() {
 			worktree.Commit.Time = row.CommitTime.Format(time.RFC3339)
@@ -279,6 +355,24 @@ func listJSONFromState(state gitdata.State, now time.Time) listJSON {
 		output.Worktrees = append(output.Worktrees, worktree)
 	}
 	return output
+}
+
+func gitSizeJSON(row gitdata.Worktree) listJSONSize {
+	if row.GitSizeLoaded {
+		return listJSONSize{Loaded: true, Bytes: row.GitSizeBytes}
+	}
+	if row.SizeLoaded {
+		return listJSONSize{Loaded: true, Bytes: row.SizeBytes}
+	}
+	return listJSONSize{}
+}
+
+func fullSizeJSON(row gitdata.Worktree) listJSONSize {
+	size, loaded := row.FullSize()
+	if !loaded {
+		return listJSONSize{}
+	}
+	return listJSONSize{Loaded: true, Bytes: size}
 }
 
 func syncJSON(sync gitdata.SyncState, text string) listJSONSync {
@@ -448,59 +542,87 @@ func formatDoctorChecks(checks []doctorCheck) string {
 	return builder.String()
 }
 
-func loadDiskUsageForList(state *gitdata.State, budget time.Duration) {
-	type result struct {
-		path string
-		size int64
-	}
-	results := make(chan result, len(state.Rows))
-	var waitGroup sync.WaitGroup
+func loadListSizes(ctx context.Context, state gitdata.State, runner gitdata.Runner, options listEnrichmentOptions) []listSizeResult {
+	paths := make([]string, 0, len(state.Rows))
 	for _, row := range state.Rows {
-		if row.Prunable {
-			continue
+		if !row.Prunable {
+			paths = append(paths, row.Path)
 		}
-		path := row.Path
+	}
+	results := make(chan listSizeResult, len(paths))
+	jobs := make(chan string)
+	var waitGroup sync.WaitGroup
+	workerCount := min(2, max(1, len(paths)))
+	for range workerCount {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			size, err := gitdata.DiskUsage(path)
-			if err == nil {
-				results <- result{path: path, size: size}
+			for path := range jobs {
+				result := listSizeResult{path: path}
+				if options.LoadGitSize {
+					if size, err := gitdata.GitAwareDiskUsage(ctx, path, runner); err == nil {
+						result.gitSize = size
+						result.gitSizeLoaded = true
+					}
+				}
+				if options.LoadFullSize {
+					if size, err := gitdata.FullDiskUsage(ctx, path); err == nil {
+						result.fullSize = size
+						result.fullSizeLoaded = true
+					}
+				}
+				select {
+				case results <- result:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}()
 	}
-	done := make(chan struct{})
+	go func() {
+		defer close(jobs)
+		for _, path := range paths {
+			select {
+			case jobs <- path:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	go func() {
 		waitGroup.Wait()
 		close(results)
-		close(done)
 	}()
-	deadline := time.After(budget)
+	loaded := make([]listSizeResult, 0, len(paths))
 	for {
 		select {
 		case result, ok := <-results:
 			if !ok {
-				return
+				return loaded
 			}
-			applyDiskUsageResult(state, result.path, result.size)
-		case <-done:
-			for result := range results {
-				applyDiskUsageResult(state, result.path, result.size)
-			}
-			return
-		case <-deadline:
-			return
+			loaded = append(loaded, result)
+		case <-ctx.Done():
+			return loaded
 		}
 	}
 }
 
-func applyDiskUsageResult(state *gitdata.State, path string, size int64) {
+func applyListSizeResult(state *gitdata.State, result listSizeResult) {
 	for index := range state.Rows {
-		if state.Rows[index].Path == path {
-			state.Rows[index].SizeBytes = size
-			state.Rows[index].SizeLoaded = true
-			return
+		if state.Rows[index].Path != result.path {
+			continue
 		}
+		if result.gitSizeLoaded {
+			state.Rows[index].GitSizeBytes = result.gitSize
+			state.Rows[index].GitSizeLoaded = true
+		}
+		if result.fullSizeLoaded {
+			state.Rows[index].FullSizeBytes = result.fullSize
+			state.Rows[index].FullSizeLoaded = true
+			state.Rows[index].SizeBytes = result.fullSize
+			state.Rows[index].SizeLoaded = true
+		}
+		return
 	}
 }
 
@@ -516,7 +638,7 @@ func runTUI(cdFile string) error {
 		}
 	}
 	runner := gitdata.ExecRunner{}
-	state, err := gitdata.Load(context.Background(), ".", config, runner)
+	state, err := gitdata.LoadSkeleton(context.Background(), ".", config, runner)
 	if err != nil {
 		return err
 	}

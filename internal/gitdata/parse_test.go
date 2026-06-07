@@ -1,6 +1,10 @@
 package gitdata
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestParseWorktreeList(t *testing.T) {
 	output := `worktree /repo/main
@@ -93,5 +97,60 @@ func TestParseAheadBehind(t *testing.T) {
 	ahead, behind, ok = ParseAheadBehind("not counts")
 	if ok || ahead != 0 || behind != 0 {
 		t.Fatalf("ParseAheadBehind(invalid) = %d, %d, %t, want 0, 0, false", ahead, behind, ok)
+	}
+}
+
+func TestParseRefMetadata(t *testing.T) {
+	output := strings.Join([]string{
+		"main\x00aaaaaaaa\x00aaaaaaa\x001780000000\x00main commit\x00origin/main\x00\x000 0",
+		"feature\x00bbbbbbbb\x00bbbbbbb\x001780000100\x00feature commit\x00origin/feature\x00ahead 2, behind 1\x002 5",
+		"gone\x00cccccccc\x00ccccccc\x001780000200\x00gone commit\x00origin/gone\x00gone\x000 3",
+		"local\x00dddddddd\x00ddddddd\x001780000300\x00local commit\x00\x00\x001 0",
+	}, "\n")
+
+	got := ParseRefMetadata(output)
+
+	feature := got["feature"]
+	if feature.ObjectName != "bbbbbbbb" || feature.ObjectShort != "bbbbbbb" || feature.Subject != "feature commit" {
+		t.Fatalf("feature metadata parsed incorrectly: %+v", feature)
+	}
+	if !feature.CommitTime.Equal(time.Unix(1780000100, 0)) {
+		t.Fatalf("feature commit time = %s, want unix 1780000100", feature.CommitTime)
+	}
+	if feature.Upstream != "origin/feature" || !feature.HeadSync.Available || feature.HeadSync.Ahead != 2 || feature.HeadSync.Behind != 1 {
+		t.Fatalf("feature upstream sync = upstream %q %+v, want origin/feature ↑2 ↓1", feature.Upstream, feature.HeadSync)
+	}
+	if !feature.MainSync.Available || feature.MainSync.Ahead != 2 || feature.MainSync.Behind != 5 {
+		t.Fatalf("feature main sync = %+v, want ↑2 ↓5", feature.MainSync)
+	}
+	if !got["gone"].UpstreamGone {
+		t.Fatalf("gone upstream not detected: %+v", got["gone"])
+	}
+	if !got["local"].HeadSync.NoUpstream {
+		t.Fatalf("local branch should have no upstream: %+v", got["local"])
+	}
+}
+
+func TestParseUpstreamTrack(t *testing.T) {
+	tests := []struct {
+		input      string
+		wantGone   bool
+		wantAhead  int
+		wantBehind int
+	}{
+		{input: "", wantGone: false},
+		{input: "ahead 3", wantAhead: 3},
+		{input: "behind 4", wantBehind: 4},
+		{input: "ahead 3, behind 4", wantAhead: 3, wantBehind: 4},
+		{input: "gone", wantGone: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			gone, sync := ParseUpstreamTrack(test.input)
+			if gone != test.wantGone || sync.Ahead != test.wantAhead || sync.Behind != test.wantBehind {
+				t.Fatalf("ParseUpstreamTrack(%q) = gone %v sync %+v", test.input, gone, sync)
+			}
+		})
 	}
 }

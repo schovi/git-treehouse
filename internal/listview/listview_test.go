@@ -101,6 +101,37 @@ func TestRenderRowsUsesPendingPlaceholderForUnresolvedPRs(t *testing.T) {
 	}
 }
 
+func TestRenderRowsUsesSharedLoadingPlaceholder(t *testing.T) {
+	output := RenderRows([]gitdata.Worktree{
+		{Branch: "feature/pr", LocalMetadataLoaded: true},
+	}, Options{
+		Width:      160,
+		ShowHeader: true,
+		ShowPR:     true,
+		Pending:    LoadingPlaceholder,
+		PRPending:  true,
+	}, time.Now())
+
+	if !strings.Contains(output, LoadingPlaceholder) {
+		t.Fatalf("RenderRows() missing loading placeholder:\n%s", output)
+	}
+}
+
+func TestColumnVisibilityThresholds(t *testing.T) {
+	if ShowsPullRequestColumn(127) {
+		t.Fatal("PR column should be hidden at width 127")
+	}
+	if !ShowsPullRequestColumn(128) {
+		t.Fatal("PR column should be visible at width 128")
+	}
+	if ShowsGitSizeColumn(143) {
+		t.Fatal("size column should be hidden at width 143")
+	}
+	if !ShowsGitSizeColumn(144) {
+		t.Fatal("size column should be visible at width 144")
+	}
+}
+
 func TestRenderRowsAlignsBranchWithHeader(t *testing.T) {
 	output := RenderRows([]gitdata.Worktree{
 		{Branch: "feature/plain"},

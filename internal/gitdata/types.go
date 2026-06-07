@@ -112,30 +112,55 @@ func (pr PullRequest) Text() string {
 }
 
 type Worktree struct {
-	Path               string
-	GitDir             string
-	Head               string
-	Branch             string
-	Detached           bool
-	Bare               bool
-	Locked             bool
-	LockReason         string
-	Prunable           bool
-	PruneReason        string
-	IsActive           bool
-	IsMain             bool
-	Status             StatusCounts
-	Upstream           string
-	UpstreamGone       bool
-	HeadSync           SyncState
-	MainSync           SyncState
-	CommitShort        string
-	CommitSubject      string
-	CommitTime         time.Time
-	BranchMergedToMain bool
-	PR                 *PullRequest
-	SizeBytes          int64
-	SizeLoaded         bool
+	Path                string
+	GitDir              string
+	Head                string
+	Branch              string
+	Detached            bool
+	Bare                bool
+	Locked              bool
+	LockReason          string
+	Prunable            bool
+	PruneReason         string
+	IsActive            bool
+	IsMain              bool
+	LocalMetadataLoaded bool
+	Status              StatusCounts
+	Upstream            string
+	UpstreamGone        bool
+	HeadSync            SyncState
+	MainSync            SyncState
+	CommitShort         string
+	CommitSubject       string
+	CommitTime          time.Time
+	BranchMergedToMain  bool
+	PR                  *PullRequest
+	GitSizeBytes        int64
+	GitSizeLoaded       bool
+	FullSizeBytes       int64
+	FullSizeLoaded      bool
+	SizeBytes           int64
+	SizeLoaded          bool
+}
+
+func (worktree Worktree) TableSize() (int64, bool) {
+	if worktree.GitSizeLoaded {
+		return worktree.GitSizeBytes, true
+	}
+	if worktree.SizeLoaded {
+		return worktree.SizeBytes, true
+	}
+	return 0, false
+}
+
+func (worktree Worktree) FullSize() (int64, bool) {
+	if worktree.FullSizeLoaded {
+		return worktree.FullSizeBytes, true
+	}
+	if worktree.SizeLoaded {
+		return worktree.SizeBytes, true
+	}
+	return 0, false
 }
 
 func (worktree Worktree) DisplayBranch() string {

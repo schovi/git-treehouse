@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -24,29 +25,34 @@ import (
 )
 
 type Model struct {
-	state           gitdata.State
-	config          config.Config
-	runner          gitdata.Runner
-	width           int
-	height          int
-	selected        int
-	filter          worktreeFilter
-	searching       bool
-	search          textinput.Model
-	help            bool
-	loading         string
-	flash           string
-	flashID         int
-	showPR          bool
-	prCache         map[string]gitdata.PullRequest
-	prCacheRepoRoot string
-	selectedPath    string
-	createDialog    *createDialog
-	deleteDialog    *deleteDialog
-	paletteDialog   *paletteDialog
-	lastRefreshAt   time.Time
-	refreshInFlight bool
-	refreshID       int
+	state             gitdata.State
+	config            config.Config
+	runner            gitdata.Runner
+	width             int
+	height            int
+	selected          int
+	filter            worktreeFilter
+	searching         bool
+	search            textinput.Model
+	help              bool
+	loading           string
+	flash             string
+	flashID           int
+	showPR            bool
+	prLoading         bool
+	prCache           map[string]gitdata.PullRequest
+	prCacheRepoRoot   string
+	prLastCheckedAt   time.Time
+	selectedPath      string
+	createDialog      *createDialog
+	deleteDialog      *deleteDialog
+	paletteDialog     *paletteDialog
+	lastRefreshAt     time.Time
+	refreshInFlight   bool
+	refreshID         int
+	enrichmentID      int
+	enrichmentContext context.Context
+	enrichmentCancel  context.CancelFunc
 }
 
 var (
@@ -75,6 +81,7 @@ var (
 const (
 	autoRefreshInterval = 30 * time.Second
 	clockTickInterval   = time.Second
+	prRefreshTTL        = 5 * time.Minute
 	appTitle            = "Git treehouse"
 )
 
@@ -109,11 +116,23 @@ type paletteDialog struct {
 type prLoadedMsg struct {
 	pullRequests map[string]gitdata.PullRequest
 	enabled      bool
+	repoRoot     string
+	id           int
+	checkedAt    time.Time
 }
 
-type sizeLoadedMsg struct {
-	path string
-	size int64
+type sizesLoadedMsg struct {
+	gitSizes  map[string]int64
+	fullSizes map[string]int64
+	repoRoot  string
+	id        int
+}
+
+type localMetadataLoadedMsg struct {
+	state    gitdata.State
+	err      error
+	repoRoot string
+	id       int
 }
 
 type reloadMsg struct {
@@ -278,19 +297,29 @@ func New(state gitdata.State, config config.Config, runner gitdata.Runner) Model
 	search.Prompt = "s "
 	search.CharLimit = 200
 	search.Width = 40
+	enrichmentContext, enrichmentCancel := context.WithCancel(context.Background())
 	return Model{
-		state:         state,
-		config:        config,
-		runner:        runner,
-		width:         100,
-		height:        30,
-		search:        search,
-		lastRefreshAt: time.Now(),
+		state:             state,
+		config:            config,
+		runner:            runner,
+		width:             100,
+		height:            30,
+		search:            search,
+		showPR:            state.Repo.RemoteConfigured,
+		prLoading:         state.Repo.RemoteConfigured,
+		lastRefreshAt:     time.Now(),
+		enrichmentID:      1,
+		enrichmentContext: enrichmentContext,
+		enrichmentCancel:  enrichmentCancel,
 	}
 }
 
 func (model Model) Init() tea.Cmd {
-	return tea.Batch(model.enrichmentCommands(), clockTickCmd(), autoRefreshTickCmd())
+	ctx := model.enrichmentContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return tea.Batch(model.enrichmentCommands(ctx, model.enrichmentID, false), clockTickCmd(model.lastRefreshAt), autoRefreshTickCmd())
 }
 
 func (model Model) SelectedPath() string {
@@ -302,8 +331,22 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		model.width = message.Width
 		model.height = message.Height
-		return model, nil
+		return model, model.diskUsageCommand(context.Background(), time.Now(), model.enrichmentID)
+	case localMetadataLoadedMsg:
+		if message.id != model.enrichmentID || message.repoRoot != model.state.Repo.Root || message.err != nil {
+			return model, nil
+		}
+		anchor := model.selectionAnchor()
+		model.state = message.state
+		model.applyCachedPullRequests()
+		model.restoreSelection(anchor)
+		return model, model.diskUsageCommand(context.Background(), time.Now(), model.enrichmentID)
 	case prLoadedMsg:
+		if message.id != model.enrichmentID || message.repoRoot != model.state.Repo.Root {
+			return model, nil
+		}
+		model.prLoading = false
+		model.prLastCheckedAt = message.checkedAt
 		if message.enabled {
 			model.showPR = true
 			model.prCache = message.pullRequests
@@ -314,12 +357,26 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache)
 		}
 		return model, nil
-	case sizeLoadedMsg:
-		for index := range model.state.Rows {
-			if model.state.Rows[index].Path == message.path {
-				model.state.Rows[index].SizeBytes = message.size
+	case sizesLoadedMsg:
+		if message.id != model.enrichmentID || message.repoRoot != model.state.Repo.Root {
+			return model, nil
+		}
+		pathIndexes := make(map[string]int, len(model.state.Rows))
+		for index, row := range model.state.Rows {
+			pathIndexes[row.Path] = index
+		}
+		for path, size := range message.gitSizes {
+			if index, ok := pathIndexes[path]; ok {
+				model.state.Rows[index].GitSizeBytes = size
+				model.state.Rows[index].GitSizeLoaded = true
+			}
+		}
+		for path, size := range message.fullSizes {
+			if index, ok := pathIndexes[path]; ok {
+				model.state.Rows[index].FullSizeBytes = size
+				model.state.Rows[index].FullSizeLoaded = true
+				model.state.Rows[index].SizeBytes = size
 				model.state.Rows[index].SizeLoaded = true
-				break
 			}
 		}
 		return model, nil
@@ -341,14 +398,17 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model.setFlash(message.err.Error())
 		}
 		model.state = message.state
+		model.showPR = model.state.Repo.RemoteConfigured
+		model.prLoading = false
 		model.applyCachedPullRequests()
 		model.lastRefreshAt = message.completedAt
 		model.restoreSelection(anchor)
+		model, enrichmentCmd := model.startEnrichment(!message.automatic)
 		if message.automatic {
-			return model, model.enrichmentCommands()
+			return model, enrichmentCmd
 		}
 		model, flashCmd := model.setFlash("reloaded")
-		return model, tea.Batch(model.enrichmentCommands(), flashCmd)
+		return model, tea.Batch(enrichmentCmd, flashCmd)
 	case createMsg:
 		model.loading = ""
 		if message.err != nil {
@@ -367,10 +427,13 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model.setFlash(message.err.Error())
 		}
 		model.state = message.state
+		model.showPR = model.state.Repo.RemoteConfigured
+		model.prLoading = false
 		model.applyCachedPullRequests()
 		model.restoreSelection(anchor)
 		model, flashCmd := model.setFlash("deleted worktree")
-		return model, tea.Batch(model.enrichmentCommands(), flashCmd)
+		model, enrichmentCmd := model.startEnrichment(true)
+		return model, tea.Batch(enrichmentCmd, flashCmd)
 	case actionMsg:
 		if message.err != nil {
 			return model.setFlash(message.err.Error())
@@ -403,7 +466,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case autoRefreshMsg:
 		return model.updateAutoRefresh()
 	case clockTickMsg:
-		return model, clockTickCmd()
+		return model, clockTickCmd(model.lastRefreshAt)
 	case tea.KeyMsg:
 		if model.createDialog != nil {
 			return model.updateCreate(message)
@@ -426,6 +489,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 	switch message.String() {
 	case "ctrl+c", "q":
+		model = model.cancelEnrichment()
 		return model, tea.Quit
 	case "ctrl+p":
 		return model.openPalette()
@@ -502,9 +566,10 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 		return model, copyPathCmd(row.Path)
 	case "r", "f":
 		model.loading = "fetching…"
+		model = model.cancelEnrichment()
 		model.refreshID++
 		model.refreshInFlight = true
-		return model, reloadCmd(model.reloadCwd(), model.config, model.runner, true, false, model.refreshID)
+		return model, reloadCmd(model.reloadCwd(), model.config, model.runner, model.state.Repo, true, false, model.refreshID)
 	case "s":
 		model.searching = true
 		model.search.Focus()
@@ -521,7 +586,8 @@ func (model Model) updateAutoRefresh() (Model, tea.Cmd) {
 	}
 	model.refreshID++
 	model.refreshInFlight = true
-	refreshCmd := reloadCmd(model.reloadCwd(), model.config, model.runner, false, true, model.refreshID)
+	model = model.cancelEnrichment()
+	refreshCmd := reloadCmd(model.reloadCwd(), model.config, model.runner, model.state.Repo, false, true, model.refreshID)
 	return model, tea.Batch(nextTick, refreshCmd)
 }
 
@@ -651,9 +717,10 @@ func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
 		return model, copyPathCmd(row.Path)
 	case paletteRefresh:
 		model.loading = "fetching…"
+		model = model.cancelEnrichment()
 		model.refreshID++
 		model.refreshInFlight = true
-		return model, reloadCmd(model.reloadCwd(), model.config, model.runner, true, false, model.refreshID)
+		return model, reloadCmd(model.reloadCwd(), model.config, model.runner, model.state.Repo, true, false, model.refreshID)
 	case paletteSearch:
 		model.searching = true
 		return model, model.search.Focus()
@@ -882,7 +949,7 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 			if err != nil {
 				return deleteMsg{err: err}
 			}
-			state, err := gitdata.Load(context.Background(), model.state.Repo.ActiveWorktree, model.config, model.runner)
+			state, err := gitdata.LoadSkeleton(context.Background(), model.state.Repo.ActiveWorktree, model.config, model.runner)
 			return deleteMsg{state: state, err: err}
 		}
 	}
@@ -918,16 +985,25 @@ func deleteBranchDefault(row gitdata.Worktree) bool {
 }
 
 func deleteBranchDefaultWhenWorktreeRemoved(row gitdata.Worktree) bool {
-	return deleteBranchAvailable(row) && row.BranchMergedToMain
+	return row.LocalMetadataLoaded && deleteBranchAvailable(row) && row.BranchMergedToMain
 }
 
 func deleteWorktreeDefault(row gitdata.Worktree) bool {
-	return row.Status.Clean()
+	return row.LocalMetadataLoaded && row.Status.Clean()
 }
 
 func deleteBranchAvailableFromModel(model Model) bool {
 	row, ok := model.selectedRow()
 	return ok && deleteBranchAvailable(row)
+}
+
+type viewSnapshot struct {
+	rows        []gitdata.Worktree
+	visibleRows []gitdata.Worktree
+	selectedRow gitdata.Worktree
+	hasSelected bool
+	detail      string
+	start       int
 }
 
 func (model Model) View() string {
@@ -937,37 +1013,37 @@ func (model Model) View() string {
 	contentWidth := max(1, outerWidth-4)
 	panelWidth := max(4, contentWidth)
 	panelContentWidth := max(1, panelWidth-2)
-	indexes := model.visibleIndexes()
-	rows := make([]gitdata.Worktree, 0, len(indexes))
-	for _, index := range indexes {
-		rows = append(rows, model.state.Rows[index])
-	}
-	selectedRow, hasSelectedRow := model.selectedRow()
+	rowCount := len(model.state.Rows)
 	detail := ""
-	if hasSelectedRow {
-		detail = model.detailPanelAtWidth(selectedRow, now, panelContentWidth)
-	}
-	start, end := model.visibleTableWindow(now)
-	visibleRows := rows[start:end]
-	table := listview.RenderRows(visibleRows, listview.Options{
-		Width:             panelContentWidth,
-		Color:             true,
-		Hyperlinks:        true,
-		ShowHeader:        true,
-		ShowPR:            model.showPR,
-		HighlightSelected: true,
-		SelectedIndex:     model.selected - start,
-	}, now)
-	lines := strings.Split(table, "\n")
-	if len(rows) == 0 {
-		lines = []string{"No worktrees"}
+	var detailRow gitdata.Worktree
+	lines := []string{"Loading worktrees…"}
+	if model.localMetadataReady() {
+		snapshot := model.viewSnapshot(now, panelContentWidth)
+		rowCount = len(snapshot.rows)
+		detail = snapshot.detail
+		detailRow = snapshot.selectedRow
+		table := listview.RenderRows(snapshot.visibleRows, listview.Options{
+			Width:             panelContentWidth,
+			Color:             true,
+			Hyperlinks:        true,
+			ShowHeader:        true,
+			ShowPR:            model.showPR,
+			Pending:           listview.LoadingPlaceholder,
+			PRPending:         model.pullRequestsPending(),
+			HighlightSelected: true,
+			SelectedIndex:     model.selected - snapshot.start,
+		}, now)
+		lines = strings.Split(table, "\n")
+		if len(snapshot.rows) == 0 {
+			lines = []string{"No worktrees"}
+		}
 	}
 	parts := []string{
-		model.appTopLine(len(rows), outerWidth),
+		model.appTopLine(rowCount, outerWidth),
 		model.wrapOuter(sectionBoxWithFooter("Worktrees", lines, model.listFooterHints(), panelWidth), outerWidth),
 	}
 	if detail != "" {
-		parts = append(parts, model.wrapOuter(sectionBoxWithFooter(detailTitle(selectedRow), strings.Split(detail, "\n"), detailFooterHints(panelWidth), panelWidth), outerWidth))
+		parts = append(parts, model.wrapOuter(sectionBoxWithFooter(detailTitle(detailRow), strings.Split(detail, "\n"), detailFooterHints(panelWidth), panelWidth), outerWidth))
 	}
 	if model.flash != "" {
 		parts = append(parts, model.wrapOuter(model.flashLineAtWidth(panelWidth), outerWidth))
@@ -990,6 +1066,41 @@ func (model Model) View() string {
 	return model.frame(output)
 }
 
+func (model Model) localMetadataReady() bool {
+	for _, row := range model.state.Rows {
+		if !row.LocalMetadataLoaded {
+			return false
+		}
+	}
+	return true
+}
+
+func (model Model) viewSnapshot(now time.Time, panelContentWidth int) viewSnapshot {
+	indexes := model.visibleIndexes()
+	rows := make([]gitdata.Worktree, 0, len(indexes))
+	for _, index := range indexes {
+		rows = append(rows, model.state.Rows[index])
+	}
+	snapshot := viewSnapshot{rows: rows}
+	if len(indexes) > 0 && model.selected >= 0 && model.selected < len(indexes) {
+		snapshot.selectedRow = model.state.Rows[indexes[model.selected]]
+		snapshot.hasSelected = true
+		snapshot.detail = model.detailPanelAtWidth(snapshot.selectedRow, now, panelContentWidth)
+	}
+	availableHeight := model.availableTableHeightForDetail(snapshot.detail)
+	if model.selected >= availableHeight {
+		snapshot.start = model.selected - availableHeight + 1
+	}
+	if snapshot.start > len(rows) {
+		snapshot.start = len(rows)
+	}
+	end := min(len(rows), snapshot.start+availableHeight)
+	if snapshot.start < end {
+		snapshot.visibleRows = rows[snapshot.start:end]
+	}
+	return snapshot
+}
+
 func (model Model) selectedInspector(row gitdata.Worktree, now time.Time) string {
 	return model.selectedInspectorAtWidth(row, now, viewWidth(model))
 }
@@ -1003,6 +1114,7 @@ func (model Model) selectedInspectorAtWidth(row gitdata.Worktree, now time.Time,
 		model.inspectorFieldAtWidth("Path", model.relativePath(row.Path), inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Status", statusText(row), statusStyle(row), width),
 		model.inspectorRenderedFieldAtWidth("Dirty", dirtyDetailText(row.Status), renderDirtyDetailValue, width),
+		model.inspectorFieldAtWidth("Size", sizeText(row), inspectorValueStyle, width),
 	}
 	lines = append(lines,
 		model.inspectorRenderedFieldAtWidth("Remote", remoteText(row), func(value string) string {
@@ -1010,7 +1122,7 @@ func (model Model) selectedInspectorAtWidth(row gitdata.Worktree, now time.Time,
 		}, width),
 		model.inspectorRenderedFieldAtWidth("Main", model.mainText(row), renderMainValue, width),
 		model.inspectorRenderedFieldAtWidth("Commit", commitText(row, now), renderCommitValue, width),
-		model.inspectorFieldAtWidth("PR", prText(row), inspectorValueStyle, width),
+		model.inspectorFieldAtWidth("PR", model.prText(row), inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Delete", deleteSafetyText(row), deleteSafetyStyle(row), width),
 	)
 	return strings.Join(lines, "\n")
@@ -1246,8 +1358,11 @@ func dirtyDetailText(counts gitdata.StatusCounts) string {
 	return strings.Join(parts, "  ")
 }
 
-func prText(row gitdata.Worktree) string {
+func (model Model) prText(row gitdata.Worktree) string {
 	if row.PR == nil {
+		if model.pullRequestsPending() {
+			return listview.LoadingPlaceholder
+		}
 		return "none"
 	}
 	text := row.PR.Text()
@@ -1262,6 +1377,9 @@ func (model Model) deletePRText(row gitdata.Worktree) string {
 		if text := row.PR.Text(); text != "" {
 			return text
 		}
+	}
+	if model.pullRequestsPending() {
+		return listview.LoadingPlaceholder
 	}
 	if model.showPR {
 		return "none"
@@ -1306,6 +1424,38 @@ func commitText(row gitdata.Worktree, now time.Time) string {
 		commit += ", " + age
 	}
 	return commit
+}
+
+func sizeText(row gitdata.Worktree) string {
+	parts := []string{}
+	if row.GitSizeLoaded {
+		parts = append(parts, "git "+formatByteSize(row.GitSizeBytes))
+	} else {
+		parts = append(parts, "git "+listview.LoadingPlaceholder)
+	}
+	if row.FullSizeLoaded {
+		parts = append(parts, "full "+formatByteSize(row.FullSizeBytes))
+	} else {
+		parts = append(parts, "full "+listview.LoadingPlaceholder)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatByteSize(bytes int64) string {
+	units := []string{"B", "K", "M", "G", "T"}
+	value := float64(bytes)
+	unitIndex := 0
+	for value >= 1024 && unitIndex < len(units)-1 {
+		value /= 1024
+		unitIndex++
+	}
+	if unitIndex == 0 {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	if value < 10 {
+		return fmt.Sprintf("%.1f%s", value, units[unitIndex])
+	}
+	return fmt.Sprintf("%.0f%s", value, units[unitIndex])
 }
 
 func shortRef(ref string) string {
@@ -1752,10 +1902,27 @@ func refreshAgeText(lastRefreshAt, now time.Time) string {
 	return fmt.Sprintf("%d minutes ago", minutes)
 }
 
-func clockTickCmd() tea.Cmd {
-	return tea.Tick(clockTickInterval, func(time.Time) tea.Msg {
+func clockTickCmd(lastRefreshAt time.Time) tea.Cmd {
+	return tea.Tick(nextClockTickDelay(lastRefreshAt, time.Now()), func(time.Time) tea.Msg {
 		return clockTickMsg{}
 	})
+}
+
+func nextClockTickDelay(lastRefreshAt, now time.Time) time.Duration {
+	if lastRefreshAt.IsZero() {
+		return time.Minute
+	}
+	elapsed := now.Sub(lastRefreshAt)
+	if elapsed < 0 || elapsed < time.Minute {
+		return clockTickInterval
+	}
+	minutes := int(elapsed / time.Minute)
+	nextBoundary := lastRefreshAt.Add(time.Duration(minutes+1) * time.Minute)
+	delay := nextBoundary.Sub(now)
+	if delay <= 0 {
+		return time.Minute
+	}
+	return delay
 }
 
 func autoRefreshTickCmd() tea.Cmd {
@@ -1862,7 +2029,7 @@ func (model *Model) applyCachedPullRequests() {
 	if model.prCacheRepoRoot != model.state.Repo.Root {
 		model.prCache = nil
 		model.prCacheRepoRoot = ""
-		model.showPR = false
+		model.showPR = model.state.Repo.RemoteConfigured
 		return
 	}
 	model.showPR = true
@@ -1897,6 +2064,14 @@ func viewWidth(model Model) int {
 		return model.width
 	}
 	return 80
+}
+
+func (model Model) tableContentWidth() int {
+	width := viewWidth(model)
+	outerWidth := max(4, width)
+	contentWidth := max(1, outerWidth-4)
+	panelWidth := max(4, contentWidth)
+	return max(1, panelWidth-2)
 }
 
 func (model Model) renderHelpAtWidth(width int) string {
@@ -2398,9 +2573,17 @@ func (model Model) availableTableHeight(now time.Time) int {
 	contentWidth := max(1, outerWidth-4)
 	panelWidth := max(4, contentWidth)
 	panelContentWidth := max(1, panelWidth-2)
-	detailFixedLines := 0
+	detail := ""
 	if row, ok := model.selectedRow(); ok {
-		detailFixedLines = 2 + lineCount(model.detailPanelAtWidth(row, now, panelContentWidth))
+		detail = model.detailPanelAtWidth(row, now, panelContentWidth)
+	}
+	return model.availableTableHeightForDetail(detail)
+}
+
+func (model Model) availableTableHeightForDetail(detail string) int {
+	detailFixedLines := 0
+	if detail != "" {
+		detailFixedLines = 2 + lineCount(detail)
 	}
 	fixedLines := 1 + 2 + 1 + detailFixedLines + 1
 	if model.flash != "" {
@@ -2436,38 +2619,105 @@ func (model Model) selectedRow() (gitdata.Worktree, bool) {
 	return model.state.Rows[indexes[model.selected]], true
 }
 
-func (model Model) enrichmentCommands() tea.Cmd {
-	commands := []tea.Cmd{
-		func() tea.Msg {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			pullRequests, enabled := github.LoadPullRequests(ctx, model.state.Repo.Root, model.runner)
-			return prLoadedMsg{pullRequests: pullRequests, enabled: enabled}
-		},
+func (model Model) startEnrichment(forcePullRequests bool) (Model, tea.Cmd) {
+	model = model.cancelEnrichment()
+	model.enrichmentID++
+	ctx, cancel := context.WithCancel(context.Background())
+	model.enrichmentContext = ctx
+	model.enrichmentCancel = cancel
+	model.prLoading = model.shouldLoadPullRequests(forcePullRequests, time.Now())
+	return model, model.enrichmentCommands(ctx, model.enrichmentID, forcePullRequests)
+}
+
+func (model Model) cancelEnrichment() Model {
+	if model.enrichmentCancel != nil {
+		model.enrichmentCancel()
+		model.enrichmentCancel = nil
+		model.enrichmentContext = nil
 	}
-	if diskCommand := model.diskUsageCommand(time.Now()); diskCommand != nil {
+	model.prLoading = false
+	return model
+}
+
+func (model Model) enrichmentCommands(ctx context.Context, id int, forcePullRequests bool) tea.Cmd {
+	commands := []tea.Cmd{}
+	repoRoot := model.state.Repo.Root
+	if model.needsLocalMetadata() {
+		state := model.state
+		runner := model.runner
+		commands = append(commands, func() tea.Msg {
+			enriched, err := gitdata.EnrichLocalMetadata(ctx, state, runner)
+			return localMetadataLoadedMsg{state: enriched, err: err, repoRoot: repoRoot, id: id}
+		})
+	}
+	now := time.Now()
+	if model.shouldLoadPullRequests(forcePullRequests, now) {
+		runner := model.runner
+		commands = append(commands, func() tea.Msg {
+			prContext, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			pullRequests, enabled := github.LoadPullRequests(prContext, repoRoot, runner)
+			return prLoadedMsg{
+				pullRequests: pullRequests,
+				enabled:      enabled,
+				repoRoot:     repoRoot,
+				id:           id,
+				checkedAt:    time.Now(),
+			}
+		})
+	}
+	if diskCommand := model.diskUsageCommand(ctx, now, id); diskCommand != nil {
 		commands = append(commands, diskCommand)
 	}
 	return tea.Batch(commands...)
 }
 
-func (model Model) diskUsageCommand(now time.Time) tea.Cmd {
-	visiblePaths, backgroundPaths := model.diskUsagePaths(now)
-	visibleCommands := diskUsageCommands(visiblePaths)
-	backgroundCommands := diskUsageCommands(backgroundPaths)
-	switch {
-	case len(visibleCommands) == 0 && len(backgroundCommands) == 0:
+func (model Model) needsLocalMetadata() bool {
+	for _, row := range model.state.Rows {
+		if !row.LocalMetadataLoaded {
+			return true
+		}
+	}
+	return false
+}
+
+func (model Model) shouldLoadPullRequests(force bool, now time.Time) bool {
+	if !model.state.Repo.RemoteConfigured {
+		return false
+	}
+	if force || model.prLastCheckedAt.IsZero() {
+		return true
+	}
+	return now.Sub(model.prLastCheckedAt) >= prRefreshTTL
+}
+
+func (model Model) pullRequestsPending() bool {
+	return model.showPR && model.prLoading
+}
+
+func (model Model) diskUsageCommand(ctx context.Context, now time.Time, id int) tea.Cmd {
+	if !model.localMetadataReady() {
 		return nil
-	case len(visibleCommands) == 0:
-		return tea.Batch(backgroundCommands...)
-	case len(backgroundCommands) == 0:
-		return tea.Batch(visibleCommands...)
-	default:
-		return tea.Sequence(tea.Batch(visibleCommands...), tea.Batch(backgroundCommands...))
+	}
+	visiblePaths, backgroundPaths := model.diskUsagePaths(now)
+	fullPath := ""
+	if row, ok := model.selectedRow(); ok && diskUsageFullEligible(row) {
+		fullPath = row.Path
+	}
+	if len(visiblePaths) == 0 && len(backgroundPaths) == 0 && fullPath == "" {
+		return nil
+	}
+	runner := model.runner
+	repoRoot := model.state.Repo.Root
+	return func() tea.Msg {
+		return loadSizesMsg(ctx, runner, repoRoot, id, visiblePaths, backgroundPaths, fullPath)
 	}
 }
 
 func (model Model) diskUsagePaths(now time.Time) ([]string, []string) {
+	if !listview.ShowsGitSizeColumn(model.tableContentWidth()) {
+		return nil, nil
+	}
 	visible := model.visibleTableIndexes(now)
 	seen := map[string]bool{}
 	visiblePaths := make([]string, 0, len(visible))
@@ -2490,35 +2740,82 @@ func (model Model) diskUsagePaths(now time.Time) ([]string, []string) {
 }
 
 func diskUsageEligible(row gitdata.Worktree) bool {
-	return !row.Prunable && !row.SizeLoaded
+	return !row.Prunable && !row.GitSizeLoaded
 }
 
-func diskUsageCommands(paths []string) []tea.Cmd {
-	commands := make([]tea.Cmd, 0, len(paths))
-	for _, path := range paths {
-		commands = append(commands, diskUsageCmd(path))
+func diskUsageFullEligible(row gitdata.Worktree) bool {
+	return !row.Prunable && !row.FullSizeLoaded
+}
+
+type sizeJob struct {
+	path string
+	full bool
+}
+
+func loadSizesMsg(ctx context.Context, runner gitdata.Runner, repoRoot string, id int, visiblePaths, backgroundPaths []string, fullPath string) tea.Msg {
+	jobs := make([]sizeJob, 0, len(visiblePaths)+len(backgroundPaths)+1)
+	for _, path := range visiblePaths {
+		jobs = append(jobs, sizeJob{path: path})
 	}
-	return commands
-}
-
-func diskUsageCmd(path string) tea.Cmd {
-	return func() tea.Msg {
-		size, _ := gitdata.DiskUsage(path)
-		return sizeLoadedMsg{path: path, size: size}
+	if fullPath != "" {
+		jobs = append(jobs, sizeJob{path: fullPath, full: true})
 	}
-}
-
-func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, fetch, automatic bool, id int) tea.Cmd {
-	return func() tea.Msg {
-		ctx := context.Background()
-		if fetch {
-			if state, err := gitdata.Load(ctx, cwd, config, runner); err == nil && state.Repo.RemoteConfigured {
-				if err := gitdata.FetchPrune(ctx, state.Repo.Root, runner); err != nil {
-					return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), err: err}
+	for _, path := range backgroundPaths {
+		jobs = append(jobs, sizeJob{path: path})
+	}
+	gitSizes := map[string]int64{}
+	fullSizes := map[string]int64{}
+	if len(jobs) == 0 {
+		return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, repoRoot: repoRoot, id: id}
+	}
+	jobChannel := make(chan sizeJob)
+	var mutex sync.Mutex
+	var waitGroup sync.WaitGroup
+	workerCount := min(2, len(jobs))
+	for range workerCount {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for job := range jobChannel {
+				if job.full {
+					if size, err := gitdata.FullDiskUsage(ctx, job.path); err == nil {
+						mutex.Lock()
+						fullSizes[job.path] = size
+						mutex.Unlock()
+					}
+					continue
+				}
+				if size, err := gitdata.GitAwareDiskUsage(ctx, job.path, runner); err == nil {
+					mutex.Lock()
+					gitSizes[job.path] = size
+					mutex.Unlock()
 				}
 			}
+		}()
+	}
+	for _, job := range jobs {
+		select {
+		case jobChannel <- job:
+		case <-ctx.Done():
+			close(jobChannel)
+			waitGroup.Wait()
+			return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, repoRoot: repoRoot, id: id}
 		}
-		state, err := gitdata.Load(ctx, cwd, config, runner)
+	}
+	close(jobChannel)
+	waitGroup.Wait()
+	return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, repoRoot: repoRoot, id: id}
+}
+
+func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo gitdata.Repository, fetch, automatic bool, id int) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if fetch && repo.RemoteConfigured {
+			if err := gitdata.FetchPrune(ctx, repo.Root, runner); err != nil {
+				return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), err: err}
+			}
+		}
+		state, err := gitdata.LoadSkeleton(ctx, cwd, config, runner)
 		return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), state: state, err: err}
 	}
 }

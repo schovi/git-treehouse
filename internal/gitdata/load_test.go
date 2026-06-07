@@ -3,7 +3,10 @@ package gitdata
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/schovi/git-treehouse/internal/config"
@@ -23,6 +26,45 @@ func (runner fakeRunner) Run(_ context.Context, dir, name string, args ...string
 		return nil, errors.New("unexpected command: " + key)
 	}
 	return []byte(result.output), result.err
+}
+
+type recordingFakeRunner struct {
+	mutex    sync.Mutex
+	commands []string
+}
+
+func (runner *recordingFakeRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+	key := dir + "|" + name + " " + strings.Join(args, " ")
+	runner.mutex.Lock()
+	runner.commands = append(runner.commands, key)
+	runner.mutex.Unlock()
+	if name == "git" && len(args) > 0 {
+		switch args[0] {
+		case "rev-parse":
+			switch strings.Join(args[1:], " ") {
+			case "--show-toplevel":
+				return []byte("/repo/main\n"), nil
+			case "--git-common-dir":
+				return []byte(".git\n"), nil
+			case "--path-format=absolute --git-common-dir":
+				return []byte("/repo/main/.git\n"), nil
+			}
+		case "worktree":
+			return []byte("worktree /repo/main\nHEAD aaaaaaaa\nbranch refs/heads/main\n\nworktree /repo/feature\nHEAD bbbbbbbb\nbranch refs/heads/feature\n"), nil
+		case "symbolic-ref":
+			return nil, errors.New("no origin")
+		case "show-ref":
+			return nil, nil
+		case "remote":
+			return []byte(""), nil
+		case "for-each-ref":
+			return []byte("main\x00aaaaaaaa\x00aaaaaaa\x001780000000\x00main commit\x00origin/main\x00\x000 0\n" +
+				"feature\x00bbbbbbbb\x00bbbbbbb\x001780000100\x00feature commit\x00origin/feature\x00ahead 2, behind 1\x002 5\n"), nil
+		case "status":
+			return []byte("## feature\n"), nil
+		}
+	}
+	return nil, errors.New("unexpected command: " + key)
 }
 
 func TestResolveRepositorySupportsBareInvocation(t *testing.T) {
@@ -82,5 +124,78 @@ func TestLoadComputesMainSyncForRootWorktreeOnFeatureBranch(t *testing.T) {
 	}
 	if !row.MainSync.Available || row.MainSync.Ahead != 1 || row.MainSync.Behind != 14 {
 		t.Fatalf("root row MainSync = %+v, want available ↑1 ↓14", row.MainSync)
+	}
+}
+
+func TestLoadUsesOneWorktreeListAndBatchedRefMetadata(t *testing.T) {
+	runner := &recordingFakeRunner{}
+
+	state, err := Load(context.Background(), "/repo/main", config.Config{}, runner)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	worktreeListCalls := 0
+	for _, command := range runner.commands {
+		if strings.Contains(command, "git worktree list --porcelain") {
+			worktreeListCalls++
+		}
+		for _, unwanted := range []string{"git log -1", "git merge-base --is-ancestor", "git rev-list --left-right --count HEAD...@{u}"} {
+			if strings.Contains(command, unwanted) {
+				t.Fatalf("Load() should use batched refs, but ran %q in commands %v", unwanted, runner.commands)
+			}
+		}
+	}
+	if worktreeListCalls != 1 {
+		t.Fatalf("worktree list calls = %d, want 1: %v", worktreeListCalls, runner.commands)
+	}
+	if len(state.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(state.Rows))
+	}
+	feature := state.Rows[1]
+	if feature.Branch != "feature" || feature.CommitShort != "bbbbbbb" || feature.CommitSubject != "feature commit" {
+		t.Fatalf("feature metadata = %+v, want batched commit metadata", feature)
+	}
+	if !feature.HeadSync.Available || feature.HeadSync.Ahead != 2 || feature.HeadSync.Behind != 1 {
+		t.Fatalf("feature HeadSync = %+v, want ↑2 ↓1", feature.HeadSync)
+	}
+	if !feature.MainSync.Available || feature.MainSync.Ahead != 2 || feature.MainSync.Behind != 5 {
+		t.Fatalf("feature MainSync = %+v, want ↑2 ↓5", feature.MainSync)
+	}
+}
+
+func TestFullDiskUsageCanBeCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := FullDiskUsage(ctx, t.TempDir())
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("FullDiskUsage() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestGitAwareDiskUsageUsesGitFileList(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("tracked"), 0600); err != nil {
+		t.Fatalf("write tracked: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0700); err != nil {
+		t.Fatalf("mkdir ignored: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "node_modules", "cache.bin"), []byte("ignored"), 0600); err != nil {
+		t.Fatalf("write ignored: %v", err)
+	}
+	runner := fakeRunner{
+		dir + "|git ls-files -z --cached --others --exclude-standard": {output: "tracked.txt\x00"},
+	}
+
+	size, err := GitAwareDiskUsage(context.Background(), dir, runner)
+
+	if err != nil {
+		t.Fatalf("GitAwareDiskUsage() error = %v", err)
+	}
+	if size != int64(len("tracked")) {
+		t.Fatalf("GitAwareDiskUsage() = %d, want tracked file size only", size)
 	}
 }

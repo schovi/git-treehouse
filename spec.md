@@ -49,7 +49,7 @@ Borderless table, one row per worktree. Columns left to right:
 | commit | Short SHA + truncated subject line |
 | age | Relative last-commit time (`3h`, `2d`, `5w`) |
 | PR | PR number + state + CI (see 3.6), rendered as a clickable OSC 8 hyperlink |
-| size | Disk usage, computed lazily (see 3.7) |
+| size | Git-aware worktree size, computed lazily from tracked and unignored untracked files (see 3.7) |
 
 Column sizing: branch and commit are elastic; commit truncates first, then size, PR, and age drop entirely on narrow terminals. Marker, branch, status, and remote survive until the minimum compact layout.
 
@@ -102,25 +102,27 @@ Loaded via the `gh` CLI (one `gh pr list`-style call for all branches), only if 
 
 - Shows: `#123` + state glyph (open `○`, draft `◌`, merged `⬡`, closed `✕`) + CI status (`✓` passing, `✗` failing, `●` running).
 - PR number is an OSC 8 hyperlink to the PR page (clickable in supporting terminals).
-- `gh` missing/unauthed → column hidden entirely, no error noise.
+- No configured remote → column hidden entirely.
+- `gh` missing/unauthed → column remains reserved but empty, no error noise.
 
 ### 3.7 Data loading model
 
-Instant local render, async enrichment:
+Instant app frame, async enrichment:
 
-1. **Synchronous (must be <50ms):** `git worktree list`, branch names, dirty status, remote/main ahead-behind comparisons computed against already-fetched refs, commit + age. Table renders immediately.
-2. **Async, streamed in as each resolves:** PR + CI data via `gh`; disk usage (`du`-equivalent walk per worktree, lowest priority). Visible rows are measured first, then off-screen rows. Pending cells show a subtle spinner/`…`.
-3. **No `git fetch` on startup.** Ahead/behind reflects the last fetch. The TUI reloads local state every 30 seconds while idle; `r` triggers fetch + full reload.
+1. **Synchronous (must be <50ms):** repository resolution plus one `git worktree list --porcelain`. The app frame renders immediately. Worktree rows may stay in a loading skeleton until local metadata is ready enough to sort consistently.
+2. **Async, streamed in as each resolves:** local metadata (dirty status, remote/main ahead-behind from already-fetched refs, commit + age), PR + CI data via `gh`, and size data. Pending cells and detail fields show a subtle `⋯`.
+3. **Size data:** the table uses a fast Git-aware size from `git ls-files --cached --others --exclude-standard`. The selected-row detail panel may additionally load full filesystem size with a cancellable `du`-equivalent walk.
+4. **No `git fetch` on startup.** Ahead/behind reflects the last fetch. The TUI reloads local skeleton state every 30 seconds while idle; `r` triggers `git fetch --prune`, then one skeleton reload and async enrichment.
 
 Each async result patches its cell in place; no full-table flicker.
-PR data is cached for the current TUI session. Reloads immediately reattach last-known PR data while a fresh `gh` lookup runs, so the PR column does not flicker away.
+Stale async results are ignored after reloads. PR data is cached for the current TUI session and refreshed less often than local Git state. Remote-configured repositories reserve the PR column from the first render. Reloads immediately reattach last-known PR data while a fresh `gh` lookup runs, so the PR column does not flicker away.
 
 ### 3.8 Detail panel, local hints, and status bar
 
 Below the table:
 
 - **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. In normal mode this shows `h root · a active · Tab filter: <state> · s search`. While searching, letter keys feed the live search input, so the footer shows `search <text>▌ · Esc clear · Tab filter: <state>`.
-- **Detail panel:** full info for the selected row: branch name, explicit `HEAD`, root/current state, absolute path, full status counts, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes. Root/current context appears next to the Details title, for example `Details · Current root repository`; selected-row actions live in the bottom border: `↵ go · o editor · d delete · y abs path · p PR`.
+- **Detail panel:** full info for the selected row: branch name, explicit `HEAD`, root/current state, absolute path, full status counts, Git-aware and full size when loaded, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes. Root/current context appears next to the Details title, for example `Details · Current root repository`; selected-row actions live in the bottom border: `↵ go · o editor · d delete · y abs path · p PR`.
 - **Status bar:** context-sensitive global hints, e.g. `Esc close/clear`, plus the row-state legend. The app frame title starts with `Git treehouse · <repo>`. The top controls show `n new`, refresh age, help, and quit. During async loading the status bar appends a small progress note (`fetching PRs…`).
 - `g/G` remains available and documented in help, but is not shown in the main view.
 
@@ -206,8 +208,8 @@ The delete flow states exactly what will happen:
 
 - Prints the same columns as the TUI, aligned, one row per worktree.
 - TTY: colored, with hyperlinks. Piped: plain text, no ANSI.
-- Includes async data only if it resolves within a short budget (~2s for `gh`); otherwise those cells print `-`. `--no-github` skips `gh` entirely.
-- `--json` prints structured JSON with repository metadata plus worktree fields for lifecycle state, status counts, sync state, commit info, PR info when loaded, and disk usage when loaded.
+- Text output only loads async data for columns visible at the current width. PR lookup is skipped below the PR threshold, and table size is skipped below the size threshold. Otherwise async data is included only if it resolves within one short shared budget; unresolved cells print `-`. `--no-github` skips `gh` entirely.
+- `--json` prints structured JSON with repository metadata plus worktree fields for lifecycle state, status counts, sync state, commit info, PR info when loaded, `git_size`, `full_size`, and the compatibility `size` alias for full size.
 
 ## 8. `git-treehouse doctor`
 

@@ -146,8 +146,10 @@ func TestListJSONFromStateIncludesStructuredWorktreeData(t *testing.T) {
 			CommitTime:         now.Add(-2 * time.Hour),
 			BranchMergedToMain: true,
 			PR:                 &gitdata.PullRequest{Number: 42, State: "○", CI: "✓", URL: "https://example.test/pull/42"},
-			SizeBytes:          2048,
-			SizeLoaded:         true,
+			GitSizeBytes:       1024,
+			GitSizeLoaded:      true,
+			FullSizeBytes:      2048,
+			FullSizeLoaded:     true,
 		}},
 	}
 
@@ -176,6 +178,12 @@ func TestListJSONFromStateIncludesStructuredWorktreeData(t *testing.T) {
 	}
 	if !row.Size.Loaded || row.Size.Bytes != 2048 {
 		t.Fatalf("size JSON = %+v, want loaded 2048", row.Size)
+	}
+	if !row.GitSize.Loaded || row.GitSize.Bytes != 1024 {
+		t.Fatalf("git_size JSON = %+v, want loaded 1024", row.GitSize)
+	}
+	if !row.FullSize.Loaded || row.FullSize.Bytes != 2048 {
+		t.Fatalf("full_size JSON = %+v, want loaded 2048", row.FullSize)
 	}
 	if row.Commit.Age != "2h" || row.Commit.Time != now.Add(-2*time.Hour).Format(time.RFC3339) {
 		t.Fatalf("commit JSON = %+v, want RFC3339 time and 2h age", row.Commit)

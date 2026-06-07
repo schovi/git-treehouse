@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 	appconfig "github.com/schovi/git-treehouse/internal/config"
 	"github.com/schovi/git-treehouse/internal/gitdata"
+	"github.com/schovi/git-treehouse/internal/listview"
 )
 
 type testRunner struct{}
@@ -25,11 +27,25 @@ func (runner testRunner) Run(_ context.Context, _, _ string, _ ...string) ([]byt
 }
 
 type recordingRunner struct {
+	mutex    sync.Mutex
 	commands []string
+	results  map[string]recordingResult
+}
+
+type recordingResult struct {
+	output string
+	err    error
 }
 
 func (runner *recordingRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
-	runner.commands = append(runner.commands, dir+"|"+name+" "+strings.Join(args, " "))
+	key := dir + "|" + name + " " + strings.Join(args, " ")
+	runner.mutex.Lock()
+	runner.commands = append(runner.commands, key)
+	result, ok := runner.results[key]
+	runner.mutex.Unlock()
+	if ok {
+		return []byte(result.output), result.err
+	}
 	return nil, nil
 }
 
@@ -234,6 +250,47 @@ func TestViewRendersDetailActionsInDetailsFooter(t *testing.T) {
 		if !strings.Contains(titleLine, want) {
 			t.Fatalf("Details title missing %q:\n%s", want, titleLine)
 		}
+	}
+}
+
+func TestSelectedInspectorShowsPendingPRWhileLoading(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.state.Repo.RemoteConfigured = true
+	model.showPR = true
+	model.prLoading = true
+
+	output := model.selectedInspector(model.state.Rows[0], time.Now())
+
+	if !strings.Contains(output, "PR") || !strings.Contains(output, listview.LoadingPlaceholder) {
+		t.Fatalf("selectedInspector() should show pending PR marker:\n%s", output)
+	}
+	if strings.Contains(output, "PR        none") {
+		t.Fatalf("selectedInspector() should not show none while PR data is loading:\n%s", output)
+	}
+}
+
+func TestPullRequestLoadClearsPendingDetailState(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.state.Repo.RemoteConfigured = true
+	model.showPR = true
+	model.prLoading = true
+
+	updated, _ := updateModel(t, model, prLoadedMsg{
+		enabled:   false,
+		repoRoot:  model.state.Repo.Root,
+		id:        model.enrichmentID,
+		checkedAt: time.Now(),
+	})
+
+	if updated.prLoading {
+		t.Fatal("PR load completion should clear pending state")
+	}
+	if got := updated.prText(updated.state.Rows[0]); got != "none" {
+		t.Fatalf("PR detail text = %q, want none after completed load", got)
 	}
 }
 
@@ -638,12 +695,13 @@ func TestViewRendersBoxedAppSections(t *testing.T) {
 				ActiveWorktree: "/repo/main",
 			},
 			Rows: []gitdata.Worktree{{
-				Path:          "/repo/main",
-				Branch:        "main",
-				IsMain:        true,
-				IsActive:      true,
-				CommitShort:   "abc1234",
-				CommitSubject: "boxed app",
+				Path:                "/repo/main",
+				Branch:              "main",
+				IsMain:              true,
+				IsActive:            true,
+				LocalMetadataLoaded: true,
+				CommitShort:         "abc1234",
+				CommitSubject:       "boxed app",
 			}},
 		},
 	}
@@ -662,6 +720,63 @@ func TestViewRendersBoxedAppSections(t *testing.T) {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("View() should not contain cap separator %q:\n%s", unwanted, output)
 		}
+	}
+}
+
+func TestViewHidesRowsUntilLocalMetadataLoaded(t *testing.T) {
+	model := New(gitdata.State{
+		Repo: gitdata.Repository{
+			Root:             "/repo/main",
+			ActiveWorktree:   "/repo/main",
+			RemoteConfigured: true,
+		},
+		Rows: []gitdata.Worktree{
+			{Path: "/repo/main", Branch: "main"},
+			{Path: "/repo/feature", Branch: "feature"},
+		},
+	}, appconfig.Config{}, testRunner{})
+	model.width = 160
+	model.height = 20
+
+	output := model.View()
+
+	if !strings.Contains(output, "Loading worktrees") {
+		t.Fatalf("View() should show loading skeleton before local metadata:\n%s", output)
+	}
+	if strings.Contains(output, "feature") {
+		t.Fatalf("View() should hide unsorted skeleton rows before local metadata:\n%s", output)
+	}
+	if strings.Contains(output, "Details") {
+		t.Fatalf("View() should hide details before local metadata:\n%s", output)
+	}
+}
+
+func TestNewReservesPullRequestColumnForRemoteRepository(t *testing.T) {
+	model := New(gitdata.State{
+		Repo: gitdata.Repository{
+			Root:             "/repo/main",
+			ActiveWorktree:   "/repo/main",
+			RemoteConfigured: true,
+		},
+		Rows: []gitdata.Worktree{{
+			Path:                "/repo/main",
+			Branch:              "main",
+			LocalMetadataLoaded: true,
+			GitSizeLoaded:       true,
+		}},
+	}, appconfig.Config{}, testRunner{})
+	model.width = 160
+
+	output := model.View()
+
+	if !model.showPR {
+		t.Fatal("remote repositories should reserve the PR column before PR data loads")
+	}
+	if !strings.Contains(output, "PR") {
+		t.Fatalf("View() should render reserved PR column:\n%s", output)
+	}
+	if !strings.Contains(output, listview.LoadingPlaceholder) {
+		t.Fatalf("View() should show pending PR marker before PR data loads:\n%s", output)
 	}
 }
 
@@ -810,12 +925,13 @@ func TestCreateDialogRendersCenteredOverlay(t *testing.T) {
 				ActiveWorktree: "/repo/main",
 			},
 			Rows: []gitdata.Worktree{{
-				Path:          "/repo/main",
-				Branch:        "main",
-				IsMain:        true,
-				IsActive:      true,
-				CommitShort:   "abc1234",
-				CommitSubject: "boxed app",
+				Path:                "/repo/main",
+				Branch:              "main",
+				IsMain:              true,
+				IsActive:            true,
+				LocalMetadataLoaded: true,
+				CommitShort:         "abc1234",
+				CommitSubject:       "boxed app",
 			}},
 		},
 		createDialog: &createDialog{
@@ -1353,7 +1469,13 @@ func TestPullRequestLoadStoresSessionCache(t *testing.T) {
 		"feature": {Number: 42, State: "○", CI: "✓"},
 	}
 
-	updated, _ := updateModel(t, model, prLoadedMsg{pullRequests: pullRequests, enabled: true})
+	updated, _ := updateModel(t, model, prLoadedMsg{
+		pullRequests: pullRequests,
+		enabled:      true,
+		repoRoot:     model.state.Repo.Root,
+		id:           model.enrichmentID,
+		checkedAt:    time.Now(),
+	})
 
 	if !updated.showPR {
 		t.Fatal("PR load should show PR column")
@@ -1389,6 +1511,26 @@ func TestReloadAppliesSessionPullRequestCache(t *testing.T) {
 	}
 }
 
+func TestReloadReservesPullRequestColumnForRemoteRepository(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	nextState := gitdata.State{
+		Repo: gitdata.Repository{
+			Root:             "/repo/main",
+			ActiveWorktree:   "/repo/main",
+			RemoteConfigured: true,
+		},
+		Rows: []gitdata.Worktree{{Path: "/repo/feature", Branch: "feature"}},
+	}
+
+	updated, _ := updateModel(t, model, reloadMsg{state: nextState})
+
+	if !updated.showPR {
+		t.Fatal("remote reload should reserve PR column before PR data loads")
+	}
+}
+
 func TestDisabledPullRequestLoadKeepsExistingCache(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/feature", Branch: "feature"},
@@ -1398,7 +1540,12 @@ func TestDisabledPullRequestLoadKeepsExistingCache(t *testing.T) {
 		"feature": {Number: 42, State: "○"},
 	}
 
-	updated, _ := updateModel(t, model, prLoadedMsg{enabled: false})
+	updated, _ := updateModel(t, model, prLoadedMsg{
+		enabled:   false,
+		repoRoot:  model.state.Repo.Root,
+		id:        model.enrichmentID,
+		checkedAt: time.Now(),
+	})
 
 	if updated.state.Rows[0].PR == nil || updated.state.Rows[0].PR.Number != 42 {
 		t.Fatalf("disabled PR load should reuse cache, got %+v", updated.state.Rows[0].PR)
@@ -1408,16 +1555,55 @@ func TestDisabledPullRequestLoadKeepsExistingCache(t *testing.T) {
 	}
 }
 
+func TestStalePullRequestLoadIsIgnored(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.enrichmentID = 4
+
+	updated, _ := updateModel(t, model, prLoadedMsg{
+		pullRequests: map[string]gitdata.PullRequest{"feature": {Number: 42, State: "○"}},
+		enabled:      true,
+		repoRoot:     model.state.Repo.Root,
+		id:           3,
+		checkedAt:    time.Now(),
+	})
+
+	if updated.state.Rows[0].PR != nil {
+		t.Fatalf("stale PR message attached PR: %+v", updated.state.Rows[0].PR)
+	}
+	if updated.showPR {
+		t.Fatal("stale PR message should not show PR column")
+	}
+}
+
+func TestStaleSizeLoadIsIgnored(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.enrichmentID = 4
+
+	updated, _ := updateModel(t, model, sizesLoadedMsg{
+		gitSizes: map[string]int64{"/repo/feature": 1024},
+		repoRoot: model.state.Repo.Root,
+		id:       3,
+	})
+
+	if updated.state.Rows[0].GitSizeLoaded {
+		t.Fatalf("stale size message marked row loaded: %+v", updated.state.Rows[0])
+	}
+}
+
 func TestDiskUsagePathsPrioritizeVisibleRows(t *testing.T) {
 	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/one", Branch: "one"},
 		{Path: "/repo/prunable", Branch: "prunable", Prunable: true},
 		{Path: "/repo/visible", Branch: "visible"},
-		{Path: "/repo/loaded", Branch: "loaded", SizeLoaded: true},
+		{Path: "/repo/loaded", Branch: "loaded", GitSizeLoaded: true},
 		{Path: "/repo/background", Branch: "background"},
 	})
-	model.width = 80
+	model.width = 160
 	model.height = 6
 	model.selected = 2
 
@@ -1428,6 +1614,56 @@ func TestDiskUsagePathsPrioritizeVisibleRows(t *testing.T) {
 	}
 	if got := strings.Join(background, ","); got != "/repo/one,/repo/background" {
 		t.Fatalf("background disk paths = %q, want /repo/one,/repo/background", got)
+	}
+}
+
+func TestReloadCommandFetchesBeforeSingleSkeletonLoad(t *testing.T) {
+	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|git fetch --prune":                                     {},
+		"/repo/main|git rev-parse --show-toplevel":                         {output: "/repo/main\n"},
+		"/repo/main|git rev-parse --git-common-dir":                        {output: ".git\n"},
+		"/repo/main|git rev-parse --path-format=absolute --git-common-dir": {output: "/repo/main/.git\n"},
+		"/repo/main|git worktree list --porcelain":                         {output: worktreeList},
+		"/repo/main|git symbolic-ref --short refs/remotes/origin/HEAD":     {err: errors.New("no origin")},
+		"/repo/main|git show-ref --verify --quiet refs/heads/main":         {},
+		"/repo/main|git remote":                                            {output: "origin\n"},
+	}}
+	cmd := reloadCmd("/repo/main", appconfig.Config{}, runner, gitdata.Repository{
+		Root:             "/repo/main",
+		RemoteConfigured: true,
+	}, true, false, 9)
+
+	message := cmd().(reloadMsg)
+
+	if message.err != nil {
+		t.Fatalf("reloadCmd() error = %v", message.err)
+	}
+	if len(runner.commands) == 0 || runner.commands[0] != "/repo/main|git fetch --prune" {
+		t.Fatalf("first command = %q, want fetch: %v", runner.commands[0], runner.commands)
+	}
+	worktreeListCalls := 0
+	for _, command := range runner.commands {
+		if strings.Contains(command, "git worktree list --porcelain") {
+			worktreeListCalls++
+		}
+		if strings.Contains(command, "git status --porcelain") {
+			t.Fatalf("reloadCmd should load only skeleton state, commands: %v", runner.commands)
+		}
+	}
+	if worktreeListCalls != 1 {
+		t.Fatalf("worktree list calls = %d, want 1: %v", worktreeListCalls, runner.commands)
+	}
+}
+
+func TestNextClockTickDelayUsesMinuteBoundaryAfterFirstMinute(t *testing.T) {
+	lastRefresh := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+
+	if got := nextClockTickDelay(lastRefresh, lastRefresh.Add(30*time.Second)); got != time.Second {
+		t.Fatalf("delay under one minute = %s, want 1s", got)
+	}
+	if got := nextClockTickDelay(lastRefresh, lastRefresh.Add(90*time.Second)); got != 30*time.Second {
+		t.Fatalf("delay after one minute = %s, want next minute boundary", got)
 	}
 }
 
@@ -1715,6 +1951,9 @@ func updateModel(t *testing.T, model Model, message tea.Msg) (Model, tea.Cmd) {
 }
 
 func testModelWithRows(rows []gitdata.Worktree) Model {
+	for index := range rows {
+		rows[index].LocalMetadataLoaded = true
+	}
 	return New(gitdata.State{
 		Repo: gitdata.Repository{
 			Root:           "/repo/main",

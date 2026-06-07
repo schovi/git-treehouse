@@ -3,6 +3,7 @@ package gitdata
 import (
 	"strconv"
 	"strings"
+	"time"
 )
 
 func ParseWorktreeList(output string) []Worktree {
@@ -116,4 +117,75 @@ func ParseAheadBehind(output string) (ahead int, behind int, ok bool) {
 		return 0, 0, false
 	}
 	return left, right, true
+}
+
+type refMetadata struct {
+	Branch       string
+	ObjectName   string
+	ObjectShort  string
+	CommitTime   time.Time
+	Subject      string
+	Upstream     string
+	UpstreamGone bool
+	HeadSync     SyncState
+	MainSync     SyncState
+}
+
+func ParseRefMetadata(output string) map[string]refMetadata {
+	metadata := map[string]refMetadata{}
+	output = strings.ReplaceAll(output, "\r\n", "\n")
+	for _, line := range strings.Split(output, "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\x00")
+		if len(fields) < 8 || fields[0] == "" {
+			continue
+		}
+		item := refMetadata{
+			Branch:      fields[0],
+			ObjectName:  fields[1],
+			ObjectShort: fields[2],
+			Subject:     fields[4],
+			Upstream:    fields[5],
+		}
+		if unixSeconds, err := strconv.ParseInt(fields[3], 10, 64); err == nil && unixSeconds > 0 {
+			item.CommitTime = time.Unix(unixSeconds, 0)
+		}
+		item.UpstreamGone, item.HeadSync = ParseUpstreamTrack(fields[6])
+		if item.Upstream == "" {
+			item.HeadSync = SyncState{NoUpstream: true}
+		}
+		if ahead, behind, ok := ParseAheadBehind(fields[7]); ok {
+			item.MainSync = SyncState{Available: true, Ahead: ahead, Behind: behind}
+		}
+		metadata[item.Branch] = item
+	}
+	return metadata
+}
+
+func ParseUpstreamTrack(track string) (gone bool, sync SyncState) {
+	track = strings.TrimSpace(track)
+	if track == "" {
+		return false, SyncState{Available: true}
+	}
+	if track == "gone" {
+		return true, SyncState{}
+	}
+	sync.Available = true
+	track = strings.ReplaceAll(track, ",", "")
+	parts := strings.Fields(track)
+	for index := 0; index+1 < len(parts); index += 2 {
+		value, err := strconv.Atoi(parts[index+1])
+		if err != nil {
+			continue
+		}
+		switch parts[index] {
+		case "ahead":
+			sync.Ahead = value
+		case "behind":
+			sync.Behind = value
+		}
+	}
+	return false, sync
 }

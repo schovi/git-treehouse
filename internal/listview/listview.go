@@ -12,6 +12,8 @@ import (
 	"github.com/schovi/git-treehouse/internal/gitdata"
 )
 
+const LoadingPlaceholder = "⋯"
+
 type Options struct {
 	Width             int
 	Color             bool
@@ -73,10 +75,10 @@ func chooseColumns(width int, showPR bool, gap int) []column {
 	if width >= 90 {
 		optional = append(optional, column{key: "age", title: "age", width: 5})
 	}
-	if showPR && width >= 128 {
+	if showPR && ShowsPullRequestColumn(width) {
 		optional = append(optional, column{key: "pr", title: "PR", width: 13})
 	}
-	if width >= 144 {
+	if ShowsGitSizeColumn(width) {
 		optional = append(optional, column{key: "size", title: "size", width: 8, align: "right"})
 	}
 	columns = append(columns, optional...)
@@ -109,6 +111,14 @@ func chooseColumns(width int, showPR bool, gap int) []column {
 		}
 	}
 	return columns
+}
+
+func ShowsPullRequestColumn(width int) bool {
+	return width >= 128
+}
+
+func ShowsGitSizeColumn(width int) bool {
+	return width >= 144
 }
 
 func renderHeader(columns []column, options Options) string {
@@ -157,17 +167,32 @@ func cellValue(row gitdata.Worktree, key string, now time.Time, options Options)
 		}
 		return marker + " " + row.DisplayBranch()
 	case "status":
+		if !row.LocalMetadataLoaded && options.Pending != "" {
+			return options.Pending
+		}
 		return row.StatusText()
 	case "remote":
+		if !row.LocalMetadataLoaded && options.Pending != "" {
+			return options.Pending
+		}
 		return row.HeadSync.RemoteCompact(row.UpstreamGone)
 	case "main":
+		if !row.LocalMetadataLoaded && options.Pending != "" {
+			return options.Pending
+		}
 		return row.MainSync.Compact()
 	case "commit":
+		if !row.LocalMetadataLoaded && options.Pending != "" {
+			return options.Pending
+		}
 		if row.CommitShort == "" {
 			return ""
 		}
 		return row.CommitShort + " " + row.CommitSubject
 	case "age":
+		if !row.LocalMetadataLoaded && options.Pending != "" {
+			return options.Pending
+		}
 		return gitdata.RelativeAge(now, row.CommitTime)
 	case "pr":
 		if row.PR == nil {
@@ -182,13 +207,14 @@ func cellValue(row gitdata.Worktree, key string, now time.Time, options Options)
 		}
 		return text
 	case "size":
-		if !row.SizeLoaded {
+		size, loaded := row.TableSize()
+		if !loaded {
 			if options.Pending != "" {
 				return options.Pending
 			}
-			return "…"
+			return LoadingPlaceholder
 		}
-		return formatSize(row.SizeBytes)
+		return formatSize(size)
 	default:
 		return ""
 	}
@@ -417,7 +443,7 @@ func colorSizeCell(raw, padded string, selected bool) string {
 	if content == "" {
 		return selectedSegmentWhen(padding, selected)
 	}
-	if content == "…" || content == "-" {
+	if content == LoadingPlaceholder || content == "…" || content == "-" {
 		return styleForSelected(mutedStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
 	}
 	return styleForSelected(sizeStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)

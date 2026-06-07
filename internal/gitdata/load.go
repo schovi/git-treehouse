@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/schovi/git-treehouse/internal/config"
@@ -19,15 +21,18 @@ type BaseOption struct {
 }
 
 func Load(ctx context.Context, cwd string, config config.Config, runner Runner) (State, error) {
-	repo, err := ResolveRepository(ctx, cwd, config, runner)
+	state, err := LoadSkeleton(ctx, cwd, config, runner)
 	if err != nil {
 		return State{}, err
 	}
-	output, err := runner.Run(ctx, repo.Root, "git", "worktree", "list", "--porcelain")
+	return EnrichLocalMetadata(ctx, state, runner)
+}
+
+func LoadSkeleton(ctx context.Context, cwd string, config config.Config, runner Runner) (State, error) {
+	repo, rows, err := resolveRepositoryWithWorktrees(ctx, cwd, config, runner)
 	if err != nil {
 		return State{}, err
 	}
-	rows := ParseWorktreeList(string(output))
 	realRows := make([]Worktree, 0, len(rows))
 	for index, row := range rows {
 		if row.Bare {
@@ -38,7 +43,6 @@ func Load(ctx context.Context, cwd string, config config.Config, runner Runner) 
 		}
 		row.IsActive = samePath(row.Path, repo.ActiveWorktree)
 		row.IsMain = samePath(row.Path, repo.MainWorktree)
-		enrichWorktree(ctx, repo, &row, runner)
 		realRows = append(realRows, row)
 	}
 	sortWorktrees(realRows)
@@ -46,20 +50,25 @@ func Load(ctx context.Context, cwd string, config config.Config, runner Runner) 
 }
 
 func ResolveRepository(ctx context.Context, cwd string, config config.Config, runner Runner) (Repository, error) {
+	repo, _, err := resolveRepositoryWithWorktrees(ctx, cwd, config, runner)
+	return repo, err
+}
+
+func resolveRepositoryWithWorktrees(ctx context.Context, cwd string, config config.Config, runner Runner) (Repository, []Worktree, error) {
 	rootOutput, err := runner.Run(ctx, cwd, "git", "rev-parse", "--show-toplevel")
 	activeRoot := strings.TrimSpace(string(rootOutput))
 	bareInvocation := false
 	if err != nil {
 		bareOutput, bareErr := runner.Run(ctx, cwd, "git", "rev-parse", "--is-bare-repository")
 		if bareErr != nil || strings.TrimSpace(string(bareOutput)) != "true" {
-			return Repository{}, fmt.Errorf("not inside a git repository")
+			return Repository{}, nil, fmt.Errorf("not inside a git repository")
 		}
 		bareInvocation = true
 		activeRoot = cwd
 	}
 	commonOutput, err := runner.Run(ctx, activeRoot, "git", "rev-parse", "--git-common-dir")
 	if err != nil {
-		return Repository{}, err
+		return Repository{}, nil, err
 	}
 	commonGitDir := strings.TrimSpace(string(commonOutput))
 	if !filepath.IsAbs(commonGitDir) {
@@ -69,15 +78,18 @@ func ResolveRepository(ctx context.Context, cwd string, config config.Config, ru
 	if output, err := runner.Run(ctx, activeRoot, "git", "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
 		commonGitDir = strings.TrimSpace(string(output))
 	}
-	if output, err := runner.Run(ctx, activeRoot, "git", "worktree", "list", "--porcelain"); err == nil {
-		for index, row := range ParseWorktreeList(string(output)) {
-			if row.Bare {
-				continue
-			}
-			if index == 0 || repoRoot == activeRoot && !samePath(row.Path, activeRoot) {
-				repoRoot = row.Path
-				break
-			}
+	output, err := runner.Run(ctx, activeRoot, "git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return Repository{}, nil, err
+	}
+	rows := ParseWorktreeList(string(output))
+	for index, row := range rows {
+		if row.Bare {
+			continue
+		}
+		if index == 0 || repoRoot == activeRoot && !samePath(row.Path, activeRoot) {
+			repoRoot = row.Path
+			break
 		}
 	}
 	activeWorktree := activeRoot
@@ -94,7 +106,154 @@ func ResolveRepository(ctx context.Context, cwd string, config config.Config, ru
 	}
 	repo.MainBranch = detectMainBranch(ctx, repoRoot, config.MainBranch, runner)
 	repo.RemoteConfigured = hasRemote(ctx, repoRoot, runner)
-	return repo, nil
+	return repo, rows, nil
+}
+
+func EnrichLocalMetadata(ctx context.Context, state State, runner Runner) (State, error) {
+	refMetadataByBranch, refMetadataErr := loadRefMetadata(ctx, state.Repo, runner)
+	if refMetadataErr != nil {
+		for index := range state.Rows {
+			enrichWorktree(ctx, state.Repo, &state.Rows[index], runner)
+			state.Rows[index].LocalMetadataLoaded = true
+		}
+		sortWorktrees(state.Rows)
+		return state, nil
+	}
+	enrichStatusCounts(ctx, state.Rows, runner)
+	mainExists := state.Repo.MainBranch != "" && refMetadataByBranch[state.Repo.MainBranch].Branch != ""
+	for index := range state.Rows {
+		row := &state.Rows[index]
+		if row.Prunable {
+			row.LocalMetadataLoaded = true
+			continue
+		}
+		if row.Branch != "" && !row.Detached {
+			if metadata, ok := refMetadataByBranch[row.Branch]; ok {
+				applyRefMetadata(row, metadata, state.Repo.MainBranch)
+			} else {
+				enrichWorktree(ctx, state.Repo, row, runner)
+			}
+		} else {
+			enrichDetachedWorktree(ctx, state.Repo, row, mainExists, runner)
+		}
+		row.LocalMetadataLoaded = true
+	}
+	sortWorktrees(state.Rows)
+	return state, nil
+}
+
+func loadRefMetadata(ctx context.Context, repo Repository, runner Runner) (map[string]refMetadata, error) {
+	mainRef := ""
+	if repo.MainBranch != "" {
+		mainRef = "refs/heads/" + repo.MainBranch
+	}
+	format := strings.Join([]string{
+		"%(refname:short)",
+		"%(objectname)",
+		"%(objectname:short)",
+		"%(committerdate:unix)",
+		"%(contents:subject)",
+		"%(upstream:short)",
+		"%(upstream:track,nobracket)",
+		"%(ahead-behind:" + mainRef + ")",
+	}, "%00")
+	output, err := runner.Run(ctx, repo.Root, "git", "for-each-ref", "--format="+format, "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+	return ParseRefMetadata(string(output)), nil
+}
+
+func applyRefMetadata(row *Worktree, metadata refMetadata, mainBranch string) {
+	row.Head = metadata.ObjectName
+	row.CommitShort = metadata.ObjectShort
+	row.CommitTime = metadata.CommitTime
+	row.CommitSubject = metadata.Subject
+	row.Upstream = metadata.Upstream
+	row.UpstreamGone = metadata.UpstreamGone
+	row.HeadSync = metadata.HeadSync
+	if row.Upstream == "" {
+		row.HeadSync = SyncState{NoUpstream: true}
+	}
+	if mainBranch != "" && row.Branch != mainBranch {
+		row.MainSync = metadata.MainSync
+	}
+	if row.Branch == mainBranch {
+		row.BranchMergedToMain = true
+	} else if metadata.MainSync.Available && metadata.MainSync.Ahead == 0 {
+		row.BranchMergedToMain = true
+	}
+}
+
+func enrichStatusCounts(ctx context.Context, rows []Worktree, runner Runner) {
+	concurrency := min(4, runtime.NumCPU())
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	type result struct {
+		index  int
+		status ParsedStatus
+		ok     bool
+	}
+	results := make(chan result, len(rows))
+	limit := make(chan struct{}, concurrency)
+	var waitGroup sync.WaitGroup
+	for index, row := range rows {
+		if row.Prunable {
+			continue
+		}
+		path := row.Path
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			select {
+			case limit <- struct{}{}:
+				defer func() { <-limit }()
+			case <-ctx.Done():
+				return
+			}
+			output, err := runner.Run(ctx, path, "git", "status", "--porcelain=v1", "-b", "--untracked-files=normal")
+			if err != nil {
+				results <- result{index: index}
+				return
+			}
+			results <- result{index: index, status: ParseStatusPorcelain(string(output)), ok: true}
+		}()
+	}
+	go func() {
+		waitGroup.Wait()
+		close(results)
+	}()
+	for result := range results {
+		if !result.ok {
+			continue
+		}
+		rows[result.index].Status = result.status.Counts
+		if rows[result.index].Upstream == "" {
+			rows[result.index].Upstream = result.status.Upstream
+			rows[result.index].UpstreamGone = result.status.UpstreamGone
+		}
+	}
+}
+
+func enrichDetachedWorktree(ctx context.Context, repo Repository, row *Worktree, mainExists bool, runner Runner) {
+	row.HeadSync = SyncState{NoUpstream: true}
+	if mainExists && repo.MainBranch != "" {
+		if output, err := runner.Run(ctx, row.Path, "git", "rev-list", "--left-right", "--count", "HEAD...refs/heads/"+repo.MainBranch); err == nil {
+			ahead, behind, ok := ParseAheadBehind(string(output))
+			row.MainSync = SyncState{Available: ok, Ahead: ahead, Behind: behind}
+		}
+	}
+	if output, err := runner.Run(ctx, row.Path, "git", "log", "-1", "--format=%h%x00%ct%x00%s"); err == nil {
+		parts := strings.SplitN(strings.TrimRight(string(output), "\n"), "\x00", 3)
+		if len(parts) == 3 {
+			row.CommitShort = parts[0]
+			if unixSeconds, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+				row.CommitTime = time.Unix(unixSeconds, 0)
+			}
+			row.CommitSubject = parts[2]
+		}
+	}
 }
 
 func enrichWorktree(ctx context.Context, repo Repository, row *Worktree, runner Runner) {
@@ -263,9 +422,34 @@ func FetchPrune(ctx context.Context, repoRoot string, runner Runner) error {
 	return err
 }
 
-func DiskUsage(path string) (int64, error) {
+func GitAwareDiskUsage(ctx context.Context, path string, runner Runner) (int64, error) {
+	output, err := runner.Run(ctx, path, "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, name := range strings.Split(string(output), "\x00") {
+		if name == "" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		info, err := os.Lstat(filepath.Join(path, name))
+		if err != nil || info.IsDir() {
+			continue
+		}
+		total += info.Size()
+	}
+	return total, nil
+}
+
+func FullDiskUsage(ctx context.Context, path string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(path, func(_ string, entry os.DirEntry, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return nil
 		}
@@ -280,6 +464,10 @@ func DiskUsage(path string) (int64, error) {
 		return nil
 	})
 	return total, err
+}
+
+func DiskUsage(path string) (int64, error) {
+	return FullDiskUsage(context.Background(), path)
 }
 
 func sortWorktrees(rows []Worktree) {
