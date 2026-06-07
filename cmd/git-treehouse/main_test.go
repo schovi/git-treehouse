@@ -93,6 +93,45 @@ func TestShouldShowShellWelcome(t *testing.T) {
 	}
 }
 
+func TestParseGlobalOptionsUsesExplicitRepo(t *testing.T) {
+	options, remaining, err := parseGlobalOptions([]string{"--repo", "/repo/feature", "list", "--json"})
+	if err != nil {
+		t.Fatalf("parseGlobalOptions() error = %v", err)
+	}
+	if options.repoPath != "/repo/feature" {
+		t.Fatalf("repoPath = %q, want /repo/feature", options.repoPath)
+	}
+	if strings.Join(remaining, " ") != "list --json" {
+		t.Fatalf("remaining args = %v, want list --json", remaining)
+	}
+}
+
+func TestParseListOptionsInheritsGlobalRepo(t *testing.T) {
+	options, err := parseListOptions([]string{"--json"}, "/repo/feature")
+	if err != nil {
+		t.Fatalf("parseListOptions() error = %v", err)
+	}
+	if !options.jsonOutput {
+		t.Fatal("jsonOutput = false, want true")
+	}
+	if options.repoPath != "/repo/feature" {
+		t.Fatalf("repoPath = %q, want inherited /repo/feature", options.repoPath)
+	}
+}
+
+func TestParseListOptionsAllowsSubcommandRepoOverride(t *testing.T) {
+	options, err := parseListOptions([]string{"--repo", "/repo/docs", "--no-github"}, "/repo/feature")
+	if err != nil {
+		t.Fatalf("parseListOptions() error = %v", err)
+	}
+	if !options.noGitHub {
+		t.Fatal("noGitHub = false, want true")
+	}
+	if options.repoPath != "/repo/docs" {
+		t.Fatalf("repoPath = %q, want /repo/docs", options.repoPath)
+	}
+}
+
 func TestTerminalWidthUsesColumnsFallback(t *testing.T) {
 	t.Setenv("COLUMNS", "142")
 

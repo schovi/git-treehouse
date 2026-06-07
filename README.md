@@ -313,6 +313,12 @@ Skip GitHub lookup:
 git-treehouse list --no-github
 ```
 
+Load a specific repo or worktree:
+
+```sh
+git-treehouse list --json --repo ~/code/project-worktree
+```
+
 Print shell integration:
 
 ```sh

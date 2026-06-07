@@ -21,12 +21,14 @@ import (
 	"github.com/schovi/git-treehouse/internal/github"
 	"github.com/schovi/git-treehouse/internal/listview"
 	"github.com/schovi/git-treehouse/internal/onboarding"
+	"github.com/schovi/git-treehouse/internal/pathutil"
 	"github.com/schovi/git-treehouse/internal/shellinit"
 	"github.com/schovi/git-treehouse/internal/tui"
 )
 
 const (
 	commandName         = "git-treehouse"
+	defaultRepoPath     = "."
 	shellIntegrationEnv = "GTH_SHELL_INTEGRATION"
 )
 
@@ -38,26 +40,46 @@ func main() {
 }
 
 func run(args []string) error {
-	globalFlags := flag.NewFlagSet(commandName, flag.ContinueOnError)
-	globalFlags.SetOutput(os.Stderr)
-	cdFile := globalFlags.String("cd-file", "", "write selected worktree path to file")
-	if err := globalFlags.Parse(args); err != nil {
+	globalOptions, remaining, err := parseGlobalOptions(args)
+	if err != nil {
 		return err
 	}
-	remaining := globalFlags.Args()
 	if len(remaining) > 0 {
 		switch remaining[0] {
 		case "init":
 			return runInit(remaining[1:])
 		case "list":
-			return runList(remaining[1:])
+			return runList(remaining[1:], globalOptions.repoPath)
 		case "doctor":
-			return runDoctor(remaining[1:])
+			return runDoctor(remaining[1:], globalOptions.repoPath)
 		default:
 			return fmt.Errorf("unknown command %q", remaining[0])
 		}
 	}
-	return runTUI(*cdFile)
+	return runTUI(globalOptions.cdFile, globalOptions.repoPath)
+}
+
+type globalOptions struct {
+	cdFile   string
+	repoPath string
+}
+
+func parseGlobalOptions(args []string) (globalOptions, []string, error) {
+	flags := flag.NewFlagSet(commandName, flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	cdFile := flags.String("cd-file", "", "write selected worktree path to file")
+	repoPath := flags.String("repo", defaultRepoPath, "load repository from path")
+	if err := flags.Parse(args); err != nil {
+		return globalOptions{}, nil, err
+	}
+	return globalOptions{cdFile: *cdFile, repoPath: normalizeRepoPath(*repoPath)}, flags.Args(), nil
+}
+
+func normalizeRepoPath(repoPath string) string {
+	if repoPath == "" {
+		return defaultRepoPath
+	}
+	return pathutil.ExpandHome(repoPath)
 }
 
 func runInit(args []string) error {
@@ -81,12 +103,9 @@ func runInit(args []string) error {
 	return nil
 }
 
-func runList(args []string) error {
-	flags := flag.NewFlagSet(commandName+" list", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
-	noGitHub := flags.Bool("no-github", false, "skip GitHub PR lookup")
-	jsonOutput := flags.Bool("json", false, "print structured JSON")
-	if err := flags.Parse(args); err != nil {
+func runList(args []string, repoPath string) error {
+	options, err := parseListOptions(args, repoPath)
+	if err != nil {
 		return err
 	}
 	config, err := config.LoadDefault()
@@ -96,18 +115,18 @@ func runList(args []string) error {
 	runner := gitdata.ExecRunner{}
 	tty := stdoutIsTTY()
 	width := terminalWidth(100)
-	state, err := gitdata.Load(context.Background(), ".", config, runner)
+	state, err := gitdata.Load(context.Background(), options.repoPath, config, runner)
 	if err != nil {
 		return err
 	}
 	enrichmentContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	showPR, prPending := enrichListState(enrichmentContext, &state, runner, listEnrichmentOptions{
-		LoadPullRequests: !*noGitHub && (*jsonOutput || listview.ShowsPullRequestColumn(width)),
-		LoadGitSize:      *jsonOutput || listview.ShowsGitSizeColumn(width),
-		LoadFullSize:     *jsonOutput,
+		LoadPullRequests: !options.noGitHub && (options.jsonOutput || listview.ShowsPullRequestColumn(width)),
+		LoadGitSize:      options.jsonOutput || listview.ShowsGitSizeColumn(width),
+		LoadFullSize:     options.jsonOutput,
 	})
-	if *jsonOutput {
+	if options.jsonOutput {
 		output, err := json.MarshalIndent(listJSONFromState(state, time.Now()), "", "  ")
 		if err != nil {
 			return err
@@ -126,6 +145,24 @@ func runList(args []string) error {
 	}, time.Now())
 	fmt.Println(output)
 	return nil
+}
+
+type listOptions struct {
+	noGitHub   bool
+	jsonOutput bool
+	repoPath   string
+}
+
+func parseListOptions(args []string, repoPath string) (listOptions, error) {
+	flags := flag.NewFlagSet(commandName+" list", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	noGitHub := flags.Bool("no-github", false, "skip GitHub PR lookup")
+	jsonOutput := flags.Bool("json", false, "print structured JSON")
+	selectedRepoPath := flags.String("repo", repoPath, "load repository from path")
+	if err := flags.Parse(args); err != nil {
+		return listOptions{}, err
+	}
+	return listOptions{noGitHub: *noGitHub, jsonOutput: *jsonOutput, repoPath: normalizeRepoPath(*selectedRepoPath)}, nil
 }
 
 type listEnrichmentOptions struct {
@@ -399,28 +436,29 @@ type doctorCheck struct {
 	Message string
 }
 
-func runDoctor(args []string) error {
+func runDoctor(args []string, repoPath string) error {
 	flags := flag.NewFlagSet(commandName+" doctor", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
+	selectedRepoPath := flags.String("repo", repoPath, "load repository from path")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("usage: %s doctor", commandName)
+		return fmt.Errorf("usage: %s doctor [--repo <path>]", commandName)
 	}
 	runner := gitdata.ExecRunner{}
-	checks := doctorChecks(context.Background(), runner)
+	checks := doctorChecks(context.Background(), runner, normalizeRepoPath(*selectedRepoPath))
 	fmt.Print(formatDoctorChecks(checks))
 	return nil
 }
 
-func doctorChecks(ctx context.Context, runner gitdata.Runner) []doctorCheck {
+func doctorChecks(ctx context.Context, runner gitdata.Runner, repoPath string) []doctorCheck {
 	checks := []doctorCheck{
 		doctorGit(ctx, runner),
 	}
 	configPath, configCheck, loadedConfig := doctorConfig()
 	checks = append(checks, configCheck)
-	repoCheck, repo := doctorRepository(ctx, loadedConfig, runner)
+	repoCheck, repo := doctorRepository(ctx, repoPath, loadedConfig, runner)
 	checks = append(checks, repoCheck)
 	checks = append(checks,
 		doctorGitHub(ctx, repo.Root, runner),
@@ -462,8 +500,8 @@ func doctorConfig() (string, doctorCheck, config.Config) {
 	return path, doctorCheck{Name: "config", Status: doctorOK, Message: "loaded config.toml"}, loaded
 }
 
-func doctorRepository(ctx context.Context, loadedConfig config.Config, runner gitdata.Runner) (doctorCheck, gitdata.Repository) {
-	repo, err := gitdata.ResolveRepository(ctx, ".", loadedConfig, runner)
+func doctorRepository(ctx context.Context, repoPath string, loadedConfig config.Config, runner gitdata.Runner) (doctorCheck, gitdata.Repository) {
+	repo, err := gitdata.ResolveRepository(ctx, repoPath, loadedConfig, runner)
 	if err != nil {
 		return doctorCheck{Name: "repository", Status: doctorWarning, Message: "not inside a git repository"}, gitdata.Repository{}
 	}
@@ -626,7 +664,7 @@ func applyListSizeResult(state *gitdata.State, result listSizeResult) {
 	}
 }
 
-func runTUI(cdFile string) error {
+func runTUI(cdFile, repoPath string) error {
 	config, err := config.LoadDefault()
 	if err != nil {
 		return err
@@ -638,7 +676,7 @@ func runTUI(cdFile string) error {
 		}
 	}
 	runner := gitdata.ExecRunner{}
-	state, err := gitdata.LoadSkeleton(context.Background(), ".", config, runner)
+	state, err := gitdata.LoadSkeleton(context.Background(), repoPath, config, runner)
 	if err != nil {
 		return err
 	}

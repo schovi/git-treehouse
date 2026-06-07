@@ -94,6 +94,33 @@ func TestResolveRepositorySupportsBareInvocation(t *testing.T) {
 	}
 }
 
+func TestResolveRepositorySupportsWorktreePath(t *testing.T) {
+	worktreeList := "worktree /repo/main\nHEAD aaaaaaaa\nbranch refs/heads/main\n\nworktree /repo/feature\nHEAD bbbbbbbb\nbranch refs/heads/feature\n"
+	runner := fakeRunner{
+		"/repo/feature|git rev-parse --show-toplevel":                         {output: "/repo/feature\n"},
+		"/repo/feature|git rev-parse --git-common-dir":                        {output: "/repo/main/.git\n"},
+		"/repo/feature|git rev-parse --path-format=absolute --git-common-dir": {output: "/repo/main/.git\n"},
+		"/repo/feature|git worktree list --porcelain":                         {output: worktreeList},
+		"/repo/main|git symbolic-ref --short refs/remotes/origin/HEAD":        {err: errors.New("no origin")},
+		"/repo/main|git show-ref --verify --quiet refs/heads/main":            {},
+		"/repo/main|git remote":                                               {output: ""},
+	}
+
+	repo, err := ResolveRepository(context.Background(), "/repo/feature", config.Config{}, runner)
+	if err != nil {
+		t.Fatalf("ResolveRepository() error = %v", err)
+	}
+	if repo.Root != "/repo/main" {
+		t.Fatalf("ResolveRepository().Root = %q, want /repo/main", repo.Root)
+	}
+	if repo.ActiveWorktree != "/repo/feature" {
+		t.Fatalf("ResolveRepository().ActiveWorktree = %q, want /repo/feature", repo.ActiveWorktree)
+	}
+	if repo.Cwd != "/repo/feature" {
+		t.Fatalf("ResolveRepository().Cwd = %q, want /repo/feature", repo.Cwd)
+	}
+}
+
 func TestLoadComputesMainSyncForRootWorktreeOnFeatureBranch(t *testing.T) {
 	worktreeList := "worktree /repo/main\nHEAD abc123456789\nbranch refs/heads/codex/list-rendering-polish\n"
 	runner := fakeRunner{

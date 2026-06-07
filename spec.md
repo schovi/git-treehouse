@@ -9,7 +9,7 @@ A fast terminal UI for managing git worktrees: browse, switch, create, and delet
 
 ## 1. Invocation
 
-`git-treehouse` can be started from the main repo or any of its worktrees. It resolves the repo via `git rev-parse`; the full worktree set comes from `git worktree list --porcelain`.
+`git-treehouse` can be started from the main repo or any of its worktrees. It resolves the repo via `git rev-parse`; the full worktree set comes from `git worktree list --porcelain`. `--repo <path>` can explicitly select a repo or worktree path instead of the current directory.
 
 - Run outside a git repo → print a one-line error to stderr, exit 1.
 - Bare repos: the bare entry is not a navigable row; only real worktrees are listed.
@@ -18,10 +18,10 @@ A fast terminal UI for managing git worktrees: browse, switch, create, and delet
 
 | Command | Behavior |
 |---|---|
-| `git-treehouse` | Launch the native TUI. It cannot change the parent shell directory by itself. |
-| `git-treehouse list` | Print the table to stdout, no TUI, no ANSI when piped. For scripting. `--json` prints structured repository/worktree data. |
+| `git-treehouse [--repo <path>]` | Launch the native TUI. It cannot change the parent shell directory by itself. |
+| `git-treehouse list [--repo <path>]` | Print the table to stdout, no TUI, no ANSI when piped. For scripting. `--json` prints structured repository/worktree data. |
 | `git-treehouse init <shell>` | Print shell integration functions that define `gth` (see §2) |
-| `git-treehouse doctor` | Print environment diagnostics for required and optional integrations. |
+| `git-treehouse doctor [--repo <path>]` | Print environment diagnostics for required and optional integrations. |
 
 ## 2. Shell integration (cd mechanism)
 
@@ -212,6 +212,7 @@ The delete flow states exactly what will happen:
 - TTY: colored, with hyperlinks. Piped: plain text, no ANSI.
 - Text output only loads async data for columns visible at the current width. PR lookup is skipped below the PR threshold, and table size is skipped below the size threshold. Otherwise async data is included only if it resolves within one short shared budget; unresolved cells print `-`. `--no-github` skips `gh` entirely.
 - `--json` prints structured JSON with repository metadata plus worktree fields for lifecycle state, status counts, sync state, commit info, PR info when loaded, `git_size`, `full_size`, and the compatibility `size` alias for full size.
+- `--repo <path>` loads the repository containing that repo or worktree path instead of the current directory.
 
 ## 8. `git-treehouse doctor`
 
