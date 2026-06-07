@@ -94,6 +94,185 @@ func TestInstallAppendsBlockOnce(t *testing.T) {
 	}
 }
 
+func TestInstallUsesDedicatedFilesForAutoloadingShells(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	tests := []struct {
+		shell        string
+		path         string
+		want         []string
+		extraPath    string
+		extraContent []string
+	}{
+		{
+			shell: "fish",
+			path:  filepath.Join(home, ".config", "fish", "functions", "gth.fish"),
+			want:  []string{"function gth", "command git-treehouse"},
+		},
+		{
+			shell: "nushell",
+			path:  filepath.Join(home, ".config", "nushell", "autoload", "gth.nu"),
+			want:  []string{"def --env gth", "^git-treehouse"},
+		},
+		{
+			shell:        "powershell",
+			path:         filepath.Join(powerShellModuleDir(home), "GitTreehouse.psm1"),
+			want:         []string{"function gth", "git-treehouse"},
+			extraPath:    filepath.Join(powerShellModuleDir(home), "GitTreehouse.psd1"),
+			extraContent: []string{"RootModule = 'GitTreehouse.psm1'", "FunctionsToExport = @('gth')"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.shell, func(t *testing.T) {
+			result, err := Install(test.shell)
+			if err != nil {
+				t.Fatalf("Install(%s) error = %v", test.shell, err)
+			}
+			if result.Path != test.path {
+				t.Fatalf("Install(%s).Path = %q, want %q", test.shell, result.Path, test.path)
+			}
+			content, err := os.ReadFile(test.path)
+			if err != nil {
+				t.Fatalf("read %s: %v", test.path, err)
+			}
+			for _, want := range append([]string{blockStart, blockEnd}, test.want...) {
+				if !strings.Contains(string(content), want) {
+					t.Fatalf("%s missing %q:\n%s", test.path, want, content)
+				}
+			}
+			if test.extraPath != "" {
+				extraContent, err := os.ReadFile(test.extraPath)
+				if err != nil {
+					t.Fatalf("read %s: %v", test.extraPath, err)
+				}
+				for _, want := range append([]string{blockStart, blockEnd}, test.extraContent...) {
+					if !strings.Contains(string(extraContent), want) {
+						t.Fatalf("%s missing %q:\n%s", test.extraPath, want, extraContent)
+					}
+				}
+			}
+			if !ConfigFileContainsIntegration(test.shell) {
+				t.Fatalf("ConfigFileContainsIntegration(%s) = false after install", test.shell)
+			}
+			result, err = Install(test.shell)
+			if err != nil {
+				t.Fatalf("second Install(%s) error = %v", test.shell, err)
+			}
+			if !result.AlreadyInstalled {
+				t.Fatalf("second Install(%s) did not report AlreadyInstalled", test.shell)
+			}
+		})
+	}
+}
+
+func TestInstallManagedFileRejectsUnmanagedContent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".config", "fish", "functions", "gth.fish")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("function gth\nend\n"), 0600); err != nil {
+		t.Fatalf("write unmanaged function: %v", err)
+	}
+
+	if _, err := Install("fish"); err == nil || !strings.Contains(err.Error(), "not managed by git-treehouse") {
+		t.Fatalf("Install(fish) error = %v, want unmanaged target error", err)
+	}
+}
+
+func TestConfigFileContainsIntegrationAcceptsManualDedicatedInstall(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	fishPath := filepath.Join(home, ".config", "fish", "functions", "gth.fish")
+	if err := os.MkdirAll(filepath.Dir(fishPath), 0700); err != nil {
+		t.Fatalf("mkdir fish functions: %v", err)
+	}
+	fishScript, err := Script("fish")
+	if err != nil {
+		t.Fatalf("Script(fish) error = %v", err)
+	}
+	if err := os.WriteFile(fishPath, []byte(fishScript), 0600); err != nil {
+		t.Fatalf("write fish script: %v", err)
+	}
+
+	if !ConfigFileContainsIntegration("fish") {
+		t.Fatal("ConfigFileContainsIntegration(fish) = false for manual function install")
+	}
+	result, err := Install("fish")
+	if err != nil {
+		t.Fatalf("Install(fish) error = %v", err)
+	}
+	if !result.AlreadyInstalled {
+		t.Fatal("Install(fish) did not report manually installed function as already installed")
+	}
+}
+
+func TestConfigFileContainsIntegrationAcceptsManualPowerShellModule(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	modulePath := filepath.Join(powerShellModuleDir(home), "GitTreehouse.psm1")
+	if err := os.MkdirAll(filepath.Dir(modulePath), 0700); err != nil {
+		t.Fatalf("mkdir PowerShell module: %v", err)
+	}
+	script, err := Script("powershell")
+	if err != nil {
+		t.Fatalf("Script(powershell) error = %v", err)
+	}
+	if err := os.WriteFile(modulePath, []byte(script), 0600); err != nil {
+		t.Fatalf("write PowerShell module: %v", err)
+	}
+	manifest := "RootModule = 'GitTreehouse.psm1'\nFunctionsToExport = 'gth'\n"
+	if err := os.WriteFile(powerShellManifestPath(modulePath), []byte(manifest), 0600); err != nil {
+		t.Fatalf("write PowerShell manifest: %v", err)
+	}
+
+	if !ConfigFileContainsIntegration("powershell") {
+		t.Fatal("ConfigFileContainsIntegration(powershell) = false for manual module install")
+	}
+	result, err := Install("powershell")
+	if err != nil {
+		t.Fatalf("Install(powershell) error = %v", err)
+	}
+	if !result.AlreadyInstalled {
+		t.Fatal("Install(powershell) did not report manually installed module as already installed")
+	}
+}
+
+func TestConfigFileContainsIntegrationAcceptsLegacyProfileInstalls(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	tests := []struct {
+		shell string
+		path  string
+	}{
+		{shell: "fish", path: filepath.Join(home, ".config", "fish", "config.fish")},
+		{shell: "nushell", path: filepath.Join(home, ".config", "nushell", "config.nu")},
+		{shell: "powershell", path: filepath.Join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1")},
+	}
+
+	for _, test := range tests {
+		t.Run(test.shell, func(t *testing.T) {
+			if err := os.MkdirAll(filepath.Dir(test.path), 0700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			script, err := Script(test.shell)
+			if err != nil {
+				t.Fatalf("Script(%s) error = %v", test.shell, err)
+			}
+			if err := os.WriteFile(test.path, []byte(script), 0600); err != nil {
+				t.Fatalf("write legacy install: %v", err)
+			}
+			if !ConfigFileContainsIntegration(test.shell) {
+				t.Fatalf("ConfigFileContainsIntegration(%s) = false for legacy profile install", test.shell)
+			}
+		})
+	}
+}
+
 func TestConfigFileContainsIntegration(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -116,12 +295,12 @@ func TestConfigPathAndReloadCommand(t *testing.T) {
 	tests := map[string]string{
 		"zsh":        filepath.Join(home, ".zshrc"),
 		"bash":       filepath.Join(home, ".bashrc"),
-		"fish":       filepath.Join(home, ".config", "fish", "config.fish"),
+		"fish":       filepath.Join(home, ".config", "fish", "functions", "gth.fish"),
 		"sh":         filepath.Join(home, ".profile"),
 		"dash":       filepath.Join(home, ".profile"),
 		"ksh":        filepath.Join(home, ".kshrc"),
-		"nushell":    filepath.Join(home, ".config", "nushell", "config.nu"),
-		"powershell": filepath.Join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1"),
+		"nushell":    filepath.Join(home, ".config", "nushell", "autoload", "gth.nu"),
+		"powershell": filepath.Join(powerShellModuleDir(home), "GitTreehouse.psm1"),
 	}
 	for shell, want := range tests {
 		got, err := ConfigPath(shell)
@@ -144,10 +323,13 @@ func TestInstallCommandUsesShellSpecificSyntax(t *testing.T) {
 	if got := InstallCommand("zsh"); !strings.Contains(got, "git-treehouse init zsh >> ") || !strings.Contains(got, ".zshrc") {
 		t.Fatalf("InstallCommand(zsh) = %q", got)
 	}
-	if got := InstallCommand("nushell"); !strings.Contains(got, "save --append") || !strings.Contains(got, "config.nu") {
+	if got := InstallCommand("fish"); !strings.Contains(got, "functions") || !strings.Contains(got, "gth.fish") || !strings.Contains(got, "> ") {
+		t.Fatalf("InstallCommand(fish) = %q", got)
+	}
+	if got := InstallCommand("nushell"); !strings.Contains(got, "autoload") || !strings.Contains(got, "gth.nu") || !strings.Contains(got, "save --force") {
 		t.Fatalf("InstallCommand(nushell) = %q", got)
 	}
-	if got := InstallCommand("powershell"); !strings.Contains(got, "git-treehouse init powershell >> ") || !strings.Contains(got, "Microsoft.PowerShell_profile.ps1") {
+	if got := InstallCommand("powershell"); !strings.Contains(got, "New-ModuleManifest") || !strings.Contains(got, "GitTreehouse.psm1") || !strings.Contains(got, "FunctionsToExport 'gth'") {
 		t.Fatalf("InstallCommand(powershell) = %q", got)
 	}
 }

@@ -118,12 +118,31 @@ git-treehouse init zsh >> ~/.zshrc
 git-treehouse init bash >> ~/.bashrc
 git-treehouse init sh >> ~/.profile
 git-treehouse init ksh >> ~/.kshrc
-git-treehouse init fish >> ~/.config/fish/config.fish
-git-treehouse init nushell | save --append ~/.config/nushell/config.nu
-git-treehouse init powershell >> ~/.config/powershell/Microsoft.PowerShell_profile.ps1
 ```
 
-These manual examples append to the shell config file directly. Create the parent config directory first if your shell has not created it yet.
+Fish:
+
+```fish
+mkdir -p ~/.config/fish/functions
+git-treehouse init fish > ~/.config/fish/functions/gth.fish
+```
+
+Nushell:
+
+```nu
+mkdir ~/.config/nushell/autoload
+git-treehouse init nushell | save --force ~/.config/nushell/autoload/gth.nu
+```
+
+PowerShell:
+
+```powershell
+$module = New-Item -ItemType Directory -Force ~/.local/share/powershell/Modules/GitTreehouse
+git-treehouse init powershell > (Join-Path $module.FullName GitTreehouse.psm1)
+New-ModuleManifest -Path (Join-Path $module.FullName GitTreehouse.psd1) -RootModule GitTreehouse.psm1 -ModuleVersion 1.0.0 -FunctionsToExport gth -CmdletsToExport @() -AliasesToExport @() -VariablesToExport @() -Force
+```
+
+The first-run installer does this for you. Create parent config directories first if your shell has not created them yet.
 
 Supported shells:
 
