@@ -19,8 +19,9 @@ A fast terminal UI for managing git worktrees: browse, switch, create, and delet
 | Command | Behavior |
 |---|---|
 | `git-treehouse` | Launch the native TUI. It cannot change the parent shell directory by itself. |
-| `git-treehouse list` | Print the table to stdout, no TUI, no ANSI when piped. For scripting. |
+| `git-treehouse list` | Print the table to stdout, no TUI, no ANSI when piped. For scripting. `--json` prints structured repository/worktree data. |
 | `git-treehouse init <shell>` | Print shell integration functions that define `gth` (see §2) |
+| `git-treehouse doctor` | Print environment diagnostics for required and optional integrations. |
 
 ## 2. Shell integration (cd mechanism)
 
@@ -108,10 +109,11 @@ Loaded via the `gh` CLI (one `gh pr list`-style call for all branches), only if 
 Instant local render, async enrichment:
 
 1. **Synchronous (must be <50ms):** `git worktree list`, branch names, dirty status, remote/main ahead-behind comparisons computed against already-fetched refs, commit + age. Table renders immediately.
-2. **Async, streamed in as each resolves:** PR + CI data via `gh`; disk usage (`du`-equivalent walk per worktree, lowest priority). Pending cells show a subtle spinner/`…`.
+2. **Async, streamed in as each resolves:** PR + CI data via `gh`; disk usage (`du`-equivalent walk per worktree, lowest priority). Visible rows are measured first, then off-screen rows. Pending cells show a subtle spinner/`…`.
 3. **No `git fetch` on startup.** Ahead/behind reflects the last fetch. The TUI reloads local state every 30 seconds while idle; `r` triggers fetch + full reload.
 
 Each async result patches its cell in place; no full-table flicker.
+PR data is cached for the current TUI session. Reloads immediately reattach last-known PR data while a fresh `gh` lookup runs, so the PR column does not flicker away.
 
 ### 3.8 Detail panel, local hints, and status bar
 
@@ -144,6 +146,7 @@ Below the table:
 | `a` | Jump to the active worktree |
 | `s` | Fuzzy branch search |
 | `Tab` | Cycle filter: all → modified → prunable → locked → detached |
+| `Ctrl+P` | Open command palette |
 | `Esc` | Ladder: close topmost dialog → clear filter → clear branch search → quit app |
 | `q`, `Ctrl+C` | Quit immediately from list view (no cd) |
 | `?` | Toggle a help overlay with the full key list |
@@ -184,25 +187,41 @@ Checking out an *existing* branch into a new worktree is intentionally out of sc
 
 `Delete`/`Backspace`/`d` on a row opens a confirmation dialog. Never on the active or root repository row (status bar explains why).
 
-The dialog states exactly what will happen:
+The delete flow states exactly what will happen:
 
-- Worktree path to be removed.
-- **Dirty worktree:** warning with the change counts; deletion requires confirming a `force` line (extra keystroke, e.g. typing `f` to arm), mapping to `git worktree remove --force`.
-- **Branch toggle:** `[ ] also delete branch <name>` (Space toggles, off by default).
-  - Branch merged into main → safe note shown.
-  - Branch unmerged → warning + the same explicit force-arm requirement (`git branch -D`).
+- **Locked worktree:** opens a blocking modal explaining that the worktree is locked, including Git's lock reason when available. No deletion command runs.
+- **Regular worktree:** opens a confirmation modal with metadata (`Path`, `Branch`, `PR`), a worktree block, and a branch block when the row has a local branch.
+- **Worktree toggle:** `t` toggles worktree removal.
+  - Clean worktree → checked by default and uses `git worktree remove`.
+  - Dirty worktree → unchecked by default; checking it means uncommitted changes will be discarded with `git worktree remove --force`.
+- **Branch toggle:** `b` toggles local branch deletion. Branch deletion is disabled while worktree removal is unchecked, because Git will not delete a branch that is checked out in a worktree.
+  - Branch merged into main → checked by default and uses safe `git branch -d`.
+  - Branch unmerged → unchecked by default; checking it means force delete with `git branch -D`.
   - Upstream gone (PR merged) → hint `remote branch already deleted — likely safe`.
 - `Enter` executes, `Esc` cancels. Result (or git error) flashes in the status bar; table reloads.
 
-**Prunable rows** (directory missing) reuse this flow: the dialog offers `git worktree prune`-equivalent cleanup plus the same optional branch deletion.
+**Prunable rows** (directory missing) open a prune-only confirmation. The dialog offers `git worktree prune`-equivalent cleanup and does not show the branch deletion checkbox.
 
 ## 7. `git-treehouse list` (non-interactive)
 
 - Prints the same columns as the TUI, aligned, one row per worktree.
 - TTY: colored, with hyperlinks. Piped: plain text, no ANSI.
 - Includes async data only if it resolves within a short budget (~2s for `gh`); otherwise those cells print `-`. `--no-github` skips `gh` entirely.
+- `--json` prints structured JSON with repository metadata plus worktree fields for lifecycle state, status counts, sync state, commit info, PR info when loaded, and disk usage when loaded.
 
-## 8. Configuration
+## 8. `git-treehouse doctor`
+
+Prints a stdout report for local setup diagnostics:
+
+- `git` availability and version.
+- Current repository detection and main branch.
+- `gh` availability/authentication for PR data.
+- Config load/path.
+- Shell integration presence for the detected shell.
+- Editor command.
+- Clipboard command.
+
+## 9. Configuration
 
 Optional `~/.config/git-treehouse/config.toml`. Everything works with zero config.
 
@@ -212,7 +231,7 @@ path_template = "{repo_parent}/{branch}"   # default; {repo}, {repo_parent}, {br
 main_branch = ""                           # default: auto-detect (origin/HEAD, fallback main/master)
 ```
 
-## 9. Edge cases & errors
+## 10. Edge cases & errors
 
 - **Main branch detection:** `origin/HEAD` symref; fallback to local `main`, then `master`. Override via config.
 - **Detached HEAD rows:** branch column shows `<sha> detached`; `remote` shows `-`; `main±` is computed against the commit; create-base option 2 omitted.

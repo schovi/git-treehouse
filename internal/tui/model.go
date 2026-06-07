@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/schovi/git-treehouse/internal/config"
@@ -37,9 +38,12 @@ type Model struct {
 	flash           string
 	flashID         int
 	showPR          bool
+	prCache         map[string]gitdata.PullRequest
+	prCacheRepoRoot string
 	selectedPath    string
 	createDialog    *createDialog
 	deleteDialog    *deleteDialog
+	paletteDialog   *paletteDialog
 	lastRefreshAt   time.Time
 	refreshInFlight bool
 	refreshID       int
@@ -54,6 +58,9 @@ var (
 	titleRepoStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	titleMetaStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	flashStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("58"))
+	paletteSelectedStyle  = lipgloss.NewStyle().Background(lipgloss.Color("62"))
+	deleteDangerStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	deleteCommandStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
 	inspectorLabelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("67"))
 	inspectorValueStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	inspectorCleanStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
@@ -79,9 +86,24 @@ type createDialog struct {
 }
 
 type deleteDialog struct {
-	deleteBranch bool
-	force        bool
-	error        string
+	stage          deleteStage
+	deleteWorktree bool
+	deleteBranch   bool
+	forceWorktree  bool
+	error          string
+}
+
+type deleteStage int
+
+const (
+	deleteStageOptions deleteStage = iota
+	deleteStagePrune
+	deleteStageLocked
+)
+
+type paletteDialog struct {
+	input    textinput.Model
+	selected int
 }
 
 type prLoadedMsg struct {
@@ -164,6 +186,63 @@ var orderedFilters = []worktreeFilter{
 	filterDetached,
 }
 
+type paletteCommandID string
+
+const (
+	paletteGoSelected      paletteCommandID = "go-selected"
+	paletteCreate          paletteCommandID = "create"
+	paletteDelete          paletteCommandID = "delete"
+	paletteOpenEditor      paletteCommandID = "open-editor"
+	paletteOpenPullRequest paletteCommandID = "open-pull-request"
+	paletteCopyPath        paletteCommandID = "copy-path"
+	paletteRefresh         paletteCommandID = "refresh"
+	paletteSearch          paletteCommandID = "search"
+	paletteJumpRoot        paletteCommandID = "jump-root"
+	paletteJumpActive      paletteCommandID = "jump-active"
+	paletteJumpTop         paletteCommandID = "jump-top"
+	paletteJumpBottom      paletteCommandID = "jump-bottom"
+	paletteCycleFilter     paletteCommandID = "cycle-filter"
+	paletteFilterAll       paletteCommandID = "filter-all"
+	paletteFilterModified  paletteCommandID = "filter-modified"
+	paletteFilterPrunable  paletteCommandID = "filter-prunable"
+	paletteFilterLocked    paletteCommandID = "filter-locked"
+	paletteFilterDetached  paletteCommandID = "filter-detached"
+	paletteOpenConfig      paletteCommandID = "open-config"
+	paletteToggleHelp      paletteCommandID = "toggle-help"
+	paletteQuit            paletteCommandID = "quit"
+)
+
+type paletteCommand struct {
+	id       paletteCommandID
+	title    string
+	shortcut string
+	keywords string
+}
+
+var paletteCommands = []paletteCommand{
+	{id: paletteGoSelected, title: "Go to selected worktree", shortcut: "Enter", keywords: "cd switch"},
+	{id: paletteCreate, title: "Create worktree", shortcut: "n", keywords: "new branch"},
+	{id: paletteDelete, title: "Delete selected worktree", shortcut: "d", keywords: "remove prune branch"},
+	{id: paletteOpenEditor, title: "Open in editor", shortcut: "o", keywords: "code cursor"},
+	{id: paletteOpenPullRequest, title: "Open PR or branch page", shortcut: "p", keywords: "github browser"},
+	{id: paletteCopyPath, title: "Copy absolute path", shortcut: "y", keywords: "clipboard"},
+	{id: paletteRefresh, title: "Fetch and reload", shortcut: "r", keywords: "refresh prune"},
+	{id: paletteSearch, title: "Search branches", shortcut: "s", keywords: "find filter"},
+	{id: paletteJumpRoot, title: "Jump to root repository", shortcut: "h", keywords: "main"},
+	{id: paletteJumpActive, title: "Jump to active worktree", shortcut: "a", keywords: "current"},
+	{id: paletteJumpTop, title: "Jump to top", shortcut: "g", keywords: "first"},
+	{id: paletteJumpBottom, title: "Jump to bottom", shortcut: "G", keywords: "last"},
+	{id: paletteCycleFilter, title: "Cycle filter", shortcut: "Tab", keywords: "all modified prunable locked detached"},
+	{id: paletteFilterAll, title: "Filter: all", keywords: "show everything"},
+	{id: paletteFilterModified, title: "Filter: modified", keywords: "dirty changes"},
+	{id: paletteFilterPrunable, title: "Filter: prunable", keywords: "missing stale prune"},
+	{id: paletteFilterLocked, title: "Filter: locked", keywords: "lock"},
+	{id: paletteFilterDetached, title: "Filter: detached", keywords: "head sha"},
+	{id: paletteOpenConfig, title: "Open config", shortcut: "ctrl+o", keywords: "settings toml"},
+	{id: paletteToggleHelp, title: "Toggle help", shortcut: "?", keywords: "keys shortcuts"},
+	{id: paletteQuit, title: "Quit", shortcut: "q", keywords: "exit"},
+}
+
 func (filter worktreeFilter) label() string {
 	switch filter {
 	case filterModified:
@@ -227,7 +306,12 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case prLoadedMsg:
 		if message.enabled {
 			model.showPR = true
+			model.prCache = message.pullRequests
+			model.prCacheRepoRoot = model.state.Repo.Root
 			model.state.Rows = github.AttachPullRequests(model.state.Rows, message.pullRequests)
+		} else if len(model.prCache) > 0 && model.prCacheRepoRoot == model.state.Repo.Root {
+			model.showPR = true
+			model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache)
 		}
 		return model, nil
 	case sizeLoadedMsg:
@@ -257,6 +341,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model.setFlash(message.err.Error())
 		}
 		model.state = message.state
+		model.applyCachedPullRequests()
 		model.lastRefreshAt = message.completedAt
 		model.restoreSelection(anchor)
 		if message.automatic {
@@ -282,6 +367,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model.setFlash(message.err.Error())
 		}
 		model.state = message.state
+		model.applyCachedPullRequests()
 		model.restoreSelection(anchor)
 		model, flashCmd := model.setFlash("deleted worktree")
 		return model, tea.Batch(model.enrichmentCommands(), flashCmd)
@@ -325,6 +411,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if model.deleteDialog != nil {
 			return model.updateDelete(message)
 		}
+		if model.paletteDialog != nil {
+			return model.updatePalette(message)
+		}
 		if model.searching {
 			return model.updateSearch(message)
 		}
@@ -338,6 +427,8 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 	switch message.String() {
 	case "ctrl+c", "q":
 		return model, tea.Quit
+	case "ctrl+p":
+		return model.openPalette()
 	case "esc":
 		if model.help {
 			model.help = false
@@ -444,7 +535,8 @@ func (model Model) canApplyAutoRefresh() bool {
 		!model.searching &&
 		!model.help &&
 		model.createDialog == nil &&
-		model.deleteDialog == nil
+		model.deleteDialog == nil &&
+		model.paletteDialog == nil
 }
 
 func (model Model) reloadCwd() string {
@@ -474,6 +566,145 @@ func (model Model) updateSearch(message tea.KeyMsg) (Model, tea.Cmd) {
 	return model, cmd
 }
 
+func (model Model) openPalette() (Model, tea.Cmd) {
+	input := textinput.New()
+	input.Prompt = "> "
+	input.CharLimit = 200
+	input.Width = 36
+	input.Cursor.Style = flashStyle
+	focusCmd := input.Focus()
+	model.help = false
+	model.paletteDialog = &paletteDialog{input: input}
+	return model, focusCmd
+}
+
+func (model Model) updatePalette(message tea.KeyMsg) (Model, tea.Cmd) {
+	dialog := model.paletteDialog
+	switch message.String() {
+	case "esc", "ctrl+p":
+		model.paletteDialog = nil
+		return model, nil
+	case "up", "k":
+		dialog.selected = clamp(dialog.selected-1, 0, max(0, len(model.matchingPaletteCommands())-1))
+		return model, nil
+	case "down", "j":
+		dialog.selected = clamp(dialog.selected+1, 0, max(0, len(model.matchingPaletteCommands())-1))
+		return model, nil
+	case "enter":
+		commands := model.matchingPaletteCommands()
+		if len(commands) == 0 {
+			return model, nil
+		}
+		command := commands[clamp(dialog.selected, 0, len(commands)-1)]
+		model.paletteDialog = nil
+		return model.executePaletteCommand(command.id)
+	}
+	previousValue := dialog.input.Value()
+	var cmd tea.Cmd
+	dialog.input, cmd = dialog.input.Update(message)
+	if dialog.input.Value() != previousValue {
+		dialog.selected = 0
+	}
+	dialog.selected = clamp(dialog.selected, 0, max(0, len(model.matchingPaletteCommands())-1))
+	return model, cmd
+}
+
+func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
+	switch id {
+	case paletteGoSelected:
+		row, ok := model.selectedRow()
+		if !ok {
+			return model, nil
+		}
+		if row.Prunable {
+			return model.setFlash("cannot enter a prunable worktree")
+		}
+		if row.IsActive {
+			return model, tea.Quit
+		}
+		model.selectedPath = row.Path
+		return model, tea.Quit
+	case paletteCreate:
+		return model.openCreate()
+	case paletteDelete:
+		return model.openDelete()
+	case paletteOpenEditor:
+		row, ok := model.selectedRow()
+		if !ok || row.Prunable {
+			return model.setFlash("cannot open this worktree")
+		}
+		return model, openEditorCmd(model.config.Editor, row.Path)
+	case paletteOpenPullRequest:
+		row, ok := model.selectedRow()
+		if !ok {
+			return model, nil
+		}
+		return model, func() tea.Msg {
+			err := github.OpenPullRequestOrBranch(context.Background(), model.state.Repo.Root, row, model.runner)
+			return actionMsg{text: "opened", err: err}
+		}
+	case paletteCopyPath:
+		row, ok := model.selectedRow()
+		if !ok {
+			return model, nil
+		}
+		return model, copyPathCmd(row.Path)
+	case paletteRefresh:
+		model.loading = "fetching…"
+		model.refreshID++
+		model.refreshInFlight = true
+		return model, reloadCmd(model.reloadCwd(), model.config, model.runner, true, false, model.refreshID)
+	case paletteSearch:
+		model.searching = true
+		return model, model.search.Focus()
+	case paletteJumpRoot:
+		model.selectMatching(func(row gitdata.Worktree) bool { return row.IsMain })
+	case paletteJumpActive:
+		model.selectMatching(func(row gitdata.Worktree) bool { return row.IsActive })
+	case paletteJumpTop:
+		model.selected = 0
+	case paletteJumpBottom:
+		model.selected = max(0, len(model.visibleIndexes())-1)
+	case paletteCycleFilter:
+		model.cycleFilter()
+	case paletteFilterAll:
+		model.setFilter(filterAll)
+	case paletteFilterModified:
+		model.setFilter(filterModified)
+	case paletteFilterPrunable:
+		model.setFilter(filterPrunable)
+	case paletteFilterLocked:
+		model.setFilter(filterLocked)
+	case paletteFilterDetached:
+		model.setFilter(filterDetached)
+	case paletteOpenConfig:
+		return model, openConfigCmd(model.config.Editor, model.config)
+	case paletteToggleHelp:
+		model.help = !model.help
+	case paletteQuit:
+		return model, tea.Quit
+	}
+	return model, nil
+}
+
+func (model Model) matchingPaletteCommands() []paletteCommand {
+	if model.paletteDialog == nil {
+		return paletteCommands
+	}
+	query := strings.TrimSpace(model.paletteDialog.input.Value())
+	if query == "" {
+		return paletteCommands
+	}
+	matches := make([]paletteCommand, 0, len(paletteCommands))
+	for _, command := range paletteCommands {
+		haystack := command.title + " " + command.shortcut + " " + command.keywords
+		if fuzzyMatch(haystack, query) {
+			matches = append(matches, command)
+		}
+	}
+	return matches
+}
+
 func (model Model) openCreate() (Model, tea.Cmd) {
 	row, ok := model.selectedRow()
 	if !ok || row.Prunable {
@@ -489,6 +720,8 @@ func (model Model) openCreate() (Model, tea.Cmd) {
 	if len(bases) == 0 {
 		return model.setFlash("no base ref available")
 	}
+	model.help = false
+	model.paletteDialog = nil
 	model.createDialog = &createDialog{input: input, bases: bases}
 	return model, focusCmd
 }
@@ -556,7 +789,25 @@ func (model Model) openDelete() (Model, tea.Cmd) {
 	if row.IsMain {
 		return model.setFlash("cannot delete the main worktree")
 	}
-	model.deleteDialog = &deleteDialog{}
+	dialog := deleteDialog{
+		stage:          deleteStageOptions,
+		deleteWorktree: deleteWorktreeDefault(row),
+		deleteBranch:   deleteBranchDefault(row),
+		forceWorktree:  !row.Status.Clean(),
+	}
+	switch {
+	case row.Locked:
+		dialog.stage = deleteStageLocked
+		dialog.error = "cannot delete locked worktree"
+		if row.LockReason != "" {
+			dialog.error += ": " + row.LockReason
+		}
+	case row.Prunable:
+		dialog.stage = deleteStagePrune
+	}
+	model.help = false
+	model.paletteDialog = nil
+	model.deleteDialog = &dialog
 	return model, nil
 }
 
@@ -567,11 +818,32 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 		model.deleteDialog = nil
 		return model, nil
 	case " ":
-		dialog.deleteBranch = !dialog.deleteBranch
+		return model.updateDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	case "t":
+		if dialog.stage != deleteStageOptions {
+			return model, nil
+		}
+		row, ok := model.selectedRow()
+		if !ok {
+			return model, nil
+		}
+		dialog.deleteWorktree = !dialog.deleteWorktree
+		if dialog.deleteWorktree {
+			dialog.deleteBranch = deleteBranchDefaultWhenWorktreeRemoved(row)
+		} else {
+			dialog.deleteBranch = false
+		}
 		dialog.error = ""
 		return model, nil
-	case "f":
-		dialog.force = !dialog.force
+	case "b":
+		if dialog.stage != deleteStageOptions || !deleteBranchAvailableFromModel(model) {
+			return model, nil
+		}
+		if !dialog.deleteWorktree {
+			dialog.error = "enable worktree removal before deleting the branch"
+			return model, nil
+		}
+		dialog.deleteBranch = !dialog.deleteBranch
 		dialog.error = ""
 		return model, nil
 	case "enter":
@@ -580,9 +852,28 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 			model.deleteDialog = nil
 			return model, nil
 		}
-		needsForce := !row.Status.Clean() || dialog.deleteBranch && !row.BranchMergedToMain
-		if needsForce && !dialog.force {
-			dialog.error = "press f to arm force for dirty or unmerged deletion"
+		switch dialog.stage {
+		case deleteStageLocked:
+			return model, nil
+		case deleteStagePrune:
+		}
+		if row.Prunable {
+			dialog.deleteBranch = false
+		}
+		if !dialog.deleteWorktree && dialog.deleteBranch {
+			dialog.error = "enable worktree removal before deleting the branch"
+			return model, nil
+		}
+		if !dialog.deleteWorktree && !dialog.deleteBranch && !row.Prunable {
+			dialog.error = "choose at least one delete action"
+			return model, nil
+		}
+		if row.Locked {
+			dialog.stage = deleteStageLocked
+			dialog.error = "cannot delete locked worktree"
+			if row.LockReason != "" {
+				dialog.error += ": " + row.LockReason
+			}
 			return model, nil
 		}
 		model.loading = "deleting…"
@@ -603,15 +894,40 @@ func deleteRow(ctx context.Context, repo gitdata.Repository, row gitdata.Worktre
 		if err := gitdata.PruneWorktrees(ctx, repo.Root, runner); err != nil {
 			return err
 		}
-	} else if err := gitdata.RemoveWorktree(ctx, repo.Root, row.Path, dialog.force, runner); err != nil {
-		return err
+		return nil
 	}
-	if dialog.deleteBranch && row.Branch != "" && !row.Detached {
-		if err := gitdata.DeleteBranch(ctx, repo.Root, row.Branch, dialog.force && !row.BranchMergedToMain, runner); err != nil {
+	if dialog.deleteWorktree {
+		if err := gitdata.RemoveWorktree(ctx, repo.Root, row.Path, dialog.forceWorktree, runner); err != nil {
+			return err
+		}
+	}
+	if dialog.deleteWorktree && dialog.deleteBranch && row.Branch != "" && !row.Detached {
+		if err := gitdata.DeleteBranch(ctx, repo.Root, row.Branch, !row.BranchMergedToMain, runner); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func deleteBranchAvailable(row gitdata.Worktree) bool {
+	return !row.Prunable && !row.Detached && row.Branch != ""
+}
+
+func deleteBranchDefault(row gitdata.Worktree) bool {
+	return deleteWorktreeDefault(row) && deleteBranchDefaultWhenWorktreeRemoved(row)
+}
+
+func deleteBranchDefaultWhenWorktreeRemoved(row gitdata.Worktree) bool {
+	return deleteBranchAvailable(row) && row.BranchMergedToMain
+}
+
+func deleteWorktreeDefault(row gitdata.Worktree) bool {
+	return row.Status.Clean()
+}
+
+func deleteBranchAvailableFromModel(model Model) bool {
+	row, ok := model.selectedRow()
+	return ok && deleteBranchAvailable(row)
 }
 
 func (model Model) View() string {
@@ -631,36 +947,7 @@ func (model Model) View() string {
 	if hasSelectedRow {
 		detail = model.detailPanelAtWidth(selectedRow, now, panelContentWidth)
 	}
-	tableFixedLines := 1
-	detailFixedLines := 0
-	if detail != "" {
-		detailFixedLines = 2 + lineCount(detail)
-	}
-	fixedLines := 1 + 2 + tableFixedLines + detailFixedLines + 1
-	if model.flash != "" {
-		fixedLines++
-	}
-	if model.help {
-		fixedLines += lineCount(model.renderHelp())
-	}
-	if model.deleteDialog != nil {
-		fixedLines += lineCount(model.renderDelete())
-	}
-	availableHeight := max(1, model.height-fixedLines)
-	if model.height <= 0 {
-		availableHeight = 8
-	}
-	if model.deleteDialog != nil || model.help {
-		availableHeight = max(3, availableHeight-8)
-	}
-	start := 0
-	if model.selected >= availableHeight {
-		start = model.selected - availableHeight + 1
-	}
-	if start > len(rows) {
-		start = len(rows)
-	}
-	end := min(len(rows), start+availableHeight)
+	start, end := model.visibleTableWindow(now)
 	visibleRows := rows[start:end]
 	table := listview.RenderRows(visibleRows, listview.Options{
 		Width:             panelContentWidth,
@@ -685,16 +972,20 @@ func (model Model) View() string {
 	if model.flash != "" {
 		parts = append(parts, model.wrapOuter(model.flashLineAtWidth(panelWidth), outerWidth))
 	}
-	if model.help {
-		parts = append(parts, model.wrapOuter(model.renderHelp(), outerWidth))
-	}
-	if model.deleteDialog != nil {
-		parts = append(parts, model.wrapOuter(model.renderDelete(), outerWidth))
-	}
 	parts = append(parts, model.appBottomLine(outerWidth))
 	output := strings.Join(parts, "\n")
+	overlayHeight := lineCount(output)
+	if model.help {
+		output = centeredOverlay(output, model.renderHelpAtWidth(helpDialogWidth(outerWidth)), outerWidth, overlayHeight)
+	}
+	if model.paletteDialog != nil {
+		output = centeredOverlay(output, model.renderPaletteAtWidth(paletteDialogWidth(outerWidth)), outerWidth, overlayHeight)
+	}
+	if model.deleteDialog != nil {
+		output = centeredOverlay(output, model.renderDeleteAtWidth(deleteDialogWidth(outerWidth)), outerWidth, overlayHeight)
+	}
 	if model.createDialog != nil {
-		output = centeredOverlay(output, model.renderCreateAtWidth(createDialogWidth(outerWidth)), outerWidth, lineCount(output))
+		output = centeredOverlay(output, model.renderCreateAtWidth(createDialogWidth(outerWidth)), outerWidth, overlayHeight)
 	}
 	return model.frame(output)
 }
@@ -991,6 +1282,18 @@ func prText(row gitdata.Worktree) string {
 	return text
 }
 
+func (model Model) deletePRText(row gitdata.Worktree) string {
+	if row.PR != nil {
+		if text := row.PR.Text(); text != "" {
+			return text
+		}
+	}
+	if model.showPR {
+		return "none"
+	}
+	return "unknown"
+}
+
 func deleteSafetyText(row gitdata.Worktree) string {
 	switch {
 	case row.IsActive && row.IsMain:
@@ -1001,12 +1304,14 @@ func deleteSafetyText(row gitdata.Worktree) string {
 		return "blocked, root repository"
 	case row.Prunable:
 		return "allowed, prunes missing worktree metadata"
+	case row.Locked:
+		return "blocked, locked worktree"
 	case !row.Status.Clean():
 		return "allowed with force, dirty worktree"
-	case row.Locked:
-		return "allowed only if git unlocks it"
+	case deleteBranchDefault(row):
+		return "allowed, branch deletion checked"
 	default:
-		return "allowed, branch kept by default"
+		return "allowed, branch deletion optional"
 	}
 }
 
@@ -1570,6 +1875,28 @@ func (model *Model) cycleFilter() {
 	}
 }
 
+func (model *Model) setFilter(filter worktreeFilter) {
+	anchor := model.selectionAnchor()
+	model.filter = filter
+	if !model.restoreSelection(anchor) && len(model.visibleIndexes()) > 0 {
+		model.selected = 0
+	}
+}
+
+func (model *Model) applyCachedPullRequests() {
+	if len(model.prCache) == 0 {
+		return
+	}
+	if model.prCacheRepoRoot != model.state.Repo.Root {
+		model.prCache = nil
+		model.prCacheRepoRoot = ""
+		model.showPR = false
+		return
+	}
+	model.showPR = true
+	model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache)
+}
+
 func (model Model) frame(content string) string {
 	width := viewWidth(model)
 	lines := strings.Split(content, "\n")
@@ -1600,8 +1927,8 @@ func viewWidth(model Model) int {
 	return 80
 }
 
-func (model Model) renderHelp() string {
-	return box("Help", strings.Join([]string{
+func (model Model) renderHelpAtWidth(width int) string {
+	items := []string{
 		"↑/↓ k/j move",
 		"g/G jump top/bottom",
 		"h jump root repository",
@@ -1615,8 +1942,36 @@ func (model Model) renderHelp() string {
 		"y copy absolute path",
 		"r/f fetch --prune and reload",
 		"s search branches",
+		"ctrl+p command palette",
 		"Esc close, clear filter/search, or quit",
-	}, "\n"))
+	}
+	contentWidth := max(1, width-4)
+	lines := helpLinesAtWidth(items, contentWidth)
+	return dialogBox("Help", lines, colorKeyHints("Esc close", false), width)
+}
+
+func helpLinesAtWidth(items []string, contentWidth int) []string {
+	if contentWidth >= 56 {
+		leftCount := (len(items) + 1) / 2
+		gap := "  "
+		columnWidth := max(1, (contentWidth-runewidth.StringWidth(gap))/2)
+		lines := make([]string, 0, leftCount)
+		for index := 0; index < leftCount; index++ {
+			left := padStyled(truncatePlain(items[index], columnWidth), columnWidth)
+			right := ""
+			rightIndex := index + leftCount
+			if rightIndex < len(items) {
+				right = truncatePlain(items[rightIndex], columnWidth)
+			}
+			lines = append(lines, left+gap+right)
+		}
+		return lines
+	}
+	lines := append([]string(nil), items...)
+	for index, line := range lines {
+		lines[index] = truncatePlain(line, contentWidth)
+	}
+	return lines
 }
 
 func (model Model) renderCreateAtWidth(width int) string {
@@ -1658,51 +2013,289 @@ func (model Model) createPathPreview() string {
 	return pathutil.ApplyTemplate(model.config.PathTemplate, model.state.Repo.Root, branch)
 }
 
-func (model Model) renderDelete() string {
+func (model Model) renderDeleteAtWidth(width int) string {
 	row, _ := model.selectedRow()
 	dialog := model.deleteDialog
-	branchToggle := "[ ]"
-	if dialog.deleteBranch {
-		branchToggle = "[x]"
-	}
-	force := "not armed"
-	if dialog.force {
-		force = "armed"
-	}
-	lines := []string{"Path: " + row.Path}
-	if !row.Status.Clean() {
-		lines = append(lines, "Dirty: "+row.Status.Text())
-	}
-	if row.Prunable {
-		lines = append(lines, "Will prune missing worktree metadata.")
-	} else {
-		lines = append(lines, "Will remove this worktree.")
-	}
-	if row.Branch != "" && !row.Detached {
-		lines = append(lines, branchToggle+" also delete branch "+row.Branch)
-		if row.BranchMergedToMain {
-			lines = append(lines, "Branch is merged into "+model.state.Repo.MainBranch+".")
+	contentWidth := max(1, width-4)
+	lines := model.deleteMetadataLines(row, contentWidth)
+	lines = append(lines, "")
+	bottom := "Esc cancel"
+	switch dialog.stage {
+	case deleteStageLocked:
+		lines = append(lines,
+			deleteDangerStyle.Render("Cannot delete locked worktree."),
+			"Unlock this worktree before deleting it.",
+		)
+		if row.LockReason != "" {
+			lines = append(lines, "Reason: "+row.LockReason)
+		}
+	case deleteStagePrune:
+		lines = append(lines,
+			deleteSectionTitle("Worktree"),
+			"[x] prune missing worktree metadata",
+		)
+		if row.PruneReason != "" {
+			lines = append(lines, "Reason: "+row.PruneReason)
+		}
+		bottom = "Enter prune · Esc cancel"
+	default:
+		if !row.Status.Clean() {
+			lines = append(lines,
+				deleteDangerStyle.Render("Uncommitted changes will be discarded when removing the worktree."),
+				deleteDangerStyle.Render(dirtyDetailText(row.Status)),
+				"",
+			)
+		}
+		worktreeBlock := deleteToggleBlock{
+			title:   "Worktree",
+			key:     "t",
+			enabled: true,
+			checked: dialog.deleteWorktree,
+			label:   "remove worktree",
+		}
+		if dialog.deleteWorktree {
+			if dialog.forceWorktree {
+				worktreeBlock.commands = append(worktreeBlock.commands, deleteCommand{text: "git worktree remove --force", danger: true})
+			} else {
+				worktreeBlock.commands = append(worktreeBlock.commands, deleteCommand{text: "git worktree remove"})
+			}
 		} else {
-			lines = append(lines, "Branch is not merged into "+model.state.Repo.MainBranch+".")
+			worktreeBlock.details = append(worktreeBlock.details, hintStyle.Render("No worktree command will run."))
 		}
-		if row.UpstreamGone {
-			lines = append(lines, "Remote branch already deleted, likely safe.")
+		lines = append(lines, renderDeleteToggleBlock(worktreeBlock)...)
+		if deleteBranchAvailable(row) {
+			branchEnabled := dialog.deleteWorktree
+			branchBlock := deleteToggleBlock{
+				title:   "Branch",
+				key:     "b",
+				enabled: branchEnabled,
+				checked: dialog.deleteBranch && branchEnabled,
+				muted:   !branchEnabled,
+			}
+			if row.BranchMergedToMain {
+				branchBlock.label = "delete local branch"
+				if !branchEnabled {
+					branchBlock.details = append(branchBlock.details, hintStyle.Render("Enable worktree removal first; the branch is checked out here."))
+				} else if dialog.deleteBranch {
+					branchBlock.details = append(branchBlock.details, "Merged into "+model.deleteMainBranchName()+".")
+					branchBlock.commands = append(branchBlock.commands, deleteCommand{text: "git branch -d " + row.Branch})
+				} else {
+					branchBlock.details = append(branchBlock.details, "Merged into "+model.deleteMainBranchName()+", branch will be kept.")
+					branchBlock.details = append(branchBlock.details, hintStyle.Render("No branch command will run."))
+				}
+			} else {
+				branchBlock.label = "force delete local branch"
+				if !branchEnabled {
+					branchBlock.details = append(branchBlock.details, hintStyle.Render("Enable worktree removal first; the branch is checked out here."))
+				} else if dialog.deleteBranch {
+					branchBlock.details = append(branchBlock.details, deleteDangerStyle.Render("Not merged into "+model.deleteMainBranchName()+"."))
+					branchBlock.commands = append(branchBlock.commands, deleteCommand{text: "git branch -D " + row.Branch, danger: true})
+				} else {
+					branchBlock.details = append(branchBlock.details, "Not merged into "+model.deleteMainBranchName()+", branch will be kept.")
+					branchBlock.details = append(branchBlock.details, hintStyle.Render("No branch command will run."))
+				}
+			}
+			if row.UpstreamGone {
+				branchBlock.details = append(branchBlock.details, "Remote branch already deleted, likely safe.")
+			}
+			lines = append(lines, "")
+			lines = append(lines, renderDeleteToggleBlock(branchBlock)...)
+			bottom = "Enter delete · Esc cancel"
+		} else {
+			bottom = "Enter delete · Esc cancel"
 		}
 	}
-	lines = append(lines, "Force: "+force+" (f toggles)")
-	if dialog.error != "" {
+	if dialog.error != "" && dialog.stage != deleteStageLocked {
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(dialog.error))
 	}
-	lines = append(lines, "", "Enter delete · Space branch · f force · Esc cancel")
-	return box("Delete worktree", strings.Join(lines, "\n"))
+	for index, line := range lines {
+		lines[index] = truncateStyled(line, contentWidth)
+	}
+	return dialogBox("Delete worktree", lines, deleteDialogHintsAtWidth(bottom, width-6), width)
 }
 
-func box(title, body string) string {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		Padding(0, 1).
-		Render(title + "\n" + body)
+func (model Model) deleteMetadataLines(row gitdata.Worktree, width int) []string {
+	return []string{
+		dialogFieldLine("Path", row.Path, width),
+		dialogFieldLine("Branch", row.DisplayBranch(), width),
+		dialogFieldLine("PR", model.deletePRText(row), width),
+	}
+}
+
+func (model Model) deleteMainBranchName() string {
+	if model.state.Repo.MainBranch != "" {
+		return model.state.Repo.MainBranch
+	}
+	return "main"
+}
+
+func dialogFieldLine(label, value string, width int) string {
+	labelWidth := 7
+	separatorWidth := 2
+	valueWidth := max(1, width-labelWidth-separatorWidth)
+	labelText := inspectorLabelStyle.Render(padRight(label+":", labelWidth))
+	return labelText + "  " + truncatePlain(value, valueWidth)
+}
+
+func deleteSectionTitle(title string) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render(title)
+}
+
+func deleteSectionHeader(title, key string, enabled bool) string {
+	titleText := deleteSectionTitle(title)
+	if key == "" {
+		return titleText
+	}
+	description := "toggle"
+	if !enabled {
+		description += " disabled"
+	}
+	return titleText + hintStyle.Render(" · ") + keyStyle.Render(key) + hintStyle.Render(" "+description)
+}
+
+type deleteToggleBlock struct {
+	title    string
+	key      string
+	enabled  bool
+	checked  bool
+	label    string
+	muted    bool
+	details  []string
+	commands []deleteCommand
+}
+
+type deleteCommand struct {
+	text   string
+	danger bool
+}
+
+func renderDeleteToggleBlock(block deleteToggleBlock) []string {
+	lines := []string{
+		deleteSectionHeader(block.title, block.key, block.enabled),
+		deleteCheckboxLine(block.checked, block.label, block.muted),
+	}
+	for _, detail := range block.details {
+		lines = append(lines, deleteDetailLine(detail))
+	}
+	for _, command := range block.commands {
+		lines = append(lines, deleteCommandLine(command.text, command.danger))
+	}
+	return lines
+}
+
+func deleteCheckboxLine(checked bool, label string, muted bool) string {
+	marker := "[ ]"
+	if checked {
+		marker = "[x]"
+	}
+	line := marker + " " + label
+	if muted {
+		return hintStyle.Render(line)
+	}
+	return line
+}
+
+func deleteDetailLine(value string) string {
+	return "    " + value
+}
+
+func deleteCommandLine(command string, danger bool) string {
+	style := deleteCommandStyle
+	if danger {
+		style = deleteDangerStyle
+	}
+	return "    " + inspectorLabelStyle.Render("Command:") + " " + style.Render(command)
+}
+
+func truncateStyled(value string, width int) string {
+	if lipgloss.Width(value) <= width {
+		return value
+	}
+	return ansi.Cut(value, 0, max(0, width-1)) + "…"
+}
+
+func deleteDialogHintsAtWidth(content string, width int) string {
+	full := colorKeyHints(content, false)
+	if lipgloss.Width(full) <= width {
+		return full
+	}
+	short := strings.ReplaceAll(content, " confirm", "")
+	short = strings.ReplaceAll(short, " delete", "")
+	short = strings.ReplaceAll(short, " prune", "")
+	short = colorKeyHints(short, false)
+	if lipgloss.Width(short) <= width {
+		return short
+	}
+	return ""
+}
+
+func (model Model) renderPaletteAtWidth(width int) string {
+	dialog := model.paletteDialog
+	contentWidth := max(1, width-4)
+	input := dialog.input
+	input.Width = max(1, contentWidth-runewidth.StringWidth(input.Prompt)-1)
+	lines := []string{input.View()}
+	commands := model.matchingPaletteCommands()
+	if len(commands) == 0 {
+		lines = append(lines, hintStyle.Render("No commands"))
+	} else {
+		limit := min(8, len(commands))
+		selected := clamp(dialog.selected, 0, len(commands)-1)
+		for index := 0; index < limit; index++ {
+			command := commands[index]
+			prefix := "  "
+			style := inspectorValueStyle
+			if index == selected {
+				prefix = "› "
+				style = paletteSelectedStyle
+			}
+			label := command.title
+			if command.shortcut != "" {
+				label += "  " + hintStyle.Render(command.shortcut)
+			}
+			line := truncateStyled(prefix+label, contentWidth)
+			if index == selected {
+				line = style.Render(padStyled(line, contentWidth))
+			}
+			lines = append(lines, line)
+		}
+	}
+	return dialogBox("Commands", lines, paletteHintsAtWidth(width-6), width)
+}
+
+func paletteHintsAtWidth(width int) string {
+	full := colorKeyHints("Enter run · ↑/↓ move · Esc cancel", false)
+	if lipgloss.Width(full) <= width {
+		return full
+	}
+	short := colorKeyHints("Enter · ↑/↓ · Esc", false)
+	if lipgloss.Width(short) <= width {
+		return short
+	}
+	return ""
+}
+
+func helpDialogWidth(viewWidth int) int {
+	return modalWidth(viewWidth, 68)
+}
+
+func deleteDialogWidth(viewWidth int) int {
+	return modalWidth(viewWidth, 76)
+}
+
+func paletteDialogWidth(viewWidth int) int {
+	return modalWidth(viewWidth, 72)
+}
+
+func modalWidth(viewWidth, maximum int) int {
+	if viewWidth <= 0 {
+		return maximum
+	}
+	inset := 8
+	if viewWidth < 48 {
+		inset = 2
+	}
+	return max(4, min(maximum, viewWidth-inset))
 }
 
 func createDialogWidth(viewWidth int) int {
@@ -1741,11 +2334,13 @@ func dialogTopLine(title string, width int) string {
 }
 
 func dialogBottomLine(content string, width int) string {
-	contentWidth := width - 6
-	if contentWidth < 1 || content == "" {
+	contentLimit := width - 6
+	if contentLimit < 1 || content == "" {
 		return appBorderStyle.Render("╰" + strings.Repeat("─", max(0, width-2)) + "╯")
 	}
-	return appBorderStyle.Render("╰─ ") + padStyled(content, contentWidth) + appBorderStyle.Render(" ─╯")
+	content = truncateStyled(content, contentLimit)
+	ruleWidth := max(1, width-5-lipgloss.Width(content))
+	return appBorderStyle.Render("╰─ ") + content + appBorderStyle.Render(" "+strings.Repeat("─", ruleWidth)+"╯")
 }
 
 func createDialogHintsAtWidth(width int) string {
@@ -1779,14 +2374,70 @@ func centeredOverlay(base, popup string, width, height int) string {
 	}
 	top := max(0, (height-len(popupLines))/2)
 	left := max(0, (width-popupWidth)/2)
+	haloTop := max(0, top-1)
+	haloBottom := min(height, top+len(popupLines)+1)
+	haloLeft := max(0, left-1)
+	haloRight := min(width, left+popupWidth+1)
+	for index := haloTop; index < haloBottom; index++ {
+		baseLine := padStyled(lines[index], width)
+		leftText := ansi.Cut(baseLine, 0, haloLeft)
+		rightText := ansi.Cut(baseLine, haloRight, width)
+		lines[index] = padStyled(leftText, haloLeft) + strings.Repeat(" ", max(0, haloRight-haloLeft)) + padStyled(rightText, max(0, width-haloRight))
+	}
 	for index, line := range popupLines {
 		target := top + index
 		if target >= len(lines) {
 			break
 		}
-		lines[target] = strings.Repeat(" ", left) + padStyled(line, popupWidth) + strings.Repeat(" ", max(0, width-left-popupWidth))
+		baseLine := padStyled(lines[target], width)
+		leftText := ansi.Cut(baseLine, 0, left)
+		rightStart := min(width, left+popupWidth)
+		rightText := ansi.Cut(baseLine, rightStart, width)
+		lines[target] = padStyled(leftText, left) + padStyled(line, popupWidth) + padStyled(rightText, max(0, width-rightStart))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (model Model) visibleTableWindow(now time.Time) (int, int) {
+	indexes := model.visibleIndexes()
+	availableHeight := model.availableTableHeight(now)
+	start := 0
+	if model.selected >= availableHeight {
+		start = model.selected - availableHeight + 1
+	}
+	if start > len(indexes) {
+		start = len(indexes)
+	}
+	return start, min(len(indexes), start+availableHeight)
+}
+
+func (model Model) visibleTableIndexes(now time.Time) []int {
+	indexes := model.visibleIndexes()
+	start, end := model.visibleTableWindow(now)
+	if start >= end {
+		return nil
+	}
+	return indexes[start:end]
+}
+
+func (model Model) availableTableHeight(now time.Time) int {
+	width := viewWidth(model)
+	outerWidth := max(4, width)
+	contentWidth := max(1, outerWidth-4)
+	panelWidth := max(4, contentWidth)
+	panelContentWidth := max(1, panelWidth-2)
+	detailFixedLines := 0
+	if row, ok := model.selectedRow(); ok {
+		detailFixedLines = 2 + lineCount(model.detailPanelAtWidth(row, now, panelContentWidth))
+	}
+	fixedLines := 1 + 2 + 1 + detailFixedLines + 1
+	if model.flash != "" {
+		fixedLines++
+	}
+	if model.height <= 0 {
+		return 8
+	}
+	return max(1, model.height-fixedLines)
 }
 
 func (model Model) visibleIndexes() []int {
@@ -1822,17 +2473,67 @@ func (model Model) enrichmentCommands() tea.Cmd {
 			return prLoadedMsg{pullRequests: pullRequests, enabled: enabled}
 		},
 	}
-	for _, row := range model.state.Rows {
-		if row.Prunable {
-			continue
-		}
-		path := row.Path
-		commands = append(commands, func() tea.Msg {
-			size, _ := gitdata.DiskUsage(path)
-			return sizeLoadedMsg{path: path, size: size}
-		})
+	if diskCommand := model.diskUsageCommand(time.Now()); diskCommand != nil {
+		commands = append(commands, diskCommand)
 	}
 	return tea.Batch(commands...)
+}
+
+func (model Model) diskUsageCommand(now time.Time) tea.Cmd {
+	visiblePaths, backgroundPaths := model.diskUsagePaths(now)
+	visibleCommands := diskUsageCommands(visiblePaths)
+	backgroundCommands := diskUsageCommands(backgroundPaths)
+	switch {
+	case len(visibleCommands) == 0 && len(backgroundCommands) == 0:
+		return nil
+	case len(visibleCommands) == 0:
+		return tea.Batch(backgroundCommands...)
+	case len(backgroundCommands) == 0:
+		return tea.Batch(visibleCommands...)
+	default:
+		return tea.Sequence(tea.Batch(visibleCommands...), tea.Batch(backgroundCommands...))
+	}
+}
+
+func (model Model) diskUsagePaths(now time.Time) ([]string, []string) {
+	visible := model.visibleTableIndexes(now)
+	seen := map[string]bool{}
+	visiblePaths := make([]string, 0, len(visible))
+	for _, rowIndex := range visible {
+		row := model.state.Rows[rowIndex]
+		if !diskUsageEligible(row) {
+			continue
+		}
+		seen[row.Path] = true
+		visiblePaths = append(visiblePaths, row.Path)
+	}
+	backgroundPaths := []string{}
+	for _, row := range model.state.Rows {
+		if !diskUsageEligible(row) || seen[row.Path] {
+			continue
+		}
+		backgroundPaths = append(backgroundPaths, row.Path)
+	}
+	return visiblePaths, backgroundPaths
+}
+
+func diskUsageEligible(row gitdata.Worktree) bool {
+	return !row.Prunable && !row.SizeLoaded
+}
+
+func diskUsageCommands(paths []string) []tea.Cmd {
+	commands := make([]tea.Cmd, 0, len(paths))
+	for _, path := range paths {
+		commands = append(commands, diskUsageCmd(path))
+	}
+	return commands
+}
+
+func diskUsageCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		size, _ := gitdata.DiskUsage(path)
+		return sizeLoadedMsg{path: path, size: size}
+	}
 }
 
 func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, fetch, automatic bool, id int) tea.Cmd {

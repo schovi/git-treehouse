@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,6 +51,8 @@ func run(args []string) error {
 			return runInit(remaining[1:])
 		case "list":
 			return runList(remaining[1:])
+		case "doctor":
+			return runDoctor(remaining[1:])
 		default:
 			return fmt.Errorf("unknown command %q", remaining[0])
 		}
@@ -81,6 +85,7 @@ func runList(args []string) error {
 	flags := flag.NewFlagSet(commandName+" list", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	noGitHub := flags.Bool("no-github", false, "skip GitHub PR lookup")
+	jsonOutput := flags.Bool("json", false, "print structured JSON")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -109,6 +114,14 @@ func runList(args []string) error {
 		}
 	}
 	loadDiskUsageForList(&state, 2*time.Second)
+	if *jsonOutput {
+		output, err := json.MarshalIndent(listJSONFromState(state, time.Now()), "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(output))
+		return nil
+	}
 	tty := stdoutIsTTY()
 	output := listview.Render(state, listview.Options{
 		Width:      terminalWidth(100),
@@ -121,6 +134,318 @@ func runList(args []string) error {
 	}, time.Now())
 	fmt.Println(output)
 	return nil
+}
+
+type listJSON struct {
+	Repository listJSONRepository `json:"repository"`
+	Worktrees  []listJSONWorktree `json:"worktrees"`
+}
+
+type listJSONRepository struct {
+	Root             string `json:"root"`
+	CommonGitDir     string `json:"common_git_dir"`
+	Cwd              string `json:"cwd"`
+	ActiveWorktree   string `json:"active_worktree"`
+	MainWorktree     string `json:"main_worktree"`
+	MainBranch       string `json:"main_branch"`
+	Parent           string `json:"parent"`
+	RemoteConfigured bool   `json:"remote_configured"`
+}
+
+type listJSONWorktree struct {
+	Path               string               `json:"path"`
+	GitDir             string               `json:"git_dir"`
+	Head               string               `json:"head"`
+	Branch             string               `json:"branch,omitempty"`
+	DisplayBranch      string               `json:"display_branch"`
+	Marker             string               `json:"marker,omitempty"`
+	Detached           bool                 `json:"detached"`
+	Locked             bool                 `json:"locked"`
+	LockReason         string               `json:"lock_reason,omitempty"`
+	Prunable           bool                 `json:"prunable"`
+	PruneReason        string               `json:"prune_reason,omitempty"`
+	Active             bool                 `json:"active"`
+	Main               bool                 `json:"main"`
+	Status             listJSONStatus       `json:"status"`
+	Upstream           string               `json:"upstream,omitempty"`
+	UpstreamGone       bool                 `json:"upstream_gone"`
+	RemoteSync         listJSONSync         `json:"remote_sync"`
+	MainSync           listJSONSync         `json:"main_sync"`
+	Commit             listJSONCommit       `json:"commit"`
+	BranchMergedToMain bool                 `json:"branch_merged_to_main"`
+	PullRequest        *listJSONPullRequest `json:"pull_request,omitempty"`
+	Size               listJSONSize         `json:"size"`
+}
+
+type listJSONStatus struct {
+	Clean     bool   `json:"clean"`
+	Staged    int    `json:"staged"`
+	Modified  int    `json:"modified"`
+	Untracked int    `json:"untracked"`
+	Text      string `json:"text"`
+	Compact   string `json:"compact"`
+}
+
+type listJSONSync struct {
+	Available  bool   `json:"available"`
+	NoUpstream bool   `json:"no_upstream"`
+	Ahead      int    `json:"ahead"`
+	Behind     int    `json:"behind"`
+	Text       string `json:"text"`
+}
+
+type listJSONCommit struct {
+	Short   string `json:"short,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	Time    string `json:"time,omitempty"`
+	Age     string `json:"age,omitempty"`
+}
+
+type listJSONPullRequest struct {
+	Number int    `json:"number"`
+	State  string `json:"state"`
+	CI     string `json:"ci,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Text   string `json:"text"`
+}
+
+type listJSONSize struct {
+	Loaded bool  `json:"loaded"`
+	Bytes  int64 `json:"bytes,omitempty"`
+}
+
+func listJSONFromState(state gitdata.State, now time.Time) listJSON {
+	output := listJSON{
+		Repository: listJSONRepository{
+			Root:             state.Repo.Root,
+			CommonGitDir:     state.Repo.CommonGitDir,
+			Cwd:              state.Repo.Cwd,
+			ActiveWorktree:   state.Repo.ActiveWorktree,
+			MainWorktree:     state.Repo.MainWorktree,
+			MainBranch:       state.Repo.MainBranch,
+			Parent:           state.Repo.Parent,
+			RemoteConfigured: state.Repo.RemoteConfigured,
+		},
+		Worktrees: make([]listJSONWorktree, 0, len(state.Rows)),
+	}
+	for _, row := range state.Rows {
+		worktree := listJSONWorktree{
+			Path:          row.Path,
+			GitDir:        row.GitDir,
+			Head:          row.Head,
+			Branch:        row.Branch,
+			DisplayBranch: row.DisplayBranch(),
+			Marker:        row.Marker(),
+			Detached:      row.Detached,
+			Locked:        row.Locked,
+			LockReason:    row.LockReason,
+			Prunable:      row.Prunable,
+			PruneReason:   row.PruneReason,
+			Active:        row.IsActive,
+			Main:          row.IsMain,
+			Status: listJSONStatus{
+				Clean:     row.Status.Clean(),
+				Staged:    row.Status.Staged,
+				Modified:  row.Status.Modified,
+				Untracked: row.Status.Untracked,
+				Text:      row.Status.Text(),
+				Compact:   row.StatusText(),
+			},
+			Upstream:           row.Upstream,
+			UpstreamGone:       row.UpstreamGone,
+			RemoteSync:         syncJSON(row.HeadSync, row.HeadSync.RemoteCompact(row.UpstreamGone)),
+			MainSync:           syncJSON(row.MainSync, row.MainSync.Compact()),
+			BranchMergedToMain: row.BranchMergedToMain,
+			Size: listJSONSize{
+				Loaded: row.SizeLoaded,
+				Bytes:  row.SizeBytes,
+			},
+		}
+		if !row.CommitTime.IsZero() {
+			worktree.Commit.Time = row.CommitTime.Format(time.RFC3339)
+			worktree.Commit.Age = gitdata.RelativeAge(now, row.CommitTime)
+		}
+		worktree.Commit.Short = row.CommitShort
+		worktree.Commit.Subject = row.CommitSubject
+		if row.PR != nil {
+			worktree.PullRequest = &listJSONPullRequest{
+				Number: row.PR.Number,
+				State:  row.PR.State,
+				CI:     row.PR.CI,
+				URL:    row.PR.URL,
+				Text:   row.PR.Text(),
+			}
+		}
+		output.Worktrees = append(output.Worktrees, worktree)
+	}
+	return output
+}
+
+func syncJSON(sync gitdata.SyncState, text string) listJSONSync {
+	return listJSONSync{
+		Available:  sync.Available,
+		NoUpstream: sync.NoUpstream,
+		Ahead:      sync.Ahead,
+		Behind:     sync.Behind,
+		Text:       text,
+	}
+}
+
+type doctorStatus string
+
+const (
+	doctorOK      doctorStatus = "ok"
+	doctorWarning doctorStatus = "warn"
+	doctorError   doctorStatus = "error"
+)
+
+type doctorCheck struct {
+	Name    string
+	Status  doctorStatus
+	Message string
+}
+
+func runDoctor(args []string) error {
+	flags := flag.NewFlagSet(commandName+" doctor", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("usage: %s doctor", commandName)
+	}
+	runner := gitdata.ExecRunner{}
+	checks := doctorChecks(context.Background(), runner)
+	fmt.Print(formatDoctorChecks(checks))
+	return nil
+}
+
+func doctorChecks(ctx context.Context, runner gitdata.Runner) []doctorCheck {
+	checks := []doctorCheck{
+		doctorGit(ctx, runner),
+	}
+	configPath, configCheck, loadedConfig := doctorConfig()
+	checks = append(checks, configCheck)
+	repoCheck, repo := doctorRepository(ctx, loadedConfig, runner)
+	checks = append(checks, repoCheck)
+	checks = append(checks,
+		doctorGitHub(ctx, repo.Root, runner),
+		doctorShellIntegration(),
+		doctorEditor(loadedConfig),
+		doctorClipboard(),
+	)
+	if configPath != "" {
+		checks = append(checks, doctorCheck{Name: "config path", Status: doctorOK, Message: configPath})
+	}
+	return checks
+}
+
+func doctorGit(ctx context.Context, runner gitdata.Runner) doctorCheck {
+	path, err := exec.LookPath("git")
+	if err != nil {
+		return doctorCheck{Name: "git", Status: doctorError, Message: "git was not found on PATH"}
+	}
+	output, err := runner.Run(ctx, ".", "git", "--version")
+	if err != nil {
+		return doctorCheck{Name: "git", Status: doctorError, Message: err.Error()}
+	}
+	return doctorCheck{Name: "git", Status: doctorOK, Message: strings.TrimSpace(string(output)) + " at " + path}
+}
+
+func doctorConfig() (string, doctorCheck, config.Config) {
+	loadedConfig := config.Default()
+	path, pathErr := config.Path()
+	if pathErr != nil {
+		return "", doctorCheck{Name: "config", Status: doctorWarning, Message: pathErr.Error()}, loadedConfig
+	}
+	if _, err := os.Stat(path); err != nil {
+		return path, doctorCheck{Name: "config", Status: doctorOK, Message: "using defaults"}, loadedConfig
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		return path, doctorCheck{Name: "config", Status: doctorError, Message: err.Error()}, loadedConfig
+	}
+	return path, doctorCheck{Name: "config", Status: doctorOK, Message: "loaded config.toml"}, loaded
+}
+
+func doctorRepository(ctx context.Context, loadedConfig config.Config, runner gitdata.Runner) (doctorCheck, gitdata.Repository) {
+	repo, err := gitdata.ResolveRepository(ctx, ".", loadedConfig, runner)
+	if err != nil {
+		return doctorCheck{Name: "repository", Status: doctorWarning, Message: "not inside a git repository"}, gitdata.Repository{}
+	}
+	return doctorCheck{Name: "repository", Status: doctorOK, Message: repo.Root + " (main: " + repo.MainBranch + ")"}, repo
+}
+
+func doctorGitHub(ctx context.Context, repoRoot string, runner gitdata.Runner) doctorCheck {
+	if _, err := exec.LookPath("gh"); err != nil {
+		return doctorCheck{Name: "github", Status: doctorWarning, Message: "gh was not found; PR column will stay hidden"}
+	}
+	dir := repoRoot
+	if dir == "" {
+		dir = "."
+	}
+	if _, err := runner.Run(ctx, dir, "gh", "auth", "status"); err != nil {
+		return doctorCheck{Name: "github", Status: doctorWarning, Message: "gh is installed but not authenticated"}
+	}
+	return doctorCheck{Name: "github", Status: doctorOK, Message: "gh is installed and authenticated"}
+}
+
+func doctorShellIntegration() doctorCheck {
+	shell := currentShell()
+	if shell == "" {
+		return doctorCheck{Name: "shell", Status: doctorWarning, Message: "could not detect shell"}
+	}
+	if shellinit.ConfigFileContainsIntegration(shell) {
+		return doctorCheck{Name: "shell", Status: doctorOK, Message: shell + " integration is installed"}
+	}
+	return doctorCheck{Name: "shell", Status: doctorWarning, Message: shell + " integration not found; run " + shellinit.InstallCommand(shell)}
+}
+
+func doctorEditor(loadedConfig config.Config) doctorCheck {
+	editor := strings.TrimSpace(loadedConfig.Editor)
+	if editor == "" {
+		editor = strings.TrimSpace(os.Getenv("EDITOR"))
+	}
+	if editor == "" {
+		editor = "code"
+	}
+	command := strings.Fields(editor)
+	if len(command) == 0 {
+		return doctorCheck{Name: "editor", Status: doctorWarning, Message: "editor is empty"}
+	}
+	if path, err := exec.LookPath(command[0]); err == nil {
+		return doctorCheck{Name: "editor", Status: doctorOK, Message: editor + " at " + path}
+	}
+	return doctorCheck{Name: "editor", Status: doctorWarning, Message: editor + " was not found on PATH"}
+}
+
+func doctorClipboard() doctorCheck {
+	for _, command := range clipboardCommandsForRuntime(runtime.GOOS) {
+		if path, err := exec.LookPath(command); err == nil {
+			return doctorCheck{Name: "clipboard", Status: doctorOK, Message: command + " at " + path}
+		}
+	}
+	return doctorCheck{Name: "clipboard", Status: doctorWarning, Message: "no supported clipboard command found"}
+}
+
+func clipboardCommandsForRuntime(goos string) []string {
+	switch goos {
+	case "darwin":
+		return []string{"pbcopy"}
+	case "windows":
+		return []string{"clip", "powershell.exe", "pwsh"}
+	default:
+		return []string{"wl-copy", "xclip", "xsel"}
+	}
+}
+
+func formatDoctorChecks(checks []doctorCheck) string {
+	var builder strings.Builder
+	builder.WriteString("git-treehouse doctor\n")
+	for _, check := range checks {
+		fmt.Fprintf(&builder, "%-5s %-12s %s\n", check.Status, check.Name+":", check.Message)
+	}
+	return builder.String()
 }
 
 func loadDiskUsageForList(state *gitdata.State, budget time.Duration) {

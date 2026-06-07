@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/schovi/git-treehouse/internal/config"
+	"github.com/schovi/git-treehouse/internal/gitdata"
 )
 
 func TestDetectShell(t *testing.T) {
@@ -111,5 +114,109 @@ func TestTerminalWidthFallsBackWhenColumnsIsBlank(t *testing.T) {
 
 	if got := terminalWidth(100); got != 100 {
 		t.Fatalf("terminalWidth() = %d, want 100", got)
+	}
+}
+
+func TestListJSONFromStateIncludesStructuredWorktreeData(t *testing.T) {
+	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	state := gitdata.State{
+		Repo: gitdata.Repository{
+			Root:             "/repo/main",
+			CommonGitDir:     "/repo/main/.git",
+			Cwd:              "/repo/main",
+			ActiveWorktree:   "/repo/main",
+			MainWorktree:     "/repo/main",
+			MainBranch:       "main",
+			Parent:           "/repo",
+			RemoteConfigured: true,
+		},
+		Rows: []gitdata.Worktree{{
+			Path:               "/repo/main",
+			GitDir:             "/repo/main/.git",
+			Head:               "abcdef123456",
+			Branch:             "main",
+			IsActive:           true,
+			IsMain:             true,
+			Status:             gitdata.StatusCounts{Modified: 2, Untracked: 1},
+			Upstream:           "origin/main",
+			HeadSync:           gitdata.SyncState{Available: true, Ahead: 1},
+			MainSync:           gitdata.SyncState{Available: true},
+			CommitShort:        "abcdef1",
+			CommitSubject:      "add json output",
+			CommitTime:         now.Add(-2 * time.Hour),
+			BranchMergedToMain: true,
+			PR:                 &gitdata.PullRequest{Number: 42, State: "○", CI: "✓", URL: "https://example.test/pull/42"},
+			SizeBytes:          2048,
+			SizeLoaded:         true,
+		}},
+	}
+
+	payload := listJSONFromState(state, now)
+	bytes, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal(listJSONFromState()) error = %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(bytes, &decoded); err != nil {
+		t.Fatalf("Unmarshal(listJSONFromState()) error = %v", err)
+	}
+
+	if payload.Repository.Root != "/repo/main" {
+		t.Fatalf("repository root = %q, want /repo/main", payload.Repository.Root)
+	}
+	if len(payload.Worktrees) != 1 {
+		t.Fatalf("worktrees = %d, want 1", len(payload.Worktrees))
+	}
+	row := payload.Worktrees[0]
+	if !row.Active || !row.Main || row.Status.Compact != "~2 ?1" || row.RemoteSync.Text != "↑1" {
+		t.Fatalf("row JSON = %+v, want active main dirty remote sync", row)
+	}
+	if row.PullRequest == nil || row.PullRequest.Text != "#42 ○ ✓" {
+		t.Fatalf("pull request JSON = %+v, want #42 ○ ✓", row.PullRequest)
+	}
+	if !row.Size.Loaded || row.Size.Bytes != 2048 {
+		t.Fatalf("size JSON = %+v, want loaded 2048", row.Size)
+	}
+	if row.Commit.Age != "2h" || row.Commit.Time != now.Add(-2*time.Hour).Format(time.RFC3339) {
+		t.Fatalf("commit JSON = %+v, want RFC3339 time and 2h age", row.Commit)
+	}
+}
+
+func TestFormatDoctorChecks(t *testing.T) {
+	output := formatDoctorChecks([]doctorCheck{
+		{Name: "git", Status: doctorOK, Message: "git version 2.0"},
+		{Name: "github", Status: doctorWarning, Message: "gh was not found"},
+	})
+
+	for _, want := range []string{
+		"git-treehouse doctor",
+		"ok    git:",
+		"git version 2.0",
+		"warn  github:",
+		"gh was not found",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("formatDoctorChecks() missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestClipboardCommandsForRuntime(t *testing.T) {
+	tests := []struct {
+		goos string
+		want string
+	}{
+		{goos: "darwin", want: "pbcopy"},
+		{goos: "windows", want: "clip"},
+		{goos: "linux", want: "wl-copy"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.goos, func(t *testing.T) {
+			commands := clipboardCommandsForRuntime(test.goos)
+			if len(commands) == 0 || commands[0] != test.want {
+				t.Fatalf("clipboardCommandsForRuntime(%q) = %v, want first %q", test.goos, commands, test.want)
+			}
+		})
 	}
 }

@@ -23,6 +23,15 @@ func (runner testRunner) Run(_ context.Context, _, _ string, _ ...string) ([]byt
 	return nil, errors.New("unexpected command")
 }
 
+type recordingRunner struct {
+	commands []string
+}
+
+func (runner *recordingRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+	runner.commands = append(runner.commands, dir+"|"+name+" "+strings.Join(args, " "))
+	return nil, nil
+}
+
 func TestSelectedInspectorUsesLabeledRelativeFields(t *testing.T) {
 	model := Model{
 		width: 80,
@@ -453,6 +462,50 @@ func TestEscClearsFilterBeforeQuitting(t *testing.T) {
 	}
 }
 
+func TestCtrlPOpensCommandPalette(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main"},
+	})
+
+	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyCtrlP})
+
+	if model.paletteDialog == nil {
+		t.Fatal("ctrl+p did not open command palette")
+	}
+	if cmd == nil {
+		t.Fatal("ctrl+p should focus palette input")
+	}
+	if !model.paletteDialog.input.Focused() {
+		t.Fatal("palette input should be focused")
+	}
+}
+
+func TestCommandPaletteFiltersAndExecutesCommand(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/clean", Branch: "clean"},
+		{Path: "/repo/dirty", Branch: "dirty", Status: gitdata.StatusCounts{Modified: 1}},
+	})
+	model, _ = model.openPalette()
+	model.paletteDialog.input.SetValue("dirty")
+
+	commands := model.matchingPaletteCommands()
+	if len(commands) != 1 || commands[0].id != paletteFilterModified {
+		t.Fatalf("matching palette commands = %+v, want only modified filter", commands)
+	}
+
+	model, cmd := model.updatePalette(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd != nil {
+		t.Fatalf("palette modified filter returned command, want nil")
+	}
+	if model.paletteDialog != nil {
+		t.Fatal("palette should close after command execution")
+	}
+	if model.filter != filterModified {
+		t.Fatalf("filter = %q, want modified", model.filter.label())
+	}
+}
+
 func TestViewRendersBoxedAppSections(t *testing.T) {
 	model := Model{
 		width:  100,
@@ -487,6 +540,35 @@ func TestViewRendersBoxedAppSections(t *testing.T) {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("View() should not contain cap separator %q:\n%s", unwanted, output)
 		}
+	}
+}
+
+func TestHelpRendersCenteredOverlayInAppFrame(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+	})
+	model.width = 100
+	model.height = 40
+	model.help = true
+
+	output := model.View()
+	lines := strings.Split(output, "\n")
+	helpLine := -1
+	for index, line := range lines {
+		if strings.Contains(line, "Help") {
+			helpLine = index
+			break
+		}
+	}
+
+	if helpLine < 3 || helpLine > 12 {
+		t.Fatalf("Help dialog line = %d, want centered in app frame:\n%s", helpLine, output)
+	}
+	if helpLine >= model.height/2 {
+		t.Fatalf("Help dialog line = %d, should not be centered in terminal viewport:\n%s", helpLine, output)
+	}
+	if !strings.Contains(output, "Worktrees") || !strings.Contains(output, "ctrl+p command palette") {
+		t.Fatalf("Help overlay should preserve app content and show palette hint:\n%s", output)
 	}
 }
 
@@ -661,6 +743,37 @@ func TestCreateDialogRendersColoredBorderAndBottomHints(t *testing.T) {
 	}
 }
 
+func TestDialogBottomLineKeepsRightBorderRuleAfterHints(t *testing.T) {
+	line := dialogBottomLine(colorKeyHints("Enter delete · Esc cancel", false), 80)
+
+	if width := lipgloss.Width(line); width != 80 {
+		t.Fatalf("dialogBottomLine() width = %d, want 80:\n%s", width, line)
+	}
+	if !strings.Contains(line, appBorderStyle.Render(" ─")) {
+		t.Fatalf("dialogBottomLine() should render a horizontal rule after hints:\n%s", line)
+	}
+	if strings.Contains(line, "     "+appBorderStyle.Render("─╯")) {
+		t.Fatalf("dialogBottomLine() should not leave blank padding before the right corner:\n%s", line)
+	}
+}
+
+func TestCenteredOverlayPreservesBackgroundOutsidePopupHalo(t *testing.T) {
+	output := centeredOverlay("01234567890123456789012345", "POP", 26, 1)
+
+	if output != "0123456789 POP 56789012345" {
+		t.Fatalf("centeredOverlay() = %q, want background preserved outside one-cell popup halo", output)
+	}
+}
+
+func TestCenteredOverlayClearsVerticalPopupHalo(t *testing.T) {
+	output := centeredOverlay("aaaaaaaaaa\nbbbbbbbbbb\ncccccccccc", "XX", 10, 3)
+	want := "aaa    aaa\nbbb XX bbb\nccc    ccc"
+
+	if output != want {
+		t.Fatalf("centeredOverlay() = %q, want %q", output, want)
+	}
+}
+
 func TestCreateDialogRenderShowsTypedBranchName(t *testing.T) {
 	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
 	model.createDialog.input.SetValue("feature/login")
@@ -720,6 +833,338 @@ func TestCreateDialogConfigShortcutCreatesAndOpensConfig(t *testing.T) {
 	}
 }
 
+func TestOpenDeleteDefaultsBranchDeletionForRegularWorktree(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{
+			Path:               "/repo/feature",
+			Branch:             "feature",
+			BranchMergedToMain: true,
+			PR:                 &gitdata.PullRequest{Number: 42, State: "○", CI: "✓"},
+		},
+	})
+	model.showPR = true
+
+	model, cmd := model.openDelete()
+
+	if cmd != nil {
+		t.Fatalf("openDelete() returned command, want nil")
+	}
+	if model.deleteDialog == nil {
+		t.Fatal("openDelete() did not open delete dialog")
+	}
+	if model.deleteDialog.stage != deleteStageOptions {
+		t.Fatalf("delete stage = %v, want options", model.deleteDialog.stage)
+	}
+	if !model.deleteDialog.deleteBranch {
+		t.Fatal("merged branch worktree should default to deleting the branch")
+	}
+	output := model.renderDeleteAtWidth(80)
+	for _, want := range []string{
+		"Path:",
+		"/repo/feature",
+		"Branch:",
+		"feature",
+		"PR:",
+		"#42 ○ ✓",
+		"Worktree",
+		"t",
+		"toggle",
+		"[x] remove worktree",
+		"Command:",
+		"git worktree remove",
+		"Branch",
+		"b",
+		"[x] delete local branch",
+		"git branch -d feature",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("delete dialog missing %q:\n%s", want, output)
+		}
+	}
+
+	model, _ = model.updateDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if model.deleteDialog.deleteBranch {
+		t.Fatal("b should uncheck branch deletion")
+	}
+}
+
+func TestDeleteSectionHeaderStylesShortcutInline(t *testing.T) {
+	output := deleteSectionHeader("Worktree", "t", true)
+
+	for _, want := range []string{
+		lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true).Render("Worktree"),
+		hintStyle.Render(" · "),
+		keyStyle.Render("t"),
+		hintStyle.Render(" toggle"),
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("deleteSectionHeader() missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderDeleteToggleBlockIndentsDetailsAndCommands(t *testing.T) {
+	lines := renderDeleteToggleBlock(deleteToggleBlock{
+		title:   "Branch",
+		key:     "b",
+		enabled: true,
+		checked: false,
+		label:   "force delete local branch",
+		details: []string{
+			"Not merged into main, branch will be kept.",
+			hintStyle.Render("No branch command will run."),
+		},
+		commands: []deleteCommand{{text: "git branch -D feature", danger: true}},
+	})
+
+	if len(lines) != 5 {
+		t.Fatalf("renderDeleteToggleBlock() lines = %d, want 5: %#v", len(lines), lines)
+	}
+	if !strings.HasPrefix(lines[2], "    ") || !strings.Contains(lines[2], "Not merged into main") {
+		t.Fatalf("first detail line should be indented: %#v", lines[2])
+	}
+	if !strings.HasPrefix(lines[3], "    ") || !strings.Contains(lines[3], "No branch command") {
+		t.Fatalf("second detail line should be indented: %#v", lines[3])
+	}
+	if !strings.HasPrefix(lines[4], "    ") || !strings.Contains(lines[4], "git branch -D feature") {
+		t.Fatalf("command line should be indented: %#v", lines[4])
+	}
+}
+
+func TestOpenDeleteDefaultsUnmergedBranchDeletionOff(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+
+	model, _ = model.openDelete()
+
+	if model.deleteDialog.deleteBranch {
+		t.Fatal("unmerged branch worktree should default to keeping the branch")
+	}
+	output := model.renderDeleteAtWidth(80)
+	for _, want := range []string{
+		"[ ] force delete local branch",
+		"    Not merged into main, branch will be kept.",
+		"    No branch command will run.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("unmerged delete dialog missing %q:\n%s", want, output)
+		}
+	}
+
+	model, _ = model.updateDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	output = model.renderDeleteAtWidth(80)
+	for _, want := range []string{
+		"[x] force delete local branch",
+		"Not merged into main.",
+		"git branch -D feature",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("checked unmerged delete dialog missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestOpenDeleteShowsDirtyWarningInSingleModal(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature", Status: gitdata.StatusCounts{Modified: 1}, BranchMergedToMain: true},
+	})
+
+	model, _ = model.openDelete()
+
+	if model.deleteDialog.stage != deleteStageOptions {
+		t.Fatalf("delete stage = %v, want options", model.deleteDialog.stage)
+	}
+	if model.deleteDialog.deleteWorktree {
+		t.Fatal("dirty worktree should default worktree removal off")
+	}
+	if model.deleteDialog.deleteBranch {
+		t.Fatal("dirty worktree should keep branch deletion off until worktree removal is enabled")
+	}
+	output := model.renderDeleteAtWidth(80)
+	for _, want := range []string{
+		"Path:",
+		"Branch:",
+		"PR:",
+		"Uncommitted changes will be discarded when removing the worktree.",
+		"~ modified 1",
+		"[ ] remove worktree",
+		"    No worktree command will run.",
+		"disabled",
+		"    Enable worktree removal first",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("dirty delete dialog missing %q:\n%s", want, output)
+		}
+	}
+
+	model, cmd := model.updateDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+
+	if cmd != nil {
+		t.Fatalf("disabled branch toggle returned command, want nil")
+	}
+	if model.deleteDialog.error != "enable worktree removal before deleting the branch" {
+		t.Fatalf("disabled branch toggle error = %q", model.deleteDialog.error)
+	}
+
+	model, _ = model.updateDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	if !model.deleteDialog.deleteWorktree {
+		t.Fatal("t should enable worktree removal")
+	}
+	if !model.deleteDialog.deleteBranch {
+		t.Fatal("enabling a dirty merged worktree should default branch deletion on")
+	}
+	output = model.renderDeleteAtWidth(80)
+	for _, want := range []string{
+		"[x] remove worktree",
+		"git worktree remove --force",
+		"[x] delete local branch",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("enabled dirty delete dialog missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestPrunableDeleteOmitsBranchControls(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/missing", Branch: "stale", Prunable: true, PruneReason: "directory missing"},
+	})
+
+	model, _ = model.openDelete()
+
+	if model.deleteDialog.stage != deleteStagePrune {
+		t.Fatalf("delete stage = %v, want prune", model.deleteDialog.stage)
+	}
+	output := model.renderDeleteAtWidth(80)
+	for _, want := range []string{"[x] prune missing worktree metadata", "Reason: directory missing", "Enter", "prune"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("prunable delete dialog missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"delete local branch", "[ ]", "b toggle", "Force"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("prunable delete dialog should not contain %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestDetachedDeleteShowsDetachedBranchMetadataWithoutBranchControls(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/detached", Head: "abcdef123456", Detached: true},
+	})
+
+	model, _ = model.openDelete()
+
+	output := model.renderDeleteAtWidth(80)
+	for _, want := range []string{"Branch:", "abcdef1 detached", "[x] remove worktree"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("detached delete dialog missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"delete local branch", "force delete local branch", "b toggle"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("detached delete dialog should not contain %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestLockedDeleteShowsBlockingModal(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/locked", Branch: "locked", Locked: true, LockReason: "manual lock"},
+	})
+
+	model, _ = model.openDelete()
+
+	if model.deleteDialog == nil || model.deleteDialog.stage != deleteStageLocked {
+		t.Fatalf("delete dialog = %+v, want locked stage", model.deleteDialog)
+	}
+	output := model.renderDeleteAtWidth(80)
+	for _, want := range []string{"Cannot delete locked worktree.", "Unlock this worktree", "Reason: manual lock"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("locked delete dialog missing %q:\n%s", want, output)
+		}
+	}
+
+	model, cmd := model.updateDelete(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd != nil {
+		t.Fatalf("locked Enter returned command, want nil")
+	}
+	if model.loading != "" {
+		t.Fatalf("locked Enter should not start deletion, loading = %q", model.loading)
+	}
+}
+
+func TestDeleteRowPrunableOnlyPrunes(t *testing.T) {
+	runner := &recordingRunner{}
+	row := gitdata.Worktree{Path: "/repo/missing", Branch: "stale", Prunable: true}
+	dialog := deleteDialog{stage: deleteStagePrune, deleteBranch: true}
+
+	err := deleteRow(context.Background(), gitdata.Repository{Root: "/repo/main"}, row, dialog, runner)
+
+	if err != nil {
+		t.Fatalf("deleteRow() error = %v", err)
+	}
+	want := []string{"/repo/main|git worktree prune"}
+	if got := strings.Join(runner.commands, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("commands = %v, want %v", runner.commands, want)
+	}
+}
+
+func TestDeleteRowUsesSafeBranchDeleteForMergedBranch(t *testing.T) {
+	runner := &recordingRunner{}
+	row := gitdata.Worktree{Path: "/repo/feature", Branch: "feature", BranchMergedToMain: true}
+	dialog := deleteDialog{stage: deleteStageOptions, deleteWorktree: true, deleteBranch: true}
+
+	err := deleteRow(context.Background(), gitdata.Repository{Root: "/repo/main"}, row, dialog, runner)
+
+	if err != nil {
+		t.Fatalf("deleteRow() error = %v", err)
+	}
+	want := []string{
+		"/repo/main|git worktree remove /repo/feature",
+		"/repo/main|git branch -d feature",
+	}
+	if got := strings.Join(runner.commands, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("commands = %v, want %v", runner.commands, want)
+	}
+}
+
+func TestDeleteRowDoesNotDeleteBranchWhenWorktreeRemovalIsOff(t *testing.T) {
+	runner := &recordingRunner{}
+	row := gitdata.Worktree{Path: "/repo/feature", Branch: "feature", BranchMergedToMain: true}
+	dialog := deleteDialog{stage: deleteStageOptions, deleteWorktree: false, deleteBranch: true}
+
+	err := deleteRow(context.Background(), gitdata.Repository{Root: "/repo/main"}, row, dialog, runner)
+
+	if err != nil {
+		t.Fatalf("deleteRow() error = %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("commands = %v, want none when worktree removal is off", runner.commands)
+	}
+}
+
+func TestDeleteRowUsesForceBranchDeleteForUnmergedBranch(t *testing.T) {
+	runner := &recordingRunner{}
+	row := gitdata.Worktree{Path: "/repo/feature", Branch: "feature"}
+	dialog := deleteDialog{stage: deleteStageOptions, deleteWorktree: true, deleteBranch: true}
+
+	err := deleteRow(context.Background(), gitdata.Repository{Root: "/repo/main"}, row, dialog, runner)
+
+	if err != nil {
+		t.Fatalf("deleteRow() error = %v", err)
+	}
+	want := []string{
+		"/repo/main|git worktree remove /repo/feature",
+		"/repo/main|git branch -D feature",
+	}
+	if got := strings.Join(runner.commands, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("commands = %v, want %v", runner.commands, want)
+	}
+}
+
 func TestLoadConfigIfChangedReloadsModifiedConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(`path_template = "{repo_parent}/old/{branch}"`), 0600); err != nil {
@@ -764,6 +1209,92 @@ func TestConfigReloadedMessageUpdatesCreatePathPreview(t *testing.T) {
 	output := model.renderCreateAtWidth(120)
 	if !strings.Contains(output, ".worktrees/git-treehouse/feature-login") {
 		t.Fatalf("renderCreateAtWidth() should use reloaded path template:\n%s", output)
+	}
+}
+
+func TestPullRequestLoadStoresSessionCache(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	pullRequests := map[string]gitdata.PullRequest{
+		"feature": {Number: 42, State: "○", CI: "✓"},
+	}
+
+	updated, _ := updateModel(t, model, prLoadedMsg{pullRequests: pullRequests, enabled: true})
+
+	if !updated.showPR {
+		t.Fatal("PR load should show PR column")
+	}
+	if updated.prCacheRepoRoot != "/repo/main" || updated.prCache["feature"].Number != 42 {
+		t.Fatalf("PR cache = root %q data %+v, want feature #42", updated.prCacheRepoRoot, updated.prCache)
+	}
+	if updated.state.Rows[0].PR == nil || updated.state.Rows[0].PR.Number != 42 {
+		t.Fatalf("row PR = %+v, want #42", updated.state.Rows[0].PR)
+	}
+}
+
+func TestReloadAppliesSessionPullRequestCache(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.prCacheRepoRoot = "/repo/main"
+	model.prCache = map[string]gitdata.PullRequest{
+		"feature": {Number: 42, State: "○"},
+	}
+	nextState := gitdata.State{
+		Repo: gitdata.Repository{Root: "/repo/main", ActiveWorktree: "/repo/main"},
+		Rows: []gitdata.Worktree{{Path: "/repo/feature", Branch: "feature"}},
+	}
+
+	updated, _ := updateModel(t, model, reloadMsg{state: nextState})
+
+	if updated.state.Rows[0].PR == nil || updated.state.Rows[0].PR.Number != 42 {
+		t.Fatalf("cached PR was not attached after reload: %+v", updated.state.Rows[0].PR)
+	}
+	if !updated.showPR {
+		t.Fatal("cached PR should keep PR column visible")
+	}
+}
+
+func TestDisabledPullRequestLoadKeepsExistingCache(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.prCacheRepoRoot = "/repo/main"
+	model.prCache = map[string]gitdata.PullRequest{
+		"feature": {Number: 42, State: "○"},
+	}
+
+	updated, _ := updateModel(t, model, prLoadedMsg{enabled: false})
+
+	if updated.state.Rows[0].PR == nil || updated.state.Rows[0].PR.Number != 42 {
+		t.Fatalf("disabled PR load should reuse cache, got %+v", updated.state.Rows[0].PR)
+	}
+	if !updated.showPR {
+		t.Fatal("disabled PR load with cache should keep PR column visible")
+	}
+}
+
+func TestDiskUsagePathsPrioritizeVisibleRows(t *testing.T) {
+	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/one", Branch: "one"},
+		{Path: "/repo/prunable", Branch: "prunable", Prunable: true},
+		{Path: "/repo/visible", Branch: "visible"},
+		{Path: "/repo/loaded", Branch: "loaded", SizeLoaded: true},
+		{Path: "/repo/background", Branch: "background"},
+	})
+	model.width = 80
+	model.height = 6
+	model.selected = 2
+
+	visible, background := model.diskUsagePaths(now)
+
+	if got := strings.Join(visible, ","); got != "/repo/visible" {
+		t.Fatalf("visible disk paths = %q, want /repo/visible", got)
+	}
+	if got := strings.Join(background, ","); got != "/repo/one,/repo/background" {
+		t.Fatalf("background disk paths = %q, want /repo/one,/repo/background", got)
 	}
 }
 
@@ -867,6 +1398,10 @@ func TestAutoRefreshSkipsBlockedStates(t *testing.T) {
 		{
 			name:  "delete dialog",
 			model: Model{refreshID: 7, deleteDialog: &deleteDialog{}},
+		},
+		{
+			name:  "command palette",
+			model: Model{refreshID: 7, paletteDialog: &paletteDialog{}},
 		},
 	}
 
