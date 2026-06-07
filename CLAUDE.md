@@ -28,6 +28,8 @@ go run ./cmd/git-treehouse init zsh
 
 Releases: GoReleaser on `v*` tags builds `git-treehouse` + `gth` binaries and publishes a Homebrew cask to `schovi/homebrew-tap`.
 
+For every release, update `CHANGELOG.md` before tagging. The new changelog entry and the GitHub release body must describe the same final state. Commit the changelog update with the release changes before creating the version tag or publishing the GitHub release.
+
 When finishing committed work or creating a version tag, merge the final commit to `main` before reporting done. Prefer a fast-forward merge. For releases, validate the branch first, fast-forward `main`, switch to `main`, create the tag there, then verify `main` contains the tagged commit. Do not report a version as ready while the tag exists only on a feature branch.
 
 ## Agent Harness

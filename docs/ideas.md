@@ -40,7 +40,3 @@ Backlog notes for future `git-treehouse` releases. These are intentionally light
 
 - Add `--repo <path>` for explicit repo selection.
 - Add `--sort age|branch|status|size`.
-
-## Distribution
-
-- Add `CHANGELOG.md`.
