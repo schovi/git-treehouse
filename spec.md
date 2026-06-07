@@ -112,10 +112,11 @@ Instant app frame, async enrichment:
 1. **Synchronous (must be <50ms):** repository resolution plus one `git worktree list --porcelain`. The app frame renders immediately. Worktree rows may stay in a loading skeleton until local metadata is ready enough to sort consistently.
 2. **Async, streamed in as each resolves:** local metadata (dirty status, remote/main ahead-behind from already-fetched refs, commit + age), PR + CI data via `gh`, and size data. Pending cells and detail fields show a subtle `⋯`.
 3. **Size data:** the table uses a fast Git-aware size from `git ls-files --cached --others --exclude-standard`. The selected-row detail panel may additionally load full filesystem size with a cancellable `du`-equivalent walk.
-4. **No `git fetch` on startup.** Ahead/behind reflects the last fetch. The TUI reloads local skeleton state every 30 seconds while idle; `r` triggers `git fetch --prune`, then one skeleton reload and async enrichment.
+4. **No `git fetch` on startup.** Ahead/behind reflects the last fetch. The TUI reloads local state every 30 seconds while idle; `r` triggers `git fetch --prune`, then loads local metadata before swapping the table so the existing rows stay visible during refresh.
 
 Each async result patches its cell in place; no full-table flicker.
 Stale async results are ignored after reloads. PR data is cached for the current TUI session and refreshed less often than local Git state. Remote-configured repositories reserve the PR column from the first render. Reloads immediately reattach last-known PR data while a fresh `gh` lookup runs, so the PR column does not flicker away.
+Manual refresh shows scoped feedback in the Worktrees title: an 80ms Braille spinner with `refreshing` while in flight, then `✓ refreshed` for about 3 seconds. Auto-refresh stays quiet.
 
 ### 3.8 Detail panel, local hints, and status bar
 
@@ -123,7 +124,7 @@ Below the table:
 
 - **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. In normal mode this shows `h root · a active · Tab filter: <state> · s search`. With an active filter, it also shows `Esc clear filter`. While searching, letter keys feed the live search input, so the footer shows `search <text>▌ · Esc clear · Tab filter: <state>`.
 - **Detail panel:** full info for the selected row: branch name, explicit `HEAD`, root/current state, absolute path, full status counts, Git-aware and full size when loaded, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes. Root/current context appears next to the Details title, for example `Details · Current root repository`; selected-row actions live in the bottom border: `↵ go · o editor · d delete · y abs path · p PR`.
-- **Status bar:** transient progress and flash messages only. The app frame title starts with `Git treehouse · <repo>`. The top controls show `n new`, refresh age, help, and quit. During async loading the status bar appends a small progress note (`fetching PRs…`).
+- **Status bar:** transient progress and flash messages only. The app frame title starts with `Git treehouse · <repo>`. The top controls show `n new`, refresh age, help, and quit. Table-scoped refresh feedback lives in the Worktrees title instead of the status bar.
 - **Help overlay:** groups shortcuts by context (`Global`, `Worktree List`, `Worktree Detail`) and groups visual legends (`Worktree Markers`, `Git Status`, `Pull Requests`). Category headers are bold white. The row-state and PR legends live here instead of the status bar.
 - `g/G` remains available and documented in help, but is not shown in the main view.
 
@@ -144,7 +145,7 @@ Below the table:
 | `o` | Open selected worktree in editor (config → `$EDITOR` fallback); TUI stays open |
 | `p` | Open selected row's PR in browser (`gh pr view --web`); no PR → open repo page for the branch |
 | `y` | Copy selected worktree's absolute path to clipboard; brief `copied` flash in status bar |
-| `r` | `git fetch --prune` + full reload of all rows |
+| `r` | `git fetch --prune` + stable refresh of all rows |
 | `h` | Jump to the root repository worktree |
 | `a` | Jump to the active worktree |
 | `s` | Fuzzy branch search |

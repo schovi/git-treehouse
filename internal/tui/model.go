@@ -25,34 +25,39 @@ import (
 )
 
 type Model struct {
-	state             gitdata.State
-	config            config.Config
-	runner            gitdata.Runner
-	width             int
-	height            int
-	selected          int
-	filter            worktreeFilter
-	searching         bool
-	search            textinput.Model
-	help              bool
-	loading           string
-	flash             string
-	flashID           int
-	showPR            bool
-	prLoading         bool
-	prCache           map[string]gitdata.PullRequest
-	prCacheRepoRoot   string
-	prLastCheckedAt   time.Time
-	selectedPath      string
-	createDialog      *createDialog
-	deleteDialog      *deleteDialog
-	paletteDialog     *paletteDialog
-	lastRefreshAt     time.Time
-	refreshInFlight   bool
-	refreshID         int
-	enrichmentID      int
-	enrichmentContext context.Context
-	enrichmentCancel  context.CancelFunc
+	state                  gitdata.State
+	config                 config.Config
+	runner                 gitdata.Runner
+	width                  int
+	height                 int
+	selected               int
+	filter                 worktreeFilter
+	searching              bool
+	search                 textinput.Model
+	help                   bool
+	loading                string
+	flash                  string
+	flashID                int
+	showPR                 bool
+	prLoading              bool
+	prCache                map[string]gitdata.PullRequest
+	prCacheRepoRoot        string
+	prLastCheckedAt        time.Time
+	selectedPath           string
+	createDialog           *createDialog
+	deleteDialog           *deleteDialog
+	paletteDialog          *paletteDialog
+	lastRefreshAt          time.Time
+	refreshInFlight        bool
+	refreshID              int
+	refreshAnchor          selectionAnchor
+	refreshProgressVisible bool
+	refreshSpinnerFrame    int
+	refreshFlash           string
+	refreshFlashID         int
+	enrichmentID           int
+	enrichmentContext      context.Context
+	enrichmentCancel       context.CancelFunc
 }
 
 var (
@@ -77,14 +82,20 @@ var (
 	hintStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	helpCategoryStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
 	statusMessageStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	refreshActivityStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	refreshSuccessStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 )
 
 const (
 	autoRefreshInterval = 30 * time.Second
 	clockTickInterval   = time.Second
+	refreshTickInterval = 80 * time.Millisecond
+	refreshFlashTimeout = 3 * time.Second
 	prRefreshTTL        = 5 * time.Minute
 	appTitle            = "Git treehouse"
 )
+
+var refreshSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 type createDialog struct {
 	input     textinput.Model
@@ -178,9 +189,17 @@ type clearFlashMsg struct {
 	id int
 }
 
+type clearRefreshFlashMsg struct {
+	id int
+}
+
 type autoRefreshMsg struct{}
 
 type clockTickMsg struct{}
+
+type refreshSpinnerTickMsg struct {
+	id int
+}
 
 type selectionAnchor struct {
 	path   string
@@ -387,11 +406,18 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if message.automatic && !model.canApplyAutoRefresh() {
 			model.refreshInFlight = false
+			model.refreshAnchor = selectionAnchor{}
+			model.refreshProgressVisible = false
 			return model, nil
 		}
-		anchor := model.selectionAnchor()
+		anchor := model.refreshAnchor
+		if anchor == (selectionAnchor{}) {
+			anchor = model.selectionAnchor()
+		}
 		model.loading = ""
 		model.refreshInFlight = false
+		model.refreshAnchor = selectionAnchor{}
+		model.refreshProgressVisible = false
 		if message.err != nil {
 			if message.automatic {
 				return model, nil
@@ -408,7 +434,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.automatic {
 			return model, enrichmentCmd
 		}
-		model, flashCmd := model.setFlash("reloaded")
+		model, flashCmd := model.setRefreshFlash("✓ refreshed")
 		return model, tea.Batch(enrichmentCmd, flashCmd)
 	case createMsg:
 		model.loading = ""
@@ -464,10 +490,21 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.flash = ""
 		}
 		return model, nil
+	case clearRefreshFlashMsg:
+		if message.id == model.refreshFlashID {
+			model.refreshFlash = ""
+		}
+		return model, nil
 	case autoRefreshMsg:
 		return model.updateAutoRefresh()
 	case clockTickMsg:
 		return model, clockTickCmd(model.lastRefreshAt)
+	case refreshSpinnerTickMsg:
+		if message.id != model.refreshID || !model.refreshInFlight || !model.refreshProgressVisible {
+			return model, nil
+		}
+		model.refreshSpinnerFrame = (model.refreshSpinnerFrame + 1) % len(refreshSpinnerFrames)
+		return model, refreshSpinnerTickCmd(model.refreshID)
 	case tea.KeyMsg:
 		if model.createDialog != nil {
 			return model.updateCreate(message)
@@ -566,11 +603,7 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		return model, copyPathCmd(row.Path)
 	case "r":
-		model.loading = "fetching…"
-		model = model.cancelEnrichment()
-		model.refreshID++
-		model.refreshInFlight = true
-		return model, reloadCmd(model.reloadCwd(), model.config, model.runner, model.state.Repo, true, false, model.refreshID)
+		return model.startRefresh(true, false)
 	case "s":
 		model.searching = true
 		model.search.Focus()
@@ -580,15 +613,31 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 	return model, nil
 }
 
+func (model Model) startRefresh(fetch, automatic bool) (Model, tea.Cmd) {
+	if model.refreshInFlight {
+		return model, nil
+	}
+	model = model.cancelEnrichment()
+	model.refreshID++
+	model.refreshInFlight = true
+	model.refreshAnchor = model.selectionAnchor()
+	model.refreshProgressVisible = !automatic
+	model.refreshSpinnerFrame = 0
+	model.refreshFlash = ""
+	model.refreshFlashID++
+	commands := []tea.Cmd{reloadCmd(model.reloadCwd(), model.config, model.runner, model.state.Repo, fetch, automatic, model.refreshID)}
+	if model.refreshProgressVisible {
+		commands = append(commands, refreshSpinnerTickCmd(model.refreshID))
+	}
+	return model, tea.Batch(commands...)
+}
+
 func (model Model) updateAutoRefresh() (Model, tea.Cmd) {
 	nextTick := autoRefreshTickCmd()
 	if !model.canAutoRefresh() {
 		return model, nextTick
 	}
-	model.refreshID++
-	model.refreshInFlight = true
-	model = model.cancelEnrichment()
-	refreshCmd := reloadCmd(model.reloadCwd(), model.config, model.runner, model.state.Repo, false, true, model.refreshID)
+	model, refreshCmd := model.startRefresh(false, true)
 	return model, tea.Batch(nextTick, refreshCmd)
 }
 
@@ -717,11 +766,7 @@ func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
 		}
 		return model, copyPathCmd(row.Path)
 	case paletteRefresh:
-		model.loading = "fetching…"
-		model = model.cancelEnrichment()
-		model.refreshID++
-		model.refreshInFlight = true
-		return model, reloadCmd(model.reloadCwd(), model.config, model.runner, model.state.Repo, true, false, model.refreshID)
+		return model.startRefresh(true, false)
 	case paletteSearch:
 		model.searching = true
 		return model, model.search.Focus()
@@ -1041,7 +1086,7 @@ func (model Model) View() string {
 	}
 	parts := []string{
 		model.appTopLine(rowCount, outerWidth),
-		model.wrapOuter(sectionBoxWithFooter("Worktrees", lines, model.listFooterHints(), panelWidth), outerWidth),
+		model.wrapOuter(sectionBoxWithFooterTopRight("Worktrees", lines, model.listFooterHints(), model.worktreesFeedback(), panelWidth), outerWidth),
 	}
 	if detail != "" {
 		parts = append(parts, model.wrapOuter(sectionBoxWithFooter(detailTitle(detailRow), strings.Split(detail, "\n"), detailFooterHints(panelWidth), panelWidth), outerWidth))
@@ -1530,12 +1575,16 @@ func (model Model) wrapOuter(content string, width int) string {
 }
 
 func sectionBoxWithFooter(title string, bodyLines []string, footer string, width int) string {
+	return sectionBoxWithFooterTopRight(title, bodyLines, footer, "", width)
+}
+
+func sectionBoxWithFooterTopRight(title string, bodyLines []string, footer, topRight string, width int) string {
 	if width < 4 {
 		return strings.Join(bodyLines, "\n")
 	}
 	innerWidth := width - 2
 	lines := make([]string, 0, len(bodyLines)+2)
-	lines = append(lines, sectionTopLine(title, width))
+	lines = append(lines, sectionTopLineWithRight(title, topRight, width))
 	for _, line := range bodyLines {
 		lines = append(lines, panelBorderStyle.Render("│")+padStyled(line, innerWidth)+panelBorderStyle.Render("│"))
 	}
@@ -1544,6 +1593,10 @@ func sectionBoxWithFooter(title string, bodyLines []string, footer string, width
 }
 
 func sectionTopLine(title string, width int) string {
+	return sectionTopLineWithRight(title, "", width)
+}
+
+func sectionTopLineWithRight(title, right string, width int) string {
 	innerWidth := width - 2
 	label := ""
 	if title != "" {
@@ -1551,6 +1604,20 @@ func sectionTopLine(title string, width int) string {
 		label = " " + renderSectionTitle(title, labelWidth) + " "
 	}
 	labelWidth := lipgloss.Width(label)
+	rightLabel := ""
+	if right != "" {
+		candidate := " " + right + " "
+		if lipgloss.Width(candidate) <= width-labelWidth-5 {
+			rightLabel = candidate
+		}
+	}
+	if rightLabel != "" {
+		ruleWidth := width - 4 - labelWidth - lipgloss.Width(rightLabel)
+		if ruleWidth < 1 {
+			ruleWidth = 1
+		}
+		return panelBorderStyle.Render("╭─") + panelTitleStyle.Render(label) + panelBorderStyle.Render(strings.Repeat("─", ruleWidth)) + rightLabel + panelBorderStyle.Render("─╮")
+	}
 	ruleWidth := innerWidth - 1 - labelWidth
 	if ruleWidth < 0 {
 		ruleWidth = 0
@@ -1685,6 +1752,17 @@ func (model Model) listFooterHints() string {
 		return "h root · a active · Tab filter: " + model.filter.label() + " · Esc clear filter · s search"
 	}
 	return "h root · a active · Tab filter: " + model.filter.label() + " · s search"
+}
+
+func (model Model) worktreesFeedback() string {
+	if model.refreshInFlight && model.refreshProgressVisible {
+		frame := refreshSpinnerFrames[model.refreshSpinnerFrame%len(refreshSpinnerFrames)]
+		return refreshActivityStyle.Render(frame + " refreshing")
+	}
+	if model.refreshFlash != "" {
+		return refreshSuccessStyle.Render(model.refreshFlash)
+	}
+	return ""
 }
 
 func joinPartsWithin(parts []string, width int) string {
@@ -1862,6 +1940,12 @@ func clockTickCmd(lastRefreshAt time.Time) tea.Cmd {
 	})
 }
 
+func refreshSpinnerTickCmd(id int) tea.Cmd {
+	return tea.Tick(refreshTickInterval, func(time.Time) tea.Msg {
+		return refreshSpinnerTickMsg{id: id}
+	})
+}
+
 func nextClockTickDelay(lastRefreshAt, now time.Time) time.Duration {
 	if lastRefreshAt.IsZero() {
 		return time.Minute
@@ -1895,6 +1979,15 @@ func (model Model) setFlash(text string) (Model, tea.Cmd) {
 	id := model.flashID
 	return model, tea.Tick(2200*time.Millisecond, func(time.Time) tea.Msg {
 		return clearFlashMsg{id: id}
+	})
+}
+
+func (model Model) setRefreshFlash(text string) (Model, tea.Cmd) {
+	model.refreshFlashID++
+	model.refreshFlash = text
+	id := model.refreshFlashID
+	return model, tea.Tick(refreshFlashTimeout, func(time.Time) tea.Msg {
+		return clearRefreshFlashMsg{id: id}
 	})
 }
 
@@ -2922,6 +3015,9 @@ func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo git
 			}
 		}
 		state, err := gitdata.LoadSkeleton(ctx, cwd, config, runner)
+		if err == nil {
+			state, err = gitdata.EnrichLocalMetadata(ctx, state, runner)
+		}
 		return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), state: state, err: err}
 	}
 }

@@ -366,6 +366,18 @@ func TestRefreshAgeText(t *testing.T) {
 	}
 }
 
+func TestRefreshSpinnerPattern(t *testing.T) {
+	if refreshTickInterval != 80*time.Millisecond {
+		t.Fatalf("refresh tick interval = %s, want 80ms", refreshTickInterval)
+	}
+	if got := strings.Join(refreshSpinnerFrames, ""); got != "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" {
+		t.Fatalf("refresh spinner frames = %q", got)
+	}
+	if refreshFlashTimeout != 3*time.Second {
+		t.Fatalf("refresh flash timeout = %s, want 3s", refreshFlashTimeout)
+	}
+}
+
 func TestAppControlsDropRefreshAgeBeforeCoreControls(t *testing.T) {
 	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 	model := Model{lastRefreshAt: now.Add(-12 * time.Second)}
@@ -429,15 +441,55 @@ func TestStatusBarIsEmptyWithoutTransientStatus(t *testing.T) {
 }
 
 func TestStatusBarShowsLoadingStatus(t *testing.T) {
-	model := Model{width: 180, loading: "fetching…"}
+	model := Model{width: 180, loading: "creating…"}
 
 	output := model.statusBar()
 
-	if !strings.Contains(output, "fetching…") {
+	if !strings.Contains(output, "creating…") {
 		t.Fatalf("statusBar() missing loading status:\n%s", output)
 	}
 	if strings.Contains(output, "Esc") {
 		t.Fatalf("statusBar() should not show Esc in default frame:\n%s", output)
+	}
+}
+
+func TestViewRendersRefreshFeedbackInWorktreesTitle(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+	})
+	model.width = 120
+	model.height = 16
+	model.refreshInFlight = true
+	model.refreshProgressVisible = true
+
+	output := model.View()
+
+	if !strings.Contains(output, "Worktrees") || !strings.Contains(output, "⠋ refreshing") {
+		t.Fatalf("View() should show refresh feedback in Worktrees title:\n%s", output)
+	}
+	if strings.Contains(output, "Loading worktrees") {
+		t.Fatalf("View() should keep the current table during refresh:\n%s", output)
+	}
+	if strings.Contains(model.statusBar(), "refreshing") {
+		t.Fatalf("statusBar() should not contain table-scoped refresh feedback:\n%s", model.statusBar())
+	}
+}
+
+func TestViewRendersRefreshSuccessInWorktreesTitle(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+	})
+	model.width = 120
+	model.height = 16
+	model.refreshFlash = "✓ refreshed"
+
+	output := model.View()
+
+	if !strings.Contains(output, "Worktrees") || !strings.Contains(output, "✓ refreshed") {
+		t.Fatalf("View() should show refresh success in Worktrees title:\n%s", output)
+	}
+	if strings.Contains(output, "reloaded") {
+		t.Fatalf("View() should not render the old reload copy:\n%s", output)
 	}
 }
 
@@ -1767,7 +1819,7 @@ func TestDiskUsagePathsPrioritizeVisibleRows(t *testing.T) {
 	}
 }
 
-func TestReloadCommandFetchesBeforeSingleSkeletonLoad(t *testing.T) {
+func TestReloadCommandFetchesBeforeStableRefreshLoad(t *testing.T) {
 	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
 	runner := &recordingRunner{results: map[string]recordingResult{
 		"/repo/main|git fetch --prune":                                     {},
@@ -1792,13 +1844,13 @@ func TestReloadCommandFetchesBeforeSingleSkeletonLoad(t *testing.T) {
 	if len(runner.commands) == 0 || runner.commands[0] != "/repo/main|git fetch --prune" {
 		t.Fatalf("first command = %q, want fetch: %v", runner.commands[0], runner.commands)
 	}
+	if len(message.state.Rows) != 1 || !message.state.Rows[0].LocalMetadataLoaded {
+		t.Fatalf("reloadCmd should return stable local metadata: %+v", message.state.Rows)
+	}
 	worktreeListCalls := 0
 	for _, command := range runner.commands {
 		if strings.Contains(command, "git worktree list --porcelain") {
 			worktreeListCalls++
-		}
-		if strings.Contains(command, "git status --porcelain") {
-			t.Fatalf("reloadCmd should load only skeleton state, commands: %v", runner.commands)
 		}
 	}
 	if worktreeListCalls != 1 {
@@ -1910,7 +1962,7 @@ func TestAutoRefreshSkipsBlockedStates(t *testing.T) {
 		},
 		{
 			name:  "loading",
-			model: Model{refreshID: 7, loading: "fetching…"},
+			model: Model{refreshID: 7, loading: "creating…"},
 		},
 		{
 			name:  "searching",
@@ -1967,8 +2019,76 @@ func TestAutoRefreshStartsWhenIdle(t *testing.T) {
 	if !updated.refreshInFlight {
 		t.Fatal("auto refresh should mark refreshInFlight")
 	}
+	if updated.refreshProgressVisible {
+		t.Fatal("auto refresh should not show manual progress feedback")
+	}
 	if cmd == nil {
 		t.Fatal("auto refresh should schedule the next tick and reload command")
+	}
+}
+
+func TestManualRefreshIgnoresRepeatedKeyWhileInFlight(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main"},
+	})
+	model.refreshID = 7
+	model.refreshInFlight = true
+
+	updated, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+
+	if updated.refreshID != 7 {
+		t.Fatalf("repeated refresh changed refreshID = %d, want 7", updated.refreshID)
+	}
+	if !updated.refreshInFlight {
+		t.Fatal("repeated refresh should keep existing refresh in flight")
+	}
+	if cmd != nil {
+		t.Fatalf("repeated refresh returned command: %v", cmd)
+	}
+}
+
+func TestManualRefreshRestoresSelectedWorktreeAfterReorder(t *testing.T) {
+	completedAt := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main"},
+		{Path: "/repo/docs", Branch: "docs"},
+		{Path: "/repo/login", Branch: "login"},
+	})
+	model.selected = 1
+
+	started, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd == nil {
+		t.Fatal("manual refresh should start reload and spinner commands")
+	}
+	if !started.refreshProgressVisible {
+		t.Fatal("manual refresh should show progress feedback")
+	}
+	if started.refreshAnchor.path != "/repo/docs" {
+		t.Fatalf("refresh anchor path = %q, want selected docs worktree", started.refreshAnchor.path)
+	}
+
+	updated, _ := updateModel(t, started, reloadMsg{
+		id:          started.refreshID,
+		completedAt: completedAt,
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/main", ActiveWorktree: "/repo/main"},
+			Rows: []gitdata.Worktree{
+				{Path: "/repo/login", Branch: "login", LocalMetadataLoaded: true},
+				{Path: "/repo/main", Branch: "main", LocalMetadataLoaded: true},
+				{Path: "/repo/docs", Branch: "docs", LocalMetadataLoaded: true},
+			},
+		},
+	})
+
+	row, ok := updated.selectedRow()
+	if !ok || row.Path != "/repo/docs" {
+		t.Fatalf("selected row = %+v, want docs worktree", row)
+	}
+	if updated.refreshFlash != "✓ refreshed" {
+		t.Fatalf("refresh flash = %q, want refreshed badge", updated.refreshFlash)
+	}
+	if updated.flash != "" {
+		t.Fatalf("manual refresh should not use generic flash, got %q", updated.flash)
 	}
 }
 
@@ -2013,12 +2133,11 @@ func TestAutoReloadSuccessUpdatesTimestampWithoutFlash(t *testing.T) {
 	}
 }
 
-func TestManualReloadSuccessFlashes(t *testing.T) {
+func TestManualReloadSuccessShowsRefreshBadge(t *testing.T) {
 	completedAt := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 	model := Model{
 		refreshID:       4,
 		refreshInFlight: true,
-		loading:         "fetching…",
 		state: gitdata.State{
 			Repo: gitdata.Repository{Root: "/repo/old", ActiveWorktree: "/repo/old"},
 		},
@@ -2032,8 +2151,11 @@ func TestManualReloadSuccessFlashes(t *testing.T) {
 		},
 	})
 
-	if updated.flash != "reloaded" {
-		t.Fatalf("manual reload flash = %q, want reloaded", updated.flash)
+	if updated.refreshFlash != "✓ refreshed" {
+		t.Fatalf("manual reload refresh flash = %q, want refreshed", updated.refreshFlash)
+	}
+	if updated.flash != "" {
+		t.Fatalf("manual reload should not use generic flash, got %q", updated.flash)
 	}
 	if updated.loading != "" {
 		t.Fatalf("manual reload should clear loading, got %q", updated.loading)
@@ -2054,7 +2176,6 @@ func TestStaleReloadMessageIsIgnored(t *testing.T) {
 	model := Model{
 		refreshID:       4,
 		refreshInFlight: true,
-		loading:         "fetching…",
 		lastRefreshAt:   lastRefreshAt,
 		state: gitdata.State{
 			Repo: gitdata.Repository{Root: "/repo/current", ActiveWorktree: "/repo/current"},
@@ -2078,7 +2199,7 @@ func TestStaleReloadMessageIsIgnored(t *testing.T) {
 	if !updated.refreshInFlight {
 		t.Fatal("stale reload should not clear the current in-flight refresh")
 	}
-	if updated.loading != "fetching…" {
+	if updated.loading != "" {
 		t.Fatalf("stale reload changed loading = %q", updated.loading)
 	}
 	if cmd != nil {
