@@ -14,10 +14,6 @@ Backlog notes for future `git-treehouse` releases. These are intentionally light
 - Add a clearer stale-worktree hint for clean, merged, upstream-gone branches.
 - Show absolute path in a help/detail overlay without changing the default relative path.
 
-## Navigation
-
-- Add jump shortcuts for next dirty, next prunable, next upstream-gone row.
-
 ## Create Flow
 
 - Offer branch prefix shortcuts such as `fix/`, `feat/`, and `chore/`.
