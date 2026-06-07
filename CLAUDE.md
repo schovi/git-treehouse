@@ -28,6 +28,8 @@ go run ./cmd/git-treehouse init zsh
 
 Releases: GoReleaser on `v*` tags builds `git-treehouse` + `gth` binaries and publishes a Homebrew cask to `schovi/homebrew-tap`.
 
+When finishing committed work or creating a version tag, merge the final commit to `main` before reporting done. Prefer a fast-forward merge. For releases, verify that `main` contains the tagged commit so the version is not left only on a feature branch.
+
 ## Architecture
 
 ### The cd-on-exit mechanism (central design decision)
