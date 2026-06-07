@@ -28,7 +28,18 @@ go run ./cmd/git-treehouse init zsh
 
 Releases: GoReleaser on `v*` tags builds `git-treehouse` + `gth` binaries and publishes a Homebrew cask to `schovi/homebrew-tap`.
 
-When finishing committed work or creating a version tag, merge the final commit to `main` before reporting done. Prefer a fast-forward merge. For releases, verify that `main` contains the tagged commit so the version is not left only on a feature branch.
+When finishing committed work or creating a version tag, merge the final commit to `main` before reporting done. Prefer a fast-forward merge. For releases, validate the branch first, fast-forward `main`, switch to `main`, create the tag there, then verify `main` contains the tagged commit. Do not report a version as ready while the tag exists only on a feature branch.
+
+## Agent Harness
+
+See `docs/harness.md` for the failure modes behind these rules.
+
+- Treat `spec.md` visual rules as test contracts. Width and string-presence checks are not enough for styled terminal output.
+- When changing Lip Gloss styling, selected rows, borders, or overlays, add regression tests that inspect ANSI/SGR state or border geometry. Cover marker and no-marker rows, plus narrow and wide widths when layout changes.
+- Force the Lip Gloss color profile inside tests that assert ANSI output, then restore the previous profile.
+- Similar UI states must share one renderer. Do not hand-assemble sibling blocks, such as Worktree and Branch sections, through separate append paths.
+- Dangerous Git actions must state the command family and data-loss effect in the dialog. Keep dependencies explicit: branch deletion is disabled unless worktree removal is enabled because the branch is checked out there.
+- Defaults stay conservative: dirty worktree removal off, unmerged branch deletion off, merged branch deletion safe via `git branch -d`.
 
 ## Architecture
 
