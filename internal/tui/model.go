@@ -50,12 +50,12 @@ type Model struct {
 }
 
 var (
-	separatorStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	appBorderStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("65"))
 	panelBorderStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	panelTitleStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
 	titleNameStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
 	titleRepoStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	titleSeparatorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	titleMetaStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	flashStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("58"))
 	paletteSelectedStyle  = lipgloss.NewStyle().Background(lipgloss.Color("62"))
@@ -75,7 +75,7 @@ var (
 const (
 	autoRefreshInterval = 30 * time.Second
 	clockTickInterval   = time.Second
-	appTitle            = "treehouse"
+	appTitle            = "Git treehouse"
 )
 
 type createDialog struct {
@@ -967,7 +967,7 @@ func (model Model) View() string {
 		model.wrapOuter(sectionBoxWithFooter("Worktrees", lines, model.listFooterHints(), panelWidth), outerWidth),
 	}
 	if detail != "" {
-		parts = append(parts, model.wrapOuter(sectionBox("Details", strings.Split(detail, "\n"), panelWidth), outerWidth))
+		parts = append(parts, model.wrapOuter(sectionBoxWithFooter(detailTitle(selectedRow), strings.Split(detail, "\n"), detailFooterHints(panelWidth), panelWidth), outerWidth))
 	}
 	if model.flash != "" {
 		parts = append(parts, model.wrapOuter(model.flashLineAtWidth(panelWidth), outerWidth))
@@ -1041,60 +1041,35 @@ func (model Model) detailPanel(row gitdata.Worktree, now time.Time) string {
 }
 
 func (model Model) detailPanelAtWidth(row gitdata.Worktree, now time.Time, width int) string {
-	if width < 72 {
-		return model.selectedInspectorAtWidth(row, now, width)
-	}
-	leftWidth := width * 55 / 100
-	leftWidth = clamp(leftWidth, 34, width-34)
-	rightWidth := width - leftWidth - 3
-	leftLines := strings.Split(model.selectedInspectorAtWidth(row, now, leftWidth), "\n")
-	rightLines := keybindingLines(row, rightWidth)
-	lineCount := max(len(leftLines), len(rightLines))
-	lines := make([]string, 0, lineCount)
-	divider := separatorStyle.Render("│")
-	for index := 0; index < lineCount; index++ {
-		left := ""
-		right := ""
-		if index < len(leftLines) {
-			left = leftLines[index]
-		}
-		if index < len(rightLines) {
-			right = rightLines[index]
-		}
-		lines = append(lines, padStyled(left, leftWidth)+" "+divider+" "+padStyled(right, rightWidth))
-	}
-	return strings.Join(lines, "\n")
+	return model.selectedInspectorAtWidth(row, now, width)
 }
 
-func keybindingLines(row gitdata.Worktree, width int) []string {
-	items := []string{
-		selectionContextText(row),
-		"↵ go",
-		"o editor",
-		"d delete",
-		"y abs path",
-		"p PR",
+func detailTitle(row gitdata.Worktree) string {
+	context := selectionContextTitle(row)
+	if context == "" {
+		return "Details"
 	}
-	lines := make([]string, 0, len(items))
-	for index, item := range items {
-		lines = append(lines, padStyled(keybindText(item, width, index == 0), width))
-	}
-	return lines
+	return "Details · " + context
 }
 
-func keybindText(value string, width int, heading bool) string {
-	if value == "" || width <= 0 {
-		return ""
-	}
-	if heading {
-		return inspectorLabelStyle.Bold(true).Render(truncatePlain(value, width))
-	}
-	key, rest, found := strings.Cut(value, " ")
+func renderSectionTitle(title string, width int) string {
+	name, detail, found := strings.Cut(title, " · ")
 	if !found {
-		return keyStyle.Render(truncatePlain(value, width))
+		return panelTitleStyle.Render(truncatePlain(title, width))
 	}
-	visibleRestWidth := max(0, width-runewidth.StringWidth(key)-1)
-	return keyStyle.Render(key) + hintStyle.Render(" "+truncatePlain(rest, visibleRestWidth))
+	separator := titleSeparatorStyle.Render(" · ")
+	nameWidth := runewidth.StringWidth(name)
+	detailWidth := max(0, width-nameWidth-lipgloss.Width(separator))
+	if detailWidth <= 0 {
+		return panelTitleStyle.Render(truncatePlain(name, width))
+	}
+	return panelTitleStyle.Render(name) + separator + titleRepoStyle.Render(truncatePlain(detail, detailWidth))
+}
+
+func detailFooterHints(width int) string {
+	actionParts := []string{"↵ go", "o editor", "d delete", "y abs path", "p PR"}
+	availableWidth := max(0, width-5)
+	return joinPartsWithin(actionParts, availableWidth)
 }
 
 func renderDirtyDetailValue(value string) string {
@@ -1241,7 +1216,7 @@ func (model Model) mainText(row gitdata.Worktree) string {
 	return state + " vs local " + model.state.Repo.MainBranch
 }
 
-func selectionContextText(row gitdata.Worktree) string {
+func selectionContextTitle(row gitdata.Worktree) string {
 	switch {
 	case row.IsActive && row.IsMain:
 		return "Current root repository"
@@ -1250,7 +1225,7 @@ func selectionContextText(row gitdata.Worktree) string {
 	case row.IsMain:
 		return "Root repository"
 	default:
-		return "Actions"
+		return ""
 	}
 }
 
@@ -1436,10 +1411,6 @@ func (model Model) wrapOuter(content string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func sectionBox(title string, bodyLines []string, width int) string {
-	return sectionBoxWithFooter(title, bodyLines, "", width)
-}
-
 func sectionBoxWithFooter(title string, bodyLines []string, footer string, width int) string {
 	if width < 4 {
 		return strings.Join(bodyLines, "\n")
@@ -1458,10 +1429,10 @@ func sectionTopLine(title string, width int) string {
 	innerWidth := width - 2
 	label := ""
 	if title != "" {
-		label = " " + title + " "
-		label = truncatePlain(label, max(0, innerWidth-1))
+		labelWidth := max(0, innerWidth-3)
+		label = " " + renderSectionTitle(title, labelWidth) + " "
 	}
-	labelWidth := runewidth.StringWidth(label)
+	labelWidth := lipgloss.Width(label)
 	ruleWidth := innerWidth - 1 - labelWidth
 	if ruleWidth < 0 {
 		ruleWidth = 0
@@ -1474,7 +1445,7 @@ func sectionBottomLine(footer string, width int) string {
 	if footer == "" {
 		return panelBorderStyle.Render("╰" + strings.Repeat("─", innerWidth) + "╯")
 	}
-	maxLabelWidth := max(0, innerWidth-1)
+	maxLabelWidth := max(0, innerWidth-3)
 	footer = truncatePlain(footer, maxLabelWidth)
 	label := " " + colorKeyHints(footer, false) + " "
 	labelWidth := lipgloss.Width(label)
@@ -1684,36 +1655,37 @@ func (model Model) titleLeftContentAtWidth(visibleCount, width int) string {
 	if width <= runewidth.StringWidth(appTitle) {
 		return titleNameStyle.Render(truncatePlain(appTitle, width))
 	}
-	staticWidth := runewidth.StringWidth(appTitle+"  ") + runewidth.StringWidth("  ") + runewidth.StringWidth(count)
+	title := titleNameStyle.Render(appTitle)
+	separator := titleSeparatorStyle.Render(" · ")
+	titleAndSeparatorWidth := runewidth.StringWidth(appTitle) + lipgloss.Width(separator)
+	staticWidth := titleAndSeparatorWidth + runewidth.StringWidth("  ") + runewidth.StringWidth(count)
 	if rootBranch != "" {
 		staticWidth += runewidth.StringWidth("  root: ")
 	}
 	repoWidth := width - staticWidth
 	if repoWidth < 4 {
-		compactWidth := width - runewidth.StringWidth(appTitle+"  ") - runewidth.StringWidth(count)
+		compactWidth := width - titleAndSeparatorWidth - runewidth.StringWidth(count)
 		if compactWidth >= 0 {
-			title := titleNameStyle.Render(appTitle)
 			meta := titleMetaStyle.Render(count)
-			return title + "  " + meta
+			return title + separator + meta
 		}
-		repoWidth = width - runewidth.StringWidth(appTitle+"  ")
+		repoWidth = width - titleAndSeparatorWidth
 		if repoWidth <= 0 {
 			return titleNameStyle.Render(truncatePlain(appTitle, width))
 		}
-		return titleNameStyle.Render(appTitle) + "  " + titleRepoStyle.Render(truncatePlain(repoName, repoWidth))
+		return title + separator + titleRepoStyle.Render(truncatePlain(repoName, repoWidth))
 	}
 	repoName = truncatePlain(repoName, repoWidth)
-	title := titleNameStyle.Render(appTitle)
 	repo := titleRepoStyle.Render(repoName)
 	meta := titleMetaStyle.Render(count)
 	if rootBranch == "" {
-		return title + "  " + repo + "  " + meta
+		return title + separator + repo + "  " + meta
 	}
-	rootWidth := width - lipgloss.Width(title+"  "+repo+"  "+meta+"  "+titleMetaStyle.Render("root: "))
+	rootWidth := width - lipgloss.Width(title+separator+repo+"  "+meta+"  "+titleMetaStyle.Render("root: "))
 	if rootWidth < 3 {
-		return title + "  " + repo + "  " + meta
+		return title + separator + repo + "  " + meta
 	}
-	return title + "  " + repo + "  " + meta + "  " + titleMetaStyle.Render("root: ") + titleRepoStyle.Render(truncatePlain(rootBranch, rootWidth))
+	return title + separator + repo + "  " + meta + "  " + titleMetaStyle.Render("root: ") + titleRepoStyle.Render(truncatePlain(rootBranch, rootWidth))
 }
 
 func (model Model) rootBranchTitle() string {

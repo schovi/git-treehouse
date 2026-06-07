@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	appconfig "github.com/schovi/git-treehouse/internal/config"
 	"github.com/schovi/git-treehouse/internal/gitdata"
@@ -111,7 +112,7 @@ func TestSelectedInspectorKeepsDirtyFieldForCleanRows(t *testing.T) {
 	}
 }
 
-func TestDetailPanelSplitsInspectorAndKeybindings(t *testing.T) {
+func TestDetailPanelRendersInspectorOnly(t *testing.T) {
 	model := Model{
 		width: 100,
 		state: gitdata.State{
@@ -130,14 +131,108 @@ func TestDetailPanelSplitsInspectorAndKeybindings(t *testing.T) {
 
 	output := model.detailPanel(row, time.Now())
 
-	for _, want := range []string{"Branch", "main", "│", "Current", "↵", "go", "o", "editor", "d", "delete", "y", "abs path", "p", "PR", "Dirty", "none"} {
+	for _, want := range []string{"Branch", "main", "Dirty", "none", "Remote", "no upstream", "PR", "Delete"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("detailPanel() missing %q:\n%s", want, output)
 		}
 	}
-	for _, unwanted := range []string{"? help", "q quit", "s search", "g/G top/bottom", "Esc close/clear", "r refresh", "n new", "h root", "m main", "a active", "Tab special", "Tab notable", "Tab filter"} {
+	for _, unwanted := range []string{"│", "Current", "↵", "o editor", "y abs path", "p PR", "? help", "q quit", "s search", "g/G top/bottom", "Esc close/clear", "r refresh", "n new", "h root", "m main", "a active", "Tab special", "Tab notable", "Tab filter"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("detailPanel() should not contain app control %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestDetailTitleIncludesSelectionContext(t *testing.T) {
+	tests := []struct {
+		name string
+		row  gitdata.Worktree
+		want string
+	}{
+		{name: "current root", row: gitdata.Worktree{IsActive: true, IsMain: true}, want: "Details · Current root repository"},
+		{name: "current worktree", row: gitdata.Worktree{IsActive: true}, want: "Details · Current worktree"},
+		{name: "root", row: gitdata.Worktree{IsMain: true}, want: "Details · Root repository"},
+		{name: "regular", row: gitdata.Worktree{}, want: "Details"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := detailTitle(test.row); got != test.want {
+				t.Fatalf("detailTitle() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSectionTopLineStylesTitleSuffix(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previousProfile)
+	})
+
+	output := sectionTopLine("Details · Current worktree", 80)
+
+	for _, want := range []string{
+		panelTitleStyle.Render("Details"),
+		titleSeparatorStyle.Render(" · "),
+		titleRepoStyle.Render("Current worktree"),
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("sectionTopLine() missing styled title part %q:\n%s", want, output)
+		}
+	}
+	if width := lipgloss.Width(output); width != 80 {
+		t.Fatalf("sectionTopLine() width = %d, want 80:\n%s", width, output)
+	}
+}
+
+func TestViewRendersDetailActionsInDetailsFooter(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+	})
+	model.width = 100
+	model.height = 24
+
+	output := model.View()
+	footerLine := ""
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "↵") && strings.Contains(line, "go") {
+			footerLine = line
+			break
+		}
+	}
+
+	if footerLine == "" {
+		t.Fatalf("View() should render detail actions in the Details footer:\n%s", output)
+	}
+	for _, want := range []string{"╰─", "↵", "go", "o", "editor", "d", "delete", "y", "abs path", "p", "PR", "╯"} {
+		if !strings.Contains(footerLine, want) {
+			t.Fatalf("Details footer missing %q:\n%s", want, footerLine)
+		}
+	}
+	for _, unwanted := range []string{"Current", "root repository", "Root repository"} {
+		if strings.Contains(footerLine, unwanted) {
+			t.Fatalf("Details footer should not contain selected-row context %q:\n%s", unwanted, footerLine)
+		}
+	}
+	if width := lipgloss.Width(footerLine); width != model.width {
+		t.Fatalf("Details footer width = %d, want %d:\n%s", width, model.width, footerLine)
+	}
+
+	titleLine := ""
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "Details") {
+			titleLine = line
+			break
+		}
+	}
+	if titleLine == "" {
+		t.Fatalf("View() should render a Details title line:\n%s", output)
+	}
+	for _, want := range []string{"Details", "Current", "root repository"} {
+		if !strings.Contains(titleLine, want) {
+			t.Fatalf("Details title missing %q:\n%s", want, titleLine)
 		}
 	}
 }
@@ -155,9 +250,36 @@ func TestTitleLineIncludesHelpAndQuit(t *testing.T) {
 
 	output := model.titleContentAtWidthAtTime(1, model.width, now)
 
-	for _, want := range []string{"treehouse", "main", "1 worktrees", "root:", "n", "new", "r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
+	for _, want := range []string{"Git treehouse", " · ", "main", "1 worktrees", "root:", "n", "new", "r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("titleLine() missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestTitleLineStylesNameSeparatorAndRepo(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previousProfile)
+	})
+
+	model := Model{
+		state: gitdata.State{
+			Repo: gitdata.Repository{Root: "/repo/git-treehouse"},
+			Rows: []gitdata.Worktree{{Branch: "main", IsMain: true}},
+		},
+	}
+
+	output := model.titleLeftContentAtWidth(1, 100)
+
+	for _, want := range []string{
+		titleNameStyle.Render("Git treehouse"),
+		titleSeparatorStyle.Render(" · "),
+		titleRepoStyle.Render("git-treehouse"),
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("titleLeftContentAtWidth() missing styled title part %q:\n%s", want, output)
 		}
 	}
 }
@@ -219,7 +341,7 @@ func TestAppTopLineIncludesRefreshAgeWhenWide(t *testing.T) {
 
 	output := model.appTopLineAtTime(1, 120, now)
 
-	for _, want := range []string{"╭─", "treehouse", "r", "refresh", "12 seconds ago", "─╮"} {
+	for _, want := range []string{"╭─", "Git treehouse", " · ", "r", "refresh", "12 seconds ago", "─╮"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("appTopLineAtTime() missing %q:\n%s", want, output)
 		}
@@ -528,7 +650,7 @@ func TestViewRendersBoxedAppSections(t *testing.T) {
 
 	output := model.View()
 
-	for _, want := range []string{"treehouse", "Worktrees", "Details", "╭─", "╰", "Current", "h", "root", "a", "active", "Tab", "filter:", "s", "search", " · "} {
+	for _, want := range []string{"Git treehouse", "Worktrees", "Details", "╭─", "╰", "Current", "h", "root", "a", "active", "Tab", "filter:", "s", "search", " · "} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("View() missing boxed app element %q:\n%s", want, output)
 		}
@@ -754,6 +876,17 @@ func TestDialogBottomLineKeepsRightBorderRuleAfterHints(t *testing.T) {
 	}
 	if strings.Contains(line, "     "+appBorderStyle.Render("─╯")) {
 		t.Fatalf("dialogBottomLine() should not leave blank padding before the right corner:\n%s", line)
+	}
+}
+
+func TestSectionBottomLineKeepsWidthWithLongFooter(t *testing.T) {
+	line := sectionBottomLine("↵ go · o editor · d delete · y abs path · p PR", 32)
+
+	if width := lipgloss.Width(line); width != 32 {
+		t.Fatalf("sectionBottomLine() width = %d, want 32:\n%s", width, line)
+	}
+	if !strings.Contains(line, "╰─") || !strings.Contains(line, "╯") {
+		t.Fatalf("sectionBottomLine() should keep bottom border geometry:\n%s", line)
 	}
 }
 
@@ -1352,7 +1485,7 @@ func TestAppTopLineFitsWidth(t *testing.T) {
 
 	output := model.appTopLine(1, 80)
 
-	for _, want := range []string{"╭─", "treehouse", "─╮"} {
+	for _, want := range []string{"╭─", "Git treehouse", " · ", "─╮"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("appTopLine() missing %q:\n%s", want, output)
 		}

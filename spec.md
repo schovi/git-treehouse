@@ -120,8 +120,8 @@ PR data is cached for the current TUI session. Reloads immediately reattach last
 Below the table:
 
 - **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. In normal mode this shows `h root · a active · Tab filter: <state> · s search`. While searching, letter keys feed the live search input, so the footer shows `search <text>▌ · Esc clear · Tab filter: <state>`.
-- **Detail panel:** full info for the selected row: branch name, explicit `HEAD`, root/current state, absolute path, full status counts, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes.
-- **Status bar:** context-sensitive global hints, e.g. `Esc close/clear`, plus the row-state legend. The top controls show `n new`, refresh age, help, and quit. During async loading the status bar appends a small progress note (`fetching PRs…`).
+- **Detail panel:** full info for the selected row: branch name, explicit `HEAD`, root/current state, absolute path, full status counts, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes. Root/current context appears next to the Details title, for example `Details · Current root repository`; selected-row actions live in the bottom border: `↵ go · o editor · d delete · y abs path · p PR`.
+- **Status bar:** context-sensitive global hints, e.g. `Esc close/clear`, plus the row-state legend. The app frame title starts with `Git treehouse · <repo>`. The top controls show `n new`, refresh age, help, and quit. During async loading the status bar appends a small progress note (`fetching PRs…`).
 - `g/G` remains available and documented in help, but is not shown in the main view.
 
 ### 3.9 Sorting, search, and filtering
