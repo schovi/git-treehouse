@@ -1216,9 +1216,9 @@ func TestCenteredOverlayPreservesBackgroundOutsidePopupHalo(t *testing.T) {
 	}
 }
 
-func TestCenteredOverlayClearsVerticalPopupHalo(t *testing.T) {
+func TestCenteredOverlayPreservesBackgroundAboveAndBelowPopup(t *testing.T) {
 	output := centeredOverlay("aaaaaaaaaa\nbbbbbbbbbb\ncccccccccc", "XX", 10, 3)
-	want := "aaa    aaa\nbbb XX bbb\nccc    ccc"
+	want := "aaaaaaaaaa\nbbb XX bbb\ncccccccccc"
 
 	if output != want {
 		t.Fatalf("centeredOverlay() = %q, want %q", output, want)

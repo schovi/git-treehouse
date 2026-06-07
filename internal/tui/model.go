@@ -2720,8 +2720,8 @@ func centeredOverlay(base, popup string, width, height int) string {
 	}
 	top := max(0, (height-len(popupLines))/2)
 	left := max(0, (width-popupWidth)/2)
-	haloTop := max(0, top-1)
-	haloBottom := min(height, top+len(popupLines)+1)
+	haloTop := top
+	haloBottom := min(height, top+len(popupLines))
 	haloLeft := max(0, left-1)
 	haloRight := min(width, left+popupWidth+1)
 	for index := haloTop; index < haloBottom; index++ {
