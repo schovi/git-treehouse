@@ -4,6 +4,30 @@ Release notes for Git Treehouse.
 
 Dates use the GitHub release publication date for published releases. Entries without a GitHub release use the annotated tag date.
 
+## v0.6.0 - 2026-06-08
+
+### New Features
+
+#### Command Help
+
+`git-treehouse help`, `git-treehouse help list`, `git-treehouse help init`, and `git-treehouse help doctor` now print command-specific help. Root and subcommands also accept `-h` and `--help`.
+
+#### Explicit Repository Selection
+
+`git-treehouse`, `git-treehouse list`, and `git-treehouse doctor` can now load a repository or worktree path with `--repo <path>`, including `~` expansion.
+
+#### Shell Integration Install Targets
+
+The first-run installer now installs Fish, Nushell, and PowerShell integration into dedicated autoload or module files: `~/.config/fish/functions/gth.fish`, `~/.config/nushell/autoload/gth.nu`, and the `GitTreehouse` PowerShell module. Existing legacy profile installs are still detected.
+
+### Bug Fixes
+
+- Tightened modal overlay spacing so background content above and below centered popups is preserved.
+
+### Documentation
+
+- Added the project changelog.
+
 ## v0.5.0 - 2026-06-07
 
 ### New Features
