@@ -229,7 +229,7 @@ func TestViewRendersDetailActionsInDetailsFooter(t *testing.T) {
 			t.Fatalf("Details footer missing %q:\n%s", want, footerLine)
 		}
 	}
-	for _, unwanted := range []string{"Current", "root repository", "Root repository"} {
+	for _, unwanted := range []string{"n new worktree", "Current", "root repository", "Root repository"} {
 		if strings.Contains(footerLine, unwanted) {
 			t.Fatalf("Details footer should not contain selected-row context %q:\n%s", unwanted, footerLine)
 		}
@@ -255,6 +255,35 @@ func TestViewRendersDetailActionsInDetailsFooter(t *testing.T) {
 	}
 }
 
+func TestViewRendersNewWorktreeActionInWorktreesFooter(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+	})
+	model.width = 120
+	model.height = 24
+
+	output := ansi.Strip(model.View())
+	footerLine := ""
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "n new worktree") && strings.Contains(line, "h root") {
+			footerLine = line
+			break
+		}
+	}
+
+	if footerLine == "" {
+		t.Fatalf("View() should render new action and navigation controls in the Worktrees footer:\n%s", output)
+	}
+	newIndex := strings.Index(footerLine, "n new worktree")
+	rootIndex := strings.Index(footerLine, "h root")
+	if newIndex < 0 || rootIndex < 0 || newIndex >= rootIndex {
+		t.Fatalf("Worktrees footer should place new action before right navigation controls:\n%s", footerLine)
+	}
+	if !strings.Contains(footerLine[newIndex:rootIndex], "─") {
+		t.Fatalf("Worktrees footer should visually separate collection and navigation controls:\n%s", footerLine)
+	}
+}
+
 func TestViewRendersBranchDetailActionsInDetailsFooter(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
@@ -267,7 +296,7 @@ func TestViewRendersBranchDetailActionsInDetailsFooter(t *testing.T) {
 	output := model.View()
 	footerLine := ""
 	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, "↵") && strings.Contains(line, "checkout") {
+		if strings.Contains(line, "↵") && strings.Contains(line, "create+go") {
 			footerLine = line
 			break
 		}
@@ -276,12 +305,12 @@ func TestViewRendersBranchDetailActionsInDetailsFooter(t *testing.T) {
 	if footerLine == "" {
 		t.Fatalf("View() should render branch detail actions in the Details footer:\n%s", output)
 	}
-	for _, want := range []string{"╰─", "↵", "checkout", "n", "new from branch", "d", "delete", "y", "name", "p", "PR", "╯"} {
+	for _, want := range []string{"╰─", "↵", "create+go", "c", "checkout root", "d", "delete", "y", "name", "p", "PR", "╯"} {
 		if !strings.Contains(footerLine, want) {
 			t.Fatalf("Branch Details footer missing %q:\n%s", want, footerLine)
 		}
 	}
-	for _, unwanted := range []string{"o editor", "abs path"} {
+	for _, unwanted := range []string{"n new worktree", "o editor", "abs path"} {
 		if strings.Contains(footerLine, unwanted) {
 			t.Fatalf("Branch Details footer should not contain %q:\n%s", unwanted, footerLine)
 		}
@@ -342,9 +371,14 @@ func TestTitleLineIncludesHelpAndQuit(t *testing.T) {
 
 	output := model.titleContentAtWidthAtTime(1, model.width, now)
 
-	for _, want := range []string{"Git treehouse", " · ", "main", "1 worktrees", "root:", "n", "new", "r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
+	for _, want := range []string{"Git treehouse", " · ", "main", "1 worktrees", "root:", "r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("titleLine() missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"n new"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("titleLine() should not contain contextual action %q:\n%s", unwanted, output)
 		}
 	}
 }
@@ -416,10 +450,13 @@ func TestAppControlsDropRefreshAgeBeforeCoreControls(t *testing.T) {
 	model := Model{lastRefreshAt: now.Add(-12 * time.Second)}
 
 	wide := model.appControlsAtWidthAtTime(80, now)
-	for _, want := range []string{"n", "new", "r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
+	for _, want := range []string{"r", "refresh", "12 seconds ago", "?", "help", "q", "quit"} {
 		if !strings.Contains(wide, want) {
 			t.Fatalf("wide controls missing %q:\n%s", want, wide)
 		}
+	}
+	if strings.Contains(wide, "n new") {
+		t.Fatalf("wide controls should not contain contextual new action:\n%s", wide)
 	}
 
 	narrow := model.appControlsAtWidthAtTime(40, now)
@@ -725,7 +762,7 @@ func TestBTogglePersistsBranchVisibilitySetting(t *testing.T) {
 	}
 }
 
-func TestEnterOnBranchRowOpensCheckoutDialog(t *testing.T) {
+func TestEnterOnBranchRowOpensBranchWorktreeDialog(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main", IsMain: true},
 	})
@@ -737,14 +774,123 @@ func TestEnterOnBranchRowOpensCheckoutDialog(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("Enter on branch returned a command, want nil")
 	}
+	if model.branchWorktreeDialog == nil {
+		t.Fatal("Enter on branch should open branch worktree dialog")
+	}
+	if model.branchWorktreeDialog.branch.Name != "feature/branch" {
+		t.Fatalf("branch worktree branch = %q, want feature/branch", model.branchWorktreeDialog.branch.Name)
+	}
+	if model.branchWorktreeDialog.path != "/repo/.worktrees/main/feature-branch" {
+		t.Fatalf("branch worktree path = %q, want default branch path", model.branchWorktreeDialog.path)
+	}
+}
+
+func TestCOnBranchRowChecksOutRootWhenRootIsClean(t *testing.T) {
+	runner := &recordingRunner{}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.runner = runner
+	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
+	model.filter = filterBranches
+
+	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+
+	if cmd == nil {
+		t.Fatal("c on branch returned nil command")
+	}
+	if model.loading != "checking out…" {
+		t.Fatalf("loading = %q, want checking out…", model.loading)
+	}
+	if model.checkoutDialog != nil || model.branchWorktreeDialog != nil {
+		t.Fatal("clean root checkout should not open a dialog")
+	}
+	message := cmd().(checkoutMsg)
+	if message.err != nil {
+		t.Fatalf("checkout command error = %v", message.err)
+	}
+	if message.path != "/repo/main" {
+		t.Fatalf("checkout path = %q, want root path", message.path)
+	}
+	if len(runner.commands) != 1 || runner.commands[0] != "/repo/main|git switch -- feature/branch" {
+		t.Fatalf("commands = %v, want git switch in root", runner.commands)
+	}
+}
+
+func TestCOnBranchRowShowsDirtyRootCheckoutDialog(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, Status: gitdata.StatusCounts{Modified: 1}},
+	})
+	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
+	model.filter = filterBranches
+
+	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+
+	if cmd != nil {
+		t.Fatalf("dirty root checkout returned command, want nil")
+	}
 	if model.checkoutDialog == nil {
-		t.Fatal("Enter on branch should open checkout dialog")
+		t.Fatal("c on branch with dirty root should open checkout dialog")
 	}
-	if model.checkoutDialog.branch.Name != "feature/branch" {
-		t.Fatalf("checkout branch = %q, want feature/branch", model.checkoutDialog.branch.Name)
+	output := ansi.Strip(model.renderCheckoutAtWidth(100))
+	for _, want := range []string{"Checkout root", "Branch", "feature/branch", "Root has uncommitted changes.", "~ modified 1", "s stash", "No checkout command will run."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("dirty checkout dialog missing %q:\n%s", want, output)
+		}
 	}
-	if model.checkoutDialog.path != "/repo/.worktrees/main/feature-branch" {
-		t.Fatalf("checkout path = %q, want default branch path", model.checkoutDialog.path)
+}
+
+func TestDirtyRootCheckoutRequiresStashBeforeEnter(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+	model.checkoutDialog = &checkoutDialog{
+		branch: gitdata.Branch{Name: "feature/branch"},
+		root:   gitdata.Worktree{Path: "/repo/main", Branch: "main", Status: gitdata.StatusCounts{Modified: 1}},
+	}
+
+	model, cmd := model.updateCheckout(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd != nil {
+		t.Fatalf("Enter without stash returned command, want nil")
+	}
+	if model.checkoutDialog.error != "enable stash before checking out" {
+		t.Fatalf("checkout dialog error = %q, want stash prompt", model.checkoutDialog.error)
+	}
+}
+
+func TestDirtyRootCheckoutStashesThenSwitches(t *testing.T) {
+	runner := &recordingRunner{}
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+	model.runner = runner
+	model.checkoutDialog = &checkoutDialog{
+		branch: gitdata.Branch{Name: "feature/branch"},
+		root:   gitdata.Worktree{Path: "/repo/main", Branch: "main", Status: gitdata.StatusCounts{Modified: 1}},
+	}
+
+	model, cmd := model.updateCheckout(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if cmd != nil {
+		t.Fatalf("stash toggle returned command, want nil")
+	}
+	model, cmd = model.updateCheckout(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if model.loading != "checking out…" {
+		t.Fatalf("loading = %q, want checking out…", model.loading)
+	}
+	if cmd == nil {
+		t.Fatal("Enter with stash returned nil command")
+	}
+	message := cmd().(checkoutMsg)
+	if message.err != nil {
+		t.Fatalf("checkout command error = %v", message.err)
+	}
+	if message.path != "/repo/main" {
+		t.Fatalf("checkout path = %q, want root path", message.path)
+	}
+	want := []string{
+		"/repo/main|git stash push -u -m git-treehouse: before switching to feature/branch",
+		"/repo/main|git switch -- feature/branch",
+	}
+	if got := strings.Join(runner.commands, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("commands = %v, want stash then switch", runner.commands)
 	}
 }
 
@@ -767,18 +913,38 @@ func TestSelectedCopyTextUsesBranchNameForBranchRows(t *testing.T) {
 	}
 }
 
-func TestCheckoutDialogAddsExistingBranchWorktree(t *testing.T) {
+func TestNOnBranchRowShowsEnterHint(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
+	model.filter = filterBranches
+
+	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+
+	if model.branchWorktreeDialog != nil {
+		t.Fatal("n on branch should not open branch worktree dialog")
+	}
+	if model.flash != "press Enter to create a worktree for this branch" {
+		t.Fatalf("flash = %q, want branch Enter hint", model.flash)
+	}
+	if cmd == nil {
+		t.Fatal("n on branch should return flash timeout command")
+	}
+}
+
+func TestBranchWorktreeDialogAddsExistingBranchWorktree(t *testing.T) {
 	runner := &recordingRunner{results: map[string]recordingResult{
 		"/repo/main|git worktree add /repo/.worktrees/main/feature-branch feature/branch": {},
 	}}
 	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
 	model.runner = runner
-	model.checkoutDialog = &checkoutDialog{
+	model.branchWorktreeDialog = &branchWorktreeDialog{
 		branch: gitdata.Branch{Name: "feature/branch"},
 		path:   "/repo/.worktrees/main/feature-branch",
 	}
 
-	model, cmd := model.updateCheckout(tea.KeyMsg{Type: tea.KeyEnter})
+	model, cmd := model.updateBranchWorktree(tea.KeyMsg{Type: tea.KeyEnter})
 
 	if model.loading != "creating…" {
 		t.Fatalf("loading = %q, want creating…", model.loading)
@@ -1143,7 +1309,8 @@ func TestHelpRendersGroupedKeysAndLegends(t *testing.T) {
 		"Esc close/cancel",
 		"top/bottom",
 		"b branches",
-		"Enter go/checkout",
+		"Enter go/create",
+		"c checkout root",
 		"PR/branch",
 		"▣ worktree",
 		"⑂ branch",
@@ -2312,6 +2479,14 @@ func TestAutoRefreshSkipsBlockedStates(t *testing.T) {
 		{
 			name:  "create dialog",
 			model: Model{refreshID: 7, createDialog: &createDialog{}},
+		},
+		{
+			name:  "checkout dialog",
+			model: Model{refreshID: 7, checkoutDialog: &checkoutDialog{}},
+		},
+		{
+			name:  "branch worktree dialog",
+			model: Model{refreshID: 7, branchWorktreeDialog: &branchWorktreeDialog{}},
 		},
 		{
 			name:  "delete dialog",

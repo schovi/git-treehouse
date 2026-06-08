@@ -47,6 +47,7 @@ type Model struct {
 	selectedPath           string
 	createDialog           *createDialog
 	checkoutDialog         *checkoutDialog
+	branchWorktreeDialog   *branchWorktreeDialog
 	deleteDialog           *deleteDialog
 	paletteDialog          *paletteDialog
 	lastRefreshAt          time.Time
@@ -108,6 +109,13 @@ type createDialog struct {
 }
 
 type checkoutDialog struct {
+	branch gitdata.Branch
+	root   gitdata.Worktree
+	stash  bool
+	error  string
+}
+
+type branchWorktreeDialog struct {
 	branch gitdata.Branch
 	path   string
 	error  string
@@ -280,7 +288,7 @@ type paletteCommand struct {
 }
 
 var paletteCommands = []paletteCommand{
-	{id: paletteGoSelected, title: "Go to selected worktree", shortcut: "Enter", keywords: "cd switch"},
+	{id: paletteGoSelected, title: "Go to selected row", shortcut: "Enter", keywords: "cd switch create worktree branch"},
 	{id: paletteCreate, title: "Create worktree", shortcut: "n", keywords: "new branch"},
 	{id: paletteDelete, title: "Delete selected row", shortcut: "d", keywords: "remove prune branch"},
 	{id: paletteOpenEditor, title: "Open in editor", shortcut: "o", keywords: "code cursor"},
@@ -479,6 +487,10 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.err != nil {
 			if model.checkoutDialog != nil {
 				model.checkoutDialog.error = message.err.Error()
+			} else if model.branchWorktreeDialog != nil {
+				model.branchWorktreeDialog.error = message.err.Error()
+			} else {
+				return model.setFlash(message.err.Error())
 			}
 			return model, nil
 		}
@@ -562,6 +574,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if model.checkoutDialog != nil {
 			return model.updateCheckout(message)
 		}
+		if model.branchWorktreeDialog != nil {
+			return model.updateBranchWorktree(message)
+		}
 		if model.deleteDialog != nil {
 			return model.updateDelete(message)
 		}
@@ -623,7 +638,7 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 			return model, nil
 		}
 		if row.IsBranch() {
-			return model.openCheckout(row.Branch)
+			return model.openBranchWorktree(row.Branch)
 		}
 		if row.Worktree.Prunable {
 			return model.setFlash("cannot enter a prunable worktree")
@@ -635,6 +650,12 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 		return model, tea.Quit
 	case "n":
 		return model.openCreate()
+	case "c":
+		row, ok := model.selectedTableRow()
+		if !ok || !row.IsBranch() {
+			return model.setFlash("checkout root is only available for branch rows")
+		}
+		return model.openCheckoutRoot(row.Branch)
 	case "delete", "backspace", "d":
 		return model.openDelete()
 	case "o":
@@ -716,6 +737,7 @@ func (model Model) canApplyAutoRefresh() bool {
 		!model.help &&
 		model.createDialog == nil &&
 		model.checkoutDialog == nil &&
+		model.branchWorktreeDialog == nil &&
 		model.deleteDialog == nil &&
 		model.paletteDialog == nil
 }
@@ -798,7 +820,7 @@ func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
 			return model, nil
 		}
 		if row.IsBranch() {
-			return model.openCheckout(row.Branch)
+			return model.openBranchWorktree(row.Branch)
 		}
 		if row.Worktree.Prunable {
 			return model.setFlash("cannot enter a prunable worktree")
@@ -891,12 +913,10 @@ func (model Model) openCreate() (Model, tea.Cmd) {
 	if !ok || row.IsWorktree() && row.Worktree.Prunable {
 		return model.setFlash("cannot create from this row")
 	}
-	var baseRow gitdata.Worktree
 	if row.IsBranch() {
-		baseRow = gitdata.Worktree{Branch: row.Branch.Name, Head: row.Branch.Head}
-	} else {
-		baseRow = row.Worktree
+		return model.setFlash("press Enter to create a worktree for this branch")
 	}
+	baseRow := row.Worktree
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 200
@@ -910,11 +930,12 @@ func (model Model) openCreate() (Model, tea.Cmd) {
 	model.help = false
 	model.paletteDialog = nil
 	model.checkoutDialog = nil
+	model.branchWorktreeDialog = nil
 	model.createDialog = &createDialog{input: input, bases: bases}
 	return model, focusCmd
 }
 
-func (model Model) openCheckout(branch gitdata.Branch) (Model, tea.Cmd) {
+func (model Model) openBranchWorktree(branch gitdata.Branch) (Model, tea.Cmd) {
 	if branch.Name == "" {
 		return model.setFlash("cannot create worktree for this branch")
 	}
@@ -922,16 +943,17 @@ func (model Model) openCheckout(branch gitdata.Branch) (Model, tea.Cmd) {
 	model.help = false
 	model.paletteDialog = nil
 	model.createDialog = nil
+	model.checkoutDialog = nil
 	model.deleteDialog = nil
-	model.checkoutDialog = &checkoutDialog{branch: branch, path: path}
+	model.branchWorktreeDialog = &branchWorktreeDialog{branch: branch, path: path}
 	return model, nil
 }
 
-func (model Model) updateCheckout(message tea.KeyMsg) (Model, tea.Cmd) {
-	dialog := model.checkoutDialog
+func (model Model) updateBranchWorktree(message tea.KeyMsg) (Model, tea.Cmd) {
+	dialog := model.branchWorktreeDialog
 	switch message.String() {
 	case "esc":
-		model.checkoutDialog = nil
+		model.branchWorktreeDialog = nil
 		return model, nil
 	case "enter":
 		if _, err := os.Stat(dialog.path); err == nil {
@@ -945,6 +967,75 @@ func (model Model) updateCheckout(message tea.KeyMsg) (Model, tea.Cmd) {
 		}
 	}
 	return model, nil
+}
+
+func (model Model) openCheckoutRoot(branch gitdata.Branch) (Model, tea.Cmd) {
+	if branch.Name == "" {
+		return model.setFlash("cannot checkout this branch")
+	}
+	root, ok := model.rootWorktree()
+	if !ok || root.Path == "" {
+		return model.setFlash("cannot find root worktree")
+	}
+	if !root.LocalMetadataLoaded {
+		return model.setFlash("root status is still loading")
+	}
+	if root.Status.Clean() {
+		model.loading = "checking out…"
+		return model, model.checkoutRootBranchCmd(branch, root, false)
+	}
+	model.help = false
+	model.paletteDialog = nil
+	model.createDialog = nil
+	model.branchWorktreeDialog = nil
+	model.deleteDialog = nil
+	model.checkoutDialog = &checkoutDialog{branch: branch, root: root}
+	return model, nil
+}
+
+func (model Model) updateCheckout(message tea.KeyMsg) (Model, tea.Cmd) {
+	dialog := model.checkoutDialog
+	switch message.String() {
+	case "esc":
+		model.checkoutDialog = nil
+		return model, nil
+	case "s":
+		dialog.stash = !dialog.stash
+		dialog.error = ""
+		return model, nil
+	case "enter":
+		if !dialog.stash {
+			dialog.error = "enable stash before checking out"
+			return model, nil
+		}
+		model.loading = "checking out…"
+		return model, model.checkoutRootBranchCmd(dialog.branch, dialog.root, true)
+	}
+	return model, nil
+}
+
+func (model Model) checkoutRootBranchCmd(branch gitdata.Branch, root gitdata.Worktree, stash bool) tea.Cmd {
+	return func() tea.Msg {
+		if stash {
+			if err := gitdata.StashWorktreeChanges(context.Background(), root.Path, checkoutStashMessage(branch.Name), model.runner); err != nil {
+				return checkoutMsg{err: err}
+			}
+		}
+		err := gitdata.SwitchBranch(context.Background(), root.Path, branch.Name, model.runner)
+		return checkoutMsg{path: root.Path, err: err}
+	}
+}
+
+func checkoutStashMessage(branch string) string {
+	return "git-treehouse: before switching to " + branch
+}
+
+func checkoutStashCommand(branch string) string {
+	return "git stash push -u -m " + fmt.Sprintf("%q", checkoutStashMessage(branch))
+}
+
+func checkoutSwitchCommand(branch string) string {
+	return "git switch -- " + branch
 }
 
 func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
@@ -1020,6 +1111,7 @@ func (model Model) openDelete() (Model, tea.Cmd) {
 		model.paletteDialog = nil
 		model.createDialog = nil
 		model.checkoutDialog = nil
+		model.branchWorktreeDialog = nil
 		model.deleteDialog = &dialog
 		return model, nil
 	}
@@ -1050,6 +1142,7 @@ func (model Model) openDelete() (Model, tea.Cmd) {
 	model.paletteDialog = nil
 	model.createDialog = nil
 	model.checkoutDialog = nil
+	model.branchWorktreeDialog = nil
 	model.deleteDialog = &dialog
 	return model, nil
 }
@@ -1232,7 +1325,7 @@ func (model Model) View() string {
 	}
 	parts := []string{
 		model.appTopLine(rowCount, outerWidth),
-		model.wrapOuter(sectionBoxWithFooterTopRight("Worktrees", lines, model.listFooterHints(), model.worktreesFeedback(), panelWidth), outerWidth),
+		model.wrapOuter(sectionBoxWithSplitFooterTopRight("Worktrees", lines, model.listFooterLeftHints(), model.listFooterRightHints(), model.worktreesFeedback(), panelWidth), outerWidth),
 	}
 	if detail != "" {
 		parts = append(parts, model.wrapOuter(sectionBoxWithFooter(rowDetailTitle(detailRow), strings.Split(detail, "\n"), detailFooterHints(detailRow, panelWidth), panelWidth), outerWidth))
@@ -1251,6 +1344,9 @@ func (model Model) View() string {
 	}
 	if model.deleteDialog != nil {
 		output = centeredOverlay(output, model.renderDeleteAtWidth(deleteDialogWidth(outerWidth)), outerWidth, overlayHeight)
+	}
+	if model.branchWorktreeDialog != nil {
+		output = centeredOverlay(output, model.renderBranchWorktreeAtWidth(checkoutDialogWidth(outerWidth)), outerWidth, overlayHeight)
 	}
 	if model.checkoutDialog != nil {
 		output = centeredOverlay(output, model.renderCheckoutAtWidth(checkoutDialogWidth(outerWidth)), outerWidth, overlayHeight)
@@ -1350,7 +1446,7 @@ func (model Model) selectedBranchInspectorAtWidth(branch gitdata.Branch, now tim
 		model.inspectorRenderedFieldAtWidth("Main", model.branchMainText(branch), renderMainValue, width),
 		model.inspectorRenderedFieldAtWidth("Commit", branchCommitText(branch, now), renderCommitValue, width),
 		model.inspectorFieldAtWidth("PR", model.rowPRText(gitdata.Row{Kind: gitdata.RowKindBranch, Branch: branch}), inspectorValueStyle, width),
-		model.inspectorFieldAtWidth("Action", "checkout branch as worktree", inspectorCleanStyle, width),
+		model.inspectorFieldAtWidth("Action", "create worktree; checkout root with c", inspectorCleanStyle, width),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1416,7 +1512,7 @@ func renderSectionTitle(title string, width int) string {
 func detailFooterHints(row gitdata.Row, width int) string {
 	actionParts := []string{"↵ go", "o editor", "d delete", "y abs path", "p PR"}
 	if row.IsBranch() {
-		actionParts = []string{"↵ checkout", "n new from branch", "d delete", "y name", "p PR"}
+		actionParts = []string{"↵ create+go", "c checkout root", "d delete", "y name", "p PR"}
 	}
 	availableWidth := max(0, width-5)
 	return joinPartsWithin(actionParts, availableWidth)
@@ -1844,6 +1940,10 @@ func sectionBoxWithFooter(title string, bodyLines []string, footer string, width
 }
 
 func sectionBoxWithFooterTopRight(title string, bodyLines []string, footer, topRight string, width int) string {
+	return sectionBoxWithSplitFooterTopRight(title, bodyLines, footer, "", topRight, width)
+}
+
+func sectionBoxWithSplitFooterTopRight(title string, bodyLines []string, leftFooter, rightFooter, topRight string, width int) string {
 	if width < 4 {
 		return strings.Join(bodyLines, "\n")
 	}
@@ -1853,7 +1953,7 @@ func sectionBoxWithFooterTopRight(title string, bodyLines []string, footer, topR
 	for _, line := range bodyLines {
 		lines = append(lines, panelBorderStyle.Render("│")+padStyled(line, innerWidth)+panelBorderStyle.Render("│"))
 	}
-	lines = append(lines, sectionBottomLine(footer, width))
+	lines = append(lines, sectionBottomLineSplit(leftFooter, rightFooter, width))
 	return strings.Join(lines, "\n")
 }
 
@@ -1891,7 +1991,11 @@ func sectionTopLineWithRight(title, right string, width int) string {
 }
 
 func sectionBottomLine(footer string, width int) string {
-	return bottomBorderLine(width, panelBorderStyle, borderControls{parts: hintParts(footer)}, borderControls{})
+	return sectionBottomLineSplit(footer, "", width)
+}
+
+func sectionBottomLineSplit(leftFooter, rightFooter string, width int) string {
+	return bottomBorderLine(width, panelBorderStyle, borderControls{parts: hintParts(leftFooter)}, borderControls{parts: hintParts(rightFooter)})
 }
 
 type borderControls struct {
@@ -2009,13 +2113,20 @@ func (model Model) statusLeftParts() []string {
 	return nil
 }
 
-func (model Model) listFooterHints() string {
+func (model Model) listFooterLeftHints() string {
+	if model.searching {
+		return "search " + model.search.Value() + "▌"
+	}
+	return "n new worktree"
+}
+
+func (model Model) listFooterRightHints() string {
 	branchHint := "b branches"
 	if model.showBranches {
 		branchHint = "b hide branches"
 	}
 	if model.searching {
-		return "search " + model.search.Value() + "▌ · Esc clear · Tab filter: " + model.filter.label() + " · " + branchHint
+		return "Esc clear · Tab filter: " + model.filter.label() + " · " + branchHint
 	}
 	if model.filter != filterAll {
 		return "h root · a active · Tab filter: " + model.filter.label() + " · Esc clear filter · s search · " + branchHint
@@ -2157,19 +2268,15 @@ func (model Model) rootBranchTitle() string {
 
 func (model Model) appControlsAtWidthAtTime(width int, now time.Time) string {
 	refresh := refreshControlText(model.lastRefreshAt, now)
-	fullWithAge := colorKeyHints("n new · "+refresh+" · ? help · q quit", false)
+	fullWithAge := colorKeyHints(refresh+" · ? help · q quit", false)
 	if lipgloss.Width(fullWithAge) <= width {
 		return fullWithAge
 	}
-	mediumWithAge := colorKeyHints(refresh+" · ? help · q quit", false)
-	if lipgloss.Width(mediumWithAge) <= width {
-		return mediumWithAge
-	}
-	full := colorKeyHints("n new · r refresh · ? help · q quit", false)
+	full := colorKeyHints("r refresh · ? help · q quit", false)
 	if lipgloss.Width(full) <= width {
 		return full
 	}
-	medium := colorKeyHints("r refresh · ? help · q quit", false)
+	medium := colorKeyHints("r · ? help · q quit", false)
 	if lipgloss.Width(medium) <= width {
 		return medium
 	}
@@ -2501,7 +2608,6 @@ func helpKeySections() []helpSection {
 		{
 			title: "Global",
 			entries: []helpEntry{
-				{lead: "n", description: "new worktree", kind: helpEntryKey},
 				{lead: "r", description: "refresh", kind: helpEntryKey},
 				{lead: "ctrl+p", description: "commands", kind: helpEntryKey},
 				{lead: "?", description: "help", kind: helpEntryKey},
@@ -2516,6 +2622,7 @@ func helpKeySections() []helpSection {
 				{lead: "g/G", description: "top/bottom", kind: helpEntryKey},
 				{lead: "h", description: "root", kind: helpEntryKey},
 				{lead: "a", description: "active", kind: helpEntryKey},
+				{lead: "n", description: "new worktree", kind: helpEntryKey},
 				{lead: "Tab", description: "filter", kind: helpEntryKey},
 				{lead: "s", description: "search", kind: helpEntryKey},
 				{lead: "b", description: "branches", kind: helpEntryKey},
@@ -2524,7 +2631,8 @@ func helpKeySections() []helpSection {
 		{
 			title: "Worktree Detail",
 			entries: []helpEntry{
-				{lead: "Enter", description: "go/checkout", kind: helpEntryKey},
+				{lead: "Enter", description: "go/create", kind: helpEntryKey},
+				{lead: "c", description: "checkout root", kind: helpEntryKey},
 				{lead: "o", description: "editor", kind: helpEntryKey},
 				{lead: "d", description: "delete", kind: helpEntryKey},
 				{lead: "y", description: "copy", kind: helpEntryKey},
@@ -2659,13 +2767,52 @@ func (model Model) renderCheckoutAtWidth(width int) string {
 	dialog := model.checkoutDialog
 	contentWidth := max(1, width-4)
 	lines := []string{
+		dialogFieldLine("Branch", dialog.branch.DisplayBranch(), contentWidth),
+		dialogFieldLine("Root", dialog.root.Path, contentWidth),
+		dialogFieldLine("Current", dialog.root.DisplayBranch(), contentWidth),
+		"",
+		deleteDangerStyle.Render("Root has uncommitted changes."),
+		deleteDangerStyle.Render(dirtyDetailText(dialog.root.Status)),
+		"",
+	}
+	stashBlock := deleteToggleBlock{
+		title:   "Root changes",
+		key:     "s",
+		enabled: true,
+		checked: dialog.stash,
+		label:   "stash current changes",
+	}
+	if dialog.stash {
+		stashBlock.details = append(stashBlock.details, "Stash includes untracked files.")
+		stashBlock.commands = append(stashBlock.commands,
+			deleteCommand{text: checkoutStashCommand(dialog.branch.Name)},
+			deleteCommand{text: checkoutSwitchCommand(dialog.branch.Name)},
+		)
+	} else {
+		stashBlock.details = append(stashBlock.details, "Checkout is blocked until root changes are stashed.")
+		stashBlock.details = append(stashBlock.details, hintStyle.Render("No checkout command will run."))
+	}
+	lines = append(lines, renderDeleteToggleBlock(stashBlock)...)
+	if dialog.error != "" {
+		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(dialog.error))
+	}
+	for index, line := range lines {
+		lines[index] = truncateStyled(line, contentWidth)
+	}
+	return dialogBox("Checkout root", lines, checkoutDialogHintsAtWidth(dialog.stash, width-6), width)
+}
+
+func (model Model) renderBranchWorktreeAtWidth(width int) string {
+	dialog := model.branchWorktreeDialog
+	contentWidth := max(1, width-4)
+	lines := []string{
 		truncatePlain("Branch: "+dialog.branch.DisplayBranch(), contentWidth),
 		truncatePlain("Path: "+dialog.path, contentWidth),
 	}
 	if dialog.error != "" {
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(truncatePlain(dialog.error, contentWidth)))
 	}
-	return dialogBox("Checkout branch", lines, colorKeyHints("Enter create + go · Esc cancel", false), width)
+	return dialogBox("New worktree", lines, colorKeyHints("Enter create + go · Esc cancel", false), width)
 }
 
 func (model Model) renderDeleteAtWidth(width int) string {
@@ -2932,6 +3079,26 @@ func deleteDialogHintsAtWidth(content string, width int) string {
 	return ""
 }
 
+func checkoutDialogHintsAtWidth(stash bool, width int) string {
+	content := "s stash changes · Esc cancel"
+	if stash {
+		content = "Enter stash + checkout · s toggle · Esc cancel"
+	}
+	full := colorKeyHints(content, false)
+	if lipgloss.Width(full) <= width {
+		return full
+	}
+	short := "s stash · Esc"
+	if stash {
+		short = "Enter · s · Esc"
+	}
+	short = colorKeyHints(short, false)
+	if lipgloss.Width(short) <= width {
+		return short
+	}
+	return ""
+}
+
 func (model Model) renderPaletteAtWidth(width int) string {
 	dialog := model.paletteDialog
 	contentWidth := max(1, width-4)
@@ -3189,6 +3356,15 @@ func (model Model) selectedWorktree() (gitdata.Worktree, bool) {
 		return gitdata.Worktree{}, false
 	}
 	return row.Worktree, true
+}
+
+func (model Model) rootWorktree() (gitdata.Worktree, bool) {
+	for _, row := range model.state.Rows {
+		if row.IsMain || row.Path == model.state.Repo.Root || row.Path == model.state.Repo.MainWorktree {
+			return row, true
+		}
+	}
+	return gitdata.Worktree{}, false
 }
 
 func (model Model) selectedCopyText() (string, string, bool) {

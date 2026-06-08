@@ -131,9 +131,9 @@ Manual refresh shows scoped feedback in the Worktrees title: an 80ms Braille spi
 
 Below the table:
 
-- **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. In normal mode this shows `h root · a active · Tab filter: <state> · s search · b branches`. With branches visible it shows `b hide branches`. With an active filter, it also shows `Esc clear filter`. While searching, letter keys feed the live search input, so the footer shows `search <text>▌ · Esc clear · Tab filter: <state> · b branches`.
-- **Detail panel:** full info for the selected row. Worktree rows show branch name, explicit `HEAD`, root/current state, absolute path, full status counts, Git-aware and full size when loaded, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes. Branch-only rows show branch name, explicit `HEAD`, `Path: not checked out`, `Status: no worktree`, upstream/main comparison, commit, PR, and checkout action. Root/current context appears next to the Details title, for example `Details · Current root repository`; branch-only rows use `Details · Local branch`. Selected-row actions live in the bottom border: worktrees show `↵ go · o editor · d delete · y abs path · p PR`; branch-only rows show `↵ checkout · n new from branch · d delete · y name · p PR`.
-- **Status bar:** transient progress and flash messages only. The app frame title starts with `Git treehouse · <repo>`. The top controls show `n new`, refresh age, help, and quit. Table-scoped refresh feedback lives in the Worktrees title instead of the status bar.
+- **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. The left side contains collection actions. In normal mode this shows `n new worktree` on the left and `h root · a active · Tab filter: <state> · s search · b branches` on the right. With branches visible it shows `b hide branches`. With an active filter, it also shows `Esc clear filter`. While searching, letter keys feed the live search input, so the footer shows `search <text>▌` on the left and `Esc clear · Tab filter: <state> · b branches` on the right.
+- **Detail panel:** full info for the selected row. Worktree rows show branch name, explicit `HEAD`, root/current state, absolute path, full status counts, Git-aware and full size when loaded, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes. Branch-only rows show branch name, explicit `HEAD`, `Path: not checked out`, `Status: no worktree`, upstream/main comparison, commit, PR, and checkout action. Root/current context appears next to the Details title, for example `Details · Current root repository`; branch-only rows use `Details · Local branch`. Selected-row actions live in the bottom border: worktrees show `↵ go · o editor · d delete · y abs path · p PR`; branch-only rows show `↵ create+go · c checkout root · d delete · y name · p PR`.
+- **Status bar:** transient progress and flash messages only. The app frame title starts with `Git treehouse · <repo>`. The top controls show refresh age, help, and quit. Table-scoped refresh feedback lives in the Worktrees title instead of the status bar.
 - **Help overlay:** groups shortcuts by context (`Global`, `Worktree List`, `Worktree Detail`) and groups visual legends (`Worktree Markers`, `Git Status`, `Pull Requests`). Category headers are bold white. The row lifecycle and PR legends live here instead of the status bar.
 - `g/G` remains available and documented in help, but is not shown in the main view.
 
@@ -149,8 +149,9 @@ Below the table:
 | Key | Action |
 |---|---|
 | `↑`/`↓`, `k`/`j` | Move selection |
-| `Enter` | cd to selected worktree and exit (writes `--cd-file`). On the active row: just quit. On a prunable row: disabled (hint shown in status bar). On a branch-only row: open checkout dialog (§5.1). |
-| `n` | Create worktree from focused row (§5) |
+| `Enter` | cd to selected worktree and exit (writes `--cd-file`). On the active row: just quit. On a prunable row: disabled (hint shown in status bar). On a branch-only row: create a worktree for that existing branch, then cd there (§5.1). |
+| `n` | Create a new worktree from the focused worktree row (§5). On branch-only rows, use `Enter` instead. |
+| `c` | On a branch-only row, checkout that branch in the root worktree, then cd into root (§5.2). |
 | `Delete` / `Backspace` / `d` | Delete flow (§6) |
 | `o` | Open selected worktree in editor (config → `$EDITOR` fallback); TUI stays open |
 | `p` | Open selected row's PR in browser (`gh pr view --web`); no PR → open repo page for the branch |
@@ -196,12 +197,12 @@ No multi-select / bulk operations in v1; every action applies to the focused row
   4. Success → **cd into the new worktree immediately** (write `--cd-file`, exit app).
   5. Failure → git's stderr shown in the dialog, dialog stays open.
 
-### 5.1 Checkout existing branch flow
+### 5.1 Existing branch worktree flow
 
-`Enter` on a branch-only row opens a confirmation modal:
+`Enter` on a branch-only row opens a new-worktree confirmation modal:
 
 ```
-┌ Checkout branch ─────────────────────────┐
+┌ New worktree ────────────────────────────┐
 │ Branch: feature/list-branches            │
 │ Path: /repo/.worktrees/repo/feature-list │
 │                                          │
@@ -215,6 +216,34 @@ No multi-select / bulk operations in v1; every action applies to the focused row
 - Success → cd into the new worktree immediately (write `--cd-file`, exit app).
 - Failure → git's stderr shown in the dialog, dialog stays open.
 - Copying uncommitted changes from another worktree is intentionally not automatic; it needs an explicit safe design before adding mutation beyond `git worktree add`.
+
+### 5.2 Checkout branch in root flow
+
+`c` on a branch-only row checks out that branch in the root worktree. The root worktree is the only checkout target for this action.
+
+```
+┌ Checkout root ─────────────────────────────────────────┐
+│ Branch    feature/list-branches                       │
+│ Root      /repo/main                                  │
+│ Current   main                                        │
+│                                                        │
+│ Root has uncommitted changes.                         │
+│ ~ modified 1                                          │
+│                                                        │
+│ Root changes                                          │
+│ [ ] s stash current changes                           │
+│ Checkout is blocked until root changes are stashed.   │
+│ No checkout command will run.                         │
+│                                                        │
+│ s stash changes · Esc cancel                          │
+└────────────────────────────────────────────────────────┘
+```
+
+- Clean root: run `git switch -- <branch>`, then write the root path to `--cd-file` and exit.
+- Dirty root: open the confirmation modal above. Enter is blocked until `s` enables stashing.
+- With stash enabled: Enter runs `git stash push -u -m "git-treehouse: before switching to <branch>"`, then `git switch -- <branch>`.
+- Failure from either git command is shown in the dialog or status bar, and the app stays open.
+- No force checkout, discard, or automatic copying happens.
 
 ## 6. Delete flow
 

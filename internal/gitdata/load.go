@@ -441,6 +441,16 @@ func CheckoutBranchWorktree(ctx context.Context, repoRoot, branch, path string, 
 	return err
 }
 
+func StashWorktreeChanges(ctx context.Context, path, message string, runner Runner) error {
+	_, err := runner.Run(ctx, path, "git", "stash", "push", "-u", "-m", message)
+	return err
+}
+
+func SwitchBranch(ctx context.Context, path, branch string, runner Runner) error {
+	_, err := runner.Run(ctx, path, "git", "switch", "--", branch)
+	return err
+}
+
 func RemoveWorktree(ctx context.Context, repoRoot, path string, force bool, runner Runner) error {
 	args := []string{"worktree", "remove"}
 	if force {
