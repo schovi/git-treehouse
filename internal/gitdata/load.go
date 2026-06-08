@@ -138,6 +138,7 @@ func EnrichLocalMetadata(ctx context.Context, state State, runner Runner) (State
 		}
 		row.LocalMetadataLoaded = true
 	}
+	state.Branches = branchRowsFromMetadata(refMetadataByBranch, state.Rows, state.Repo.MainBranch)
 	sortWorktrees(state.Rows)
 	return state, nil
 }
@@ -183,6 +184,51 @@ func applyRefMetadata(row *Worktree, metadata refMetadata, mainBranch string) {
 	} else if metadata.MainSync.Available && metadata.MainSync.Ahead == 0 {
 		row.BranchMergedToMain = true
 	}
+}
+
+func branchRowsFromMetadata(refMetadataByBranch map[string]refMetadata, worktrees []Worktree, mainBranch string) []Branch {
+	checkedOut := make(map[string]bool, len(worktrees))
+	for _, row := range worktrees {
+		if row.Branch != "" && !row.Detached {
+			checkedOut[row.Branch] = true
+		}
+	}
+	branches := make([]Branch, 0, len(refMetadataByBranch))
+	for name, metadata := range refMetadataByBranch {
+		if checkedOut[name] {
+			continue
+		}
+		branches = append(branches, branchFromMetadata(metadata, mainBranch))
+	}
+	sort.SliceStable(branches, func(leftIndex, rightIndex int) bool {
+		return branches[leftIndex].CommitTime.After(branches[rightIndex].CommitTime)
+	})
+	return branches
+}
+
+func branchFromMetadata(metadata refMetadata, mainBranch string) Branch {
+	branch := Branch{
+		Name:          metadata.Branch,
+		Head:          metadata.ObjectName,
+		CommitShort:   metadata.ObjectShort,
+		CommitTime:    metadata.CommitTime,
+		CommitSubject: metadata.Subject,
+		Upstream:      metadata.Upstream,
+		UpstreamGone:  metadata.UpstreamGone,
+		HeadSync:      metadata.HeadSync,
+	}
+	if branch.Upstream == "" {
+		branch.HeadSync = SyncState{NoUpstream: true}
+	}
+	if mainBranch != "" && branch.Name != mainBranch {
+		branch.MainSync = metadata.MainSync
+	}
+	if branch.Name == mainBranch {
+		branch.BranchMergedToMain = true
+	} else if metadata.MainSync.Available && metadata.MainSync.Ahead == 0 {
+		branch.BranchMergedToMain = true
+	}
+	return branch
 }
 
 func enrichStatusCounts(ctx context.Context, rows []Worktree, runner Runner) {
@@ -387,6 +433,11 @@ func BaseOptions(ctx context.Context, repo Repository, row Worktree, runner Runn
 
 func CreateWorktree(ctx context.Context, repoRoot, branch, path, base string, runner Runner) error {
 	_, err := runner.Run(ctx, repoRoot, "git", "worktree", "add", "-b", branch, path, base)
+	return err
+}
+
+func CheckoutBranchWorktree(ctx context.Context, repoRoot, branch, path string, runner Runner) error {
+	_, err := runner.Run(ctx, repoRoot, "git", "worktree", "add", path, branch)
 	return err
 }
 

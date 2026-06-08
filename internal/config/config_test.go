@@ -20,6 +20,9 @@ func TestDefault(t *testing.T) {
 	if got.MainBranch != "" {
 		t.Fatalf("Default().MainBranch = %q, want empty", got.MainBranch)
 	}
+	if got.ShowBranches {
+		t.Fatal("Default().ShowBranches = true, want false")
+	}
 }
 
 func TestDefaultEditorFallback(t *testing.T) {
@@ -36,6 +39,7 @@ func TestLoadReadsConfigAndKeepsExplicitValues(t *testing.T) {
 editor = "cursor"
 path_template = "{repo}/../{branch}"
 main_branch = "trunk"
+show_branches = true
 `), 0600)
 	if err != nil {
 		t.Fatalf("write config: %v", err)
@@ -54,6 +58,9 @@ main_branch = "trunk"
 	}
 	if got.MainBranch != "trunk" {
 		t.Fatalf("Load().MainBranch = %q, want %q", got.MainBranch, "trunk")
+	}
+	if !got.ShowBranches {
+		t.Fatal("Load().ShowBranches = false, want true")
 	}
 }
 
@@ -117,6 +124,7 @@ func TestLoadDefaultUsesHomeConfigWhenPresent(t *testing.T) {
 editor = "zed"
 path_template = "{repo_parent}/git-treehouse/{branch}"
 main_branch = "develop"
+show_branches = true
 `), 0600)
 	if err != nil {
 		t.Fatalf("write config: %v", err)
@@ -136,6 +144,9 @@ main_branch = "develop"
 	if got.MainBranch != "develop" {
 		t.Fatalf("LoadDefault().MainBranch = %q, want %q", got.MainBranch, "develop")
 	}
+	if !got.ShowBranches {
+		t.Fatal("LoadDefault().ShowBranches = false, want true")
+	}
 }
 
 func TestSaveDefaultWritesConfigFile(t *testing.T) {
@@ -147,6 +158,7 @@ func TestSaveDefaultWritesConfigFile(t *testing.T) {
 		Editor:                      "vim",
 		PathTemplate:                "{repo_parent}/.worktrees/{repo_name}/{branch}",
 		MainBranch:                  "main",
+		ShowBranches:                true,
 		SkipShellIntegrationWelcome: true,
 	})
 	if err != nil {
@@ -162,6 +174,9 @@ func TestSaveDefaultWritesConfigFile(t *testing.T) {
 	}
 	if got.Editor != "vim" {
 		t.Fatalf("LoadDefault().Editor = %q, want vim", got.Editor)
+	}
+	if !got.ShowBranches {
+		t.Fatal("LoadDefault().ShowBranches = false, want true")
 	}
 }
 

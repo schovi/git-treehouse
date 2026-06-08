@@ -68,6 +68,15 @@ func AttachPullRequests(rows []gitdata.Worktree, pullRequests map[string]gitdata
 	return rows
 }
 
+func AttachBranchPullRequests(branches []gitdata.Branch, pullRequests map[string]gitdata.PullRequest) []gitdata.Branch {
+	for index := range branches {
+		if pullRequest, ok := pullRequests[branches[index].Name]; ok {
+			branches[index].PR = &pullRequest
+		}
+	}
+	return branches
+}
+
 func OpenPullRequestOrBranch(ctx context.Context, repoRoot string, row gitdata.Worktree, runner gitdata.Runner) error {
 	if row.PR != nil && row.PR.Number > 0 {
 		_, err := runner.Run(ctx, repoRoot, "gh", "pr", "view", strconv.Itoa(row.PR.Number), "--web")
@@ -79,6 +88,22 @@ func OpenPullRequestOrBranch(ctx context.Context, repoRoot string, row gitdata.W
 	}
 	_, err := runner.Run(ctx, repoRoot, "gh", "browse")
 	return err
+}
+
+func OpenRowPullRequestOrBranch(ctx context.Context, repoRoot string, row gitdata.Row, runner gitdata.Runner) error {
+	if row.IsBranch() {
+		if row.Branch.PR != nil && row.Branch.PR.Number > 0 {
+			_, err := runner.Run(ctx, repoRoot, "gh", "pr", "view", strconv.Itoa(row.Branch.PR.Number), "--web")
+			return err
+		}
+		if row.Branch.Name != "" {
+			_, err := runner.Run(ctx, repoRoot, "gh", "browse", "--branch", row.Branch.Name)
+			return err
+		}
+		_, err := runner.Run(ctx, repoRoot, "gh", "browse")
+		return err
+	}
+	return OpenPullRequestOrBranch(ctx, repoRoot, row.Worktree, runner)
 }
 
 func stateGlyph(state string, draft bool, reviewDecision string) string {

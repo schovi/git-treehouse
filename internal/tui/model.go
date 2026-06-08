@@ -32,6 +32,7 @@ type Model struct {
 	height                 int
 	selected               int
 	filter                 worktreeFilter
+	showBranches           bool
 	searching              bool
 	search                 textinput.Model
 	help                   bool
@@ -45,6 +46,7 @@ type Model struct {
 	prLastCheckedAt        time.Time
 	selectedPath           string
 	createDialog           *createDialog
+	checkoutDialog         *checkoutDialog
 	deleteDialog           *deleteDialog
 	paletteDialog          *paletteDialog
 	lastRefreshAt          time.Time
@@ -78,6 +80,7 @@ var (
 	inspectorWarnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	inspectorCommitStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
 	inspectorSubjectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	branchOnlyDetailStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	keyStyle              = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
 	hintStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	helpCategoryStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
@@ -102,6 +105,12 @@ type createDialog struct {
 	bases     []gitdata.BaseOption
 	baseIndex int
 	error     string
+}
+
+type checkoutDialog struct {
+	branch gitdata.Branch
+	path   string
+	error  string
 }
 
 type deleteDialog struct {
@@ -160,9 +169,19 @@ type createMsg struct {
 	err  error
 }
 
+type checkoutMsg struct {
+	path string
+	err  error
+}
+
 type deleteMsg struct {
 	state gitdata.State
 	err   error
+	text  string
+}
+
+type settingsSavedMsg struct {
+	err error
 }
 
 type actionMsg struct {
@@ -212,6 +231,7 @@ type worktreeFilter int
 const (
 	filterAll worktreeFilter = iota
 	filterModified
+	filterBranches
 	filterPrunable
 	filterLocked
 	filterDetached
@@ -220,6 +240,7 @@ const (
 var orderedFilters = []worktreeFilter{
 	filterAll,
 	filterModified,
+	filterBranches,
 	filterPrunable,
 	filterLocked,
 	filterDetached,
@@ -261,10 +282,10 @@ type paletteCommand struct {
 var paletteCommands = []paletteCommand{
 	{id: paletteGoSelected, title: "Go to selected worktree", shortcut: "Enter", keywords: "cd switch"},
 	{id: paletteCreate, title: "Create worktree", shortcut: "n", keywords: "new branch"},
-	{id: paletteDelete, title: "Delete selected worktree", shortcut: "d", keywords: "remove prune branch"},
+	{id: paletteDelete, title: "Delete selected row", shortcut: "d", keywords: "remove prune branch"},
 	{id: paletteOpenEditor, title: "Open in editor", shortcut: "o", keywords: "code cursor"},
 	{id: paletteOpenPullRequest, title: "Open PR or branch page", shortcut: "p", keywords: "github browser"},
-	{id: paletteCopyPath, title: "Copy absolute path", shortcut: "y", keywords: "clipboard"},
+	{id: paletteCopyPath, title: "Copy path or branch name", shortcut: "y", keywords: "clipboard branch path"},
 	{id: paletteRefresh, title: "Fetch and reload", shortcut: "r", keywords: "refresh prune"},
 	{id: paletteSearch, title: "Search branches", shortcut: "s", keywords: "find filter"},
 	{id: paletteJumpRoot, title: "Jump to root repository", shortcut: "h", keywords: "main"},
@@ -286,6 +307,8 @@ func (filter worktreeFilter) label() string {
 	switch filter {
 	case filterModified:
 		return "modified"
+	case filterBranches:
+		return "branches"
 	case filterPrunable:
 		return "prunable"
 	case filterLocked:
@@ -297,16 +320,18 @@ func (filter worktreeFilter) label() string {
 	}
 }
 
-func (filter worktreeFilter) matches(row gitdata.Worktree) bool {
+func (filter worktreeFilter) matches(row gitdata.Row) bool {
 	switch filter {
 	case filterModified:
-		return !row.Status.Clean()
+		return row.IsWorktree() && !row.Worktree.Status.Clean()
+	case filterBranches:
+		return row.IsBranch()
 	case filterPrunable:
-		return row.Prunable
+		return row.IsWorktree() && row.Worktree.Prunable
 	case filterLocked:
-		return row.Locked
+		return row.IsWorktree() && row.Worktree.Locked
 	case filterDetached:
-		return row.Detached
+		return row.IsWorktree() && row.Worktree.Detached
 	default:
 		return true
 	}
@@ -325,6 +350,7 @@ func New(state gitdata.State, config config.Config, runner gitdata.Runner) Model
 		width:             100,
 		height:            30,
 		search:            search,
+		showBranches:      config.ShowBranches,
 		showPR:            state.Repo.RemoteConfigured,
 		prLoading:         state.Repo.RemoteConfigured,
 		lastRefreshAt:     time.Now(),
@@ -372,9 +398,11 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.prCache = message.pullRequests
 			model.prCacheRepoRoot = model.state.Repo.Root
 			model.state.Rows = github.AttachPullRequests(model.state.Rows, message.pullRequests)
+			model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, message.pullRequests)
 		} else if len(model.prCache) > 0 && model.prCacheRepoRoot == model.state.Repo.Root {
 			model.showPR = true
 			model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache)
+			model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, model.prCache)
 		}
 		return model, nil
 	case sizesLoadedMsg:
@@ -446,6 +474,16 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		model.selectedPath = message.path
 		return model, tea.Quit
+	case checkoutMsg:
+		model.loading = ""
+		if message.err != nil {
+			if model.checkoutDialog != nil {
+				model.checkoutDialog.error = message.err.Error()
+			}
+			return model, nil
+		}
+		model.selectedPath = message.path
+		return model, tea.Quit
 	case deleteMsg:
 		anchor := model.selectionAnchor()
 		model.loading = ""
@@ -458,7 +496,11 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.prLoading = false
 		model.applyCachedPullRequests()
 		model.restoreSelection(anchor)
-		model, flashCmd := model.setFlash("deleted worktree")
+		text := message.text
+		if text == "" {
+			text = "deleted worktree"
+		}
+		model, flashCmd := model.setFlash(text)
 		model, enrichmentCmd := model.startEnrichment(true)
 		return model, tea.Batch(enrichmentCmd, flashCmd)
 	case actionMsg:
@@ -477,12 +519,20 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.err != nil {
 			return model.setFlash(message.err.Error())
 		}
+		anchor := model.selectionAnchor()
 		model.config = message.config
+		model.showBranches = message.config.ShowBranches
+		model.restoreSelection(anchor)
 		model, flashCmd := model.setFlash("config reloaded")
 		if model.createDialog != nil && message.path != "" {
 			return model, tea.Batch(flashCmd, watchConfigChangeCmd(message.path, message.modTime))
 		}
 		return model, flashCmd
+	case settingsSavedMsg:
+		if message.err != nil {
+			return model.setFlash(message.err.Error())
+		}
+		return model, nil
 	case noOpMsg:
 		return model, nil
 	case clearFlashMsg:
@@ -508,6 +558,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if model.createDialog != nil {
 			return model.updateCreate(message)
+		}
+		if model.checkoutDialog != nil {
+			return model.updateCheckout(message)
 		}
 		if model.deleteDialog != nil {
 			return model.updateDelete(message)
@@ -559,54 +612,65 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 	case "G":
 		model.selected = max(0, len(model.visibleIndexes())-1)
 	case "h":
-		model.selectMatching(func(row gitdata.Worktree) bool { return row.IsMain })
+		model.selectMatching(func(row gitdata.Row) bool { return row.IsWorktree() && row.Worktree.IsMain })
 	case "a":
-		model.selectMatching(func(row gitdata.Worktree) bool { return row.IsActive })
+		model.selectMatching(func(row gitdata.Row) bool { return row.IsWorktree() && row.Worktree.IsActive })
 	case "tab":
 		model.cycleFilter()
 	case "enter":
-		row, ok := model.selectedRow()
+		row, ok := model.selectedTableRow()
 		if !ok {
 			return model, nil
 		}
-		if row.Prunable {
+		if row.IsBranch() {
+			return model.openCheckout(row.Branch)
+		}
+		if row.Worktree.Prunable {
 			return model.setFlash("cannot enter a prunable worktree")
 		}
-		if row.IsActive {
+		if row.Worktree.IsActive {
 			return model, tea.Quit
 		}
-		model.selectedPath = row.Path
+		model.selectedPath = row.Worktree.Path
 		return model, tea.Quit
 	case "n":
 		return model.openCreate()
 	case "delete", "backspace", "d":
 		return model.openDelete()
 	case "o":
-		row, ok := model.selectedRow()
+		row, ok := model.selectedWorktree()
 		if !ok || row.Prunable {
 			return model.setFlash("cannot open this worktree")
 		}
 		return model, openEditorCmd(model.config.Editor, row.Path)
 	case "p":
-		row, ok := model.selectedRow()
+		row, ok := model.selectedTableRow()
 		if !ok {
 			return model, nil
 		}
 		return model, func() tea.Msg {
-			err := github.OpenPullRequestOrBranch(context.Background(), model.state.Repo.Root, row, model.runner)
+			err := github.OpenRowPullRequestOrBranch(context.Background(), model.state.Repo.Root, row, model.runner)
 			return actionMsg{text: "opened", err: err}
 		}
 	case "y":
-		row, ok := model.selectedRow()
+		text, flash, ok := model.selectedCopyText()
 		if !ok {
 			return model, nil
 		}
-		return model, copyPathCmd(row.Path)
+		return model, copyTextCmd(text, flash)
 	case "r":
 		return model.startRefresh(true, false)
 	case "s":
 		model.searching = true
 		model.search.Focus()
+	case "b":
+		anchor := model.selectionAnchor()
+		model.showBranches = !model.showBranches
+		model.config.ShowBranches = model.showBranches
+		if !model.restoreSelection(anchor) && len(model.visibleIndexes()) > 0 {
+			model.selected = 0
+		}
+		return model, persistShowBranchesCmd(model.showBranches)
 	case "?":
 		model.help = !model.help
 	}
@@ -651,6 +715,7 @@ func (model Model) canApplyAutoRefresh() bool {
 		!model.searching &&
 		!model.help &&
 		model.createDialog == nil &&
+		model.checkoutDialog == nil &&
 		model.deleteDialog == nil &&
 		model.paletteDialog == nil
 }
@@ -728,52 +793,55 @@ func (model Model) updatePalette(message tea.KeyMsg) (Model, tea.Cmd) {
 func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
 	switch id {
 	case paletteGoSelected:
-		row, ok := model.selectedRow()
+		row, ok := model.selectedTableRow()
 		if !ok {
 			return model, nil
 		}
-		if row.Prunable {
+		if row.IsBranch() {
+			return model.openCheckout(row.Branch)
+		}
+		if row.Worktree.Prunable {
 			return model.setFlash("cannot enter a prunable worktree")
 		}
-		if row.IsActive {
+		if row.Worktree.IsActive {
 			return model, tea.Quit
 		}
-		model.selectedPath = row.Path
+		model.selectedPath = row.Worktree.Path
 		return model, tea.Quit
 	case paletteCreate:
 		return model.openCreate()
 	case paletteDelete:
 		return model.openDelete()
 	case paletteOpenEditor:
-		row, ok := model.selectedRow()
+		row, ok := model.selectedWorktree()
 		if !ok || row.Prunable {
 			return model.setFlash("cannot open this worktree")
 		}
 		return model, openEditorCmd(model.config.Editor, row.Path)
 	case paletteOpenPullRequest:
-		row, ok := model.selectedRow()
+		row, ok := model.selectedTableRow()
 		if !ok {
 			return model, nil
 		}
 		return model, func() tea.Msg {
-			err := github.OpenPullRequestOrBranch(context.Background(), model.state.Repo.Root, row, model.runner)
+			err := github.OpenRowPullRequestOrBranch(context.Background(), model.state.Repo.Root, row, model.runner)
 			return actionMsg{text: "opened", err: err}
 		}
 	case paletteCopyPath:
-		row, ok := model.selectedRow()
+		text, flash, ok := model.selectedCopyText()
 		if !ok {
 			return model, nil
 		}
-		return model, copyPathCmd(row.Path)
+		return model, copyTextCmd(text, flash)
 	case paletteRefresh:
 		return model.startRefresh(true, false)
 	case paletteSearch:
 		model.searching = true
 		return model, model.search.Focus()
 	case paletteJumpRoot:
-		model.selectMatching(func(row gitdata.Worktree) bool { return row.IsMain })
+		model.selectMatching(func(row gitdata.Row) bool { return row.IsWorktree() && row.Worktree.IsMain })
 	case paletteJumpActive:
-		model.selectMatching(func(row gitdata.Worktree) bool { return row.IsActive })
+		model.selectMatching(func(row gitdata.Row) bool { return row.IsWorktree() && row.Worktree.IsActive })
 	case paletteJumpTop:
 		model.selected = 0
 	case paletteJumpBottom:
@@ -819,9 +887,15 @@ func (model Model) matchingPaletteCommands() []paletteCommand {
 }
 
 func (model Model) openCreate() (Model, tea.Cmd) {
-	row, ok := model.selectedRow()
-	if !ok || row.Prunable {
+	row, ok := model.selectedTableRow()
+	if !ok || row.IsWorktree() && row.Worktree.Prunable {
 		return model.setFlash("cannot create from this row")
+	}
+	var baseRow gitdata.Worktree
+	if row.IsBranch() {
+		baseRow = gitdata.Worktree{Branch: row.Branch.Name, Head: row.Branch.Head}
+	} else {
+		baseRow = row.Worktree
 	}
 	input := textinput.New()
 	input.Prompt = ""
@@ -829,14 +903,48 @@ func (model Model) openCreate() (Model, tea.Cmd) {
 	input.Width = 34
 	input.Cursor.Style = flashStyle
 	focusCmd := input.Focus()
-	bases := gitdata.BaseOptions(context.Background(), model.state.Repo, row, model.runner)
+	bases := gitdata.BaseOptions(context.Background(), model.state.Repo, baseRow, model.runner)
 	if len(bases) == 0 {
 		return model.setFlash("no base ref available")
 	}
 	model.help = false
 	model.paletteDialog = nil
+	model.checkoutDialog = nil
 	model.createDialog = &createDialog{input: input, bases: bases}
 	return model, focusCmd
+}
+
+func (model Model) openCheckout(branch gitdata.Branch) (Model, tea.Cmd) {
+	if branch.Name == "" {
+		return model.setFlash("cannot create worktree for this branch")
+	}
+	path := pathutil.ApplyTemplate(model.config.PathTemplate, model.state.Repo.Root, branch.Name)
+	model.help = false
+	model.paletteDialog = nil
+	model.createDialog = nil
+	model.deleteDialog = nil
+	model.checkoutDialog = &checkoutDialog{branch: branch, path: path}
+	return model, nil
+}
+
+func (model Model) updateCheckout(message tea.KeyMsg) (Model, tea.Cmd) {
+	dialog := model.checkoutDialog
+	switch message.String() {
+	case "esc":
+		model.checkoutDialog = nil
+		return model, nil
+	case "enter":
+		if _, err := os.Stat(dialog.path); err == nil {
+			dialog.error = "target path already exists: " + dialog.path
+			return model, nil
+		}
+		model.loading = "creating…"
+		return model, func() tea.Msg {
+			err := gitdata.CheckoutBranchWorktree(context.Background(), model.state.Repo.Root, dialog.branch.Name, dialog.path, model.runner)
+			return checkoutMsg{path: dialog.path, err: err}
+		}
+	}
+	return model, nil
 }
 
 func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
@@ -892,10 +1000,30 @@ func (model Model) validateCreate() {
 }
 
 func (model Model) openDelete() (Model, tea.Cmd) {
-	row, ok := model.selectedRow()
+	selected, ok := model.selectedTableRow()
 	if !ok {
 		return model, nil
 	}
+	if selected.IsBranch() {
+		branch := selected.Branch
+		if branch.Name == "" {
+			return model.setFlash("cannot delete an unnamed branch")
+		}
+		if model.state.Repo.MainBranch != "" && branch.Name == model.state.Repo.MainBranch {
+			return model.setFlash("cannot delete the main branch")
+		}
+		dialog := deleteDialog{
+			stage:        deleteStageOptions,
+			deleteBranch: true,
+		}
+		model.help = false
+		model.paletteDialog = nil
+		model.createDialog = nil
+		model.checkoutDialog = nil
+		model.deleteDialog = &dialog
+		return model, nil
+	}
+	row := selected.Worktree
 	if row.IsActive {
 		return model.setFlash("cannot delete the active worktree")
 	}
@@ -920,6 +1048,8 @@ func (model Model) openDelete() (Model, tea.Cmd) {
 	}
 	model.help = false
 	model.paletteDialog = nil
+	model.createDialog = nil
+	model.checkoutDialog = nil
 	model.deleteDialog = &dialog
 	return model, nil
 }
@@ -936,7 +1066,7 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 		if dialog.stage != deleteStageOptions {
 			return model, nil
 		}
-		row, ok := model.selectedRow()
+		row, ok := model.selectedWorktree()
 		if !ok {
 			return model, nil
 		}
@@ -960,11 +1090,23 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 		dialog.error = ""
 		return model, nil
 	case "enter":
-		row, ok := model.selectedRow()
+		selected, ok := model.selectedTableRow()
 		if !ok {
 			model.deleteDialog = nil
 			return model, nil
 		}
+		if selected.IsBranch() {
+			model.loading = "deleting…"
+			branch := selected.Branch
+			return model, func() tea.Msg {
+				if err := deleteBranchRow(context.Background(), model.state.Repo, branch, model.runner); err != nil {
+					return deleteMsg{err: err}
+				}
+				state, err := gitdata.LoadSkeleton(context.Background(), model.state.Repo.ActiveWorktree, model.config, model.runner)
+				return deleteMsg{state: state, err: err, text: "deleted branch"}
+			}
+		}
+		row := selected.Worktree
 		switch dialog.stage {
 		case deleteStageLocked:
 			return model, nil
@@ -996,10 +1138,14 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 				return deleteMsg{err: err}
 			}
 			state, err := gitdata.LoadSkeleton(context.Background(), model.state.Repo.ActiveWorktree, model.config, model.runner)
-			return deleteMsg{state: state, err: err}
+			return deleteMsg{state: state, err: err, text: "deleted worktree"}
 		}
 	}
 	return model, nil
+}
+
+func deleteBranchRow(ctx context.Context, repo gitdata.Repository, branch gitdata.Branch, runner gitdata.Runner) error {
+	return gitdata.DeleteBranch(ctx, repo.Root, branch.Name, !branch.BranchMergedToMain, runner)
 }
 
 func deleteRow(ctx context.Context, repo gitdata.Repository, row gitdata.Worktree, dialog deleteDialog, runner gitdata.Runner) error {
@@ -1039,14 +1185,14 @@ func deleteWorktreeDefault(row gitdata.Worktree) bool {
 }
 
 func deleteBranchAvailableFromModel(model Model) bool {
-	row, ok := model.selectedRow()
+	row, ok := model.selectedWorktree()
 	return ok && deleteBranchAvailable(row)
 }
 
 type viewSnapshot struct {
-	rows        []gitdata.Worktree
-	visibleRows []gitdata.Worktree
-	selectedRow gitdata.Worktree
+	rows        []gitdata.Row
+	visibleRows []gitdata.Row
+	selectedRow gitdata.Row
 	hasSelected bool
 	detail      string
 	start       int
@@ -1059,16 +1205,16 @@ func (model Model) View() string {
 	contentWidth := max(1, outerWidth-4)
 	panelWidth := max(4, contentWidth)
 	panelContentWidth := max(1, panelWidth-2)
-	rowCount := len(model.state.Rows)
+	rowCount := model.totalRowCount()
 	detail := ""
-	var detailRow gitdata.Worktree
+	var detailRow gitdata.Row
 	lines := []string{"Loading worktrees…"}
 	if model.localMetadataReady() {
 		snapshot := model.viewSnapshot(now, panelContentWidth)
 		rowCount = len(snapshot.rows)
 		detail = snapshot.detail
 		detailRow = snapshot.selectedRow
-		table := listview.RenderRows(snapshot.visibleRows, listview.Options{
+		table := listview.RenderMixedRows(snapshot.visibleRows, listview.Options{
 			Width:             panelContentWidth,
 			Color:             true,
 			Hyperlinks:        true,
@@ -1081,7 +1227,7 @@ func (model Model) View() string {
 		}, now)
 		lines = strings.Split(table, "\n")
 		if len(snapshot.rows) == 0 {
-			lines = []string{"No worktrees"}
+			lines = []string{"No rows"}
 		}
 	}
 	parts := []string{
@@ -1089,7 +1235,7 @@ func (model Model) View() string {
 		model.wrapOuter(sectionBoxWithFooterTopRight("Worktrees", lines, model.listFooterHints(), model.worktreesFeedback(), panelWidth), outerWidth),
 	}
 	if detail != "" {
-		parts = append(parts, model.wrapOuter(sectionBoxWithFooter(detailTitle(detailRow), strings.Split(detail, "\n"), detailFooterHints(panelWidth), panelWidth), outerWidth))
+		parts = append(parts, model.wrapOuter(sectionBoxWithFooter(rowDetailTitle(detailRow), strings.Split(detail, "\n"), detailFooterHints(detailRow, panelWidth), panelWidth), outerWidth))
 	}
 	if model.flash != "" {
 		parts = append(parts, model.wrapOuter(model.flashLineAtWidth(panelWidth), outerWidth))
@@ -1106,6 +1252,9 @@ func (model Model) View() string {
 	if model.deleteDialog != nil {
 		output = centeredOverlay(output, model.renderDeleteAtWidth(deleteDialogWidth(outerWidth)), outerWidth, overlayHeight)
 	}
+	if model.checkoutDialog != nil {
+		output = centeredOverlay(output, model.renderCheckoutAtWidth(checkoutDialogWidth(outerWidth)), outerWidth, overlayHeight)
+	}
 	if model.createDialog != nil {
 		output = centeredOverlay(output, model.renderCreateAtWidth(createDialogWidth(outerWidth)), outerWidth, overlayHeight)
 	}
@@ -1121,17 +1270,22 @@ func (model Model) localMetadataReady() bool {
 	return true
 }
 
+func (model Model) totalRowCount() int {
+	return len(model.tableRows())
+}
+
 func (model Model) viewSnapshot(now time.Time, panelContentWidth int) viewSnapshot {
 	indexes := model.visibleIndexes()
-	rows := make([]gitdata.Worktree, 0, len(indexes))
+	tableRows := model.tableRows()
+	rows := make([]gitdata.Row, 0, len(indexes))
 	for _, index := range indexes {
-		rows = append(rows, model.state.Rows[index])
+		rows = append(rows, tableRows[index])
 	}
 	snapshot := viewSnapshot{rows: rows}
 	if len(indexes) > 0 && model.selected >= 0 && model.selected < len(indexes) {
-		snapshot.selectedRow = model.state.Rows[indexes[model.selected]]
+		snapshot.selectedRow = tableRows[indexes[model.selected]]
 		snapshot.hasSelected = true
-		snapshot.detail = model.detailPanelAtWidth(snapshot.selectedRow, now, panelContentWidth)
+		snapshot.detail = model.rowDetailPanelAtWidth(snapshot.selectedRow, now, panelContentWidth)
 	}
 	availableHeight := model.availableTableHeightForDetail(snapshot.detail)
 	if model.selected >= availableHeight {
@@ -1148,29 +1302,56 @@ func (model Model) viewSnapshot(now time.Time, panelContentWidth int) viewSnapsh
 }
 
 func (model Model) selectedInspector(row gitdata.Worktree, now time.Time) string {
-	return model.selectedInspectorAtWidth(row, now, viewWidth(model))
+	return model.selectedRowInspector(gitdata.Row{Kind: gitdata.RowKindWorktree, Worktree: row}, now)
 }
 
-func (model Model) selectedInspectorAtWidth(row gitdata.Worktree, now time.Time, width int) string {
+func (model Model) selectedRowInspector(row gitdata.Row, now time.Time) string {
+	return model.selectedRowInspectorAtWidth(row, now, viewWidth(model))
+}
+
+func (model Model) selectedRowInspectorAtWidth(row gitdata.Row, now time.Time, width int) string {
+	if row.IsBranch() {
+		return model.selectedBranchInspectorAtWidth(row.Branch, now, width)
+	}
+	worktree := row.Worktree
 	lines := []string{
-		model.inspectorRenderedFieldAtWidth("Branch", branchText(row), func(value string) string {
-			return branchStyle(row).Render(value)
+		model.inspectorRenderedFieldAtWidth("Branch", branchText(worktree), func(value string) string {
+			return branchStyle(worktree).Render(value)
 		}, width),
-		model.inspectorRenderedFieldAtWidth("HEAD", headText(row), renderHeadValue, width),
-		model.inspectorFieldAtWidth("Path", model.relativePath(row.Path), inspectorValueStyle, width),
-		model.inspectorFieldAtWidth("Status", statusText(row), statusStyle(row), width),
-		model.inspectorRenderedFieldAtWidth("Dirty", dirtyDetailText(row.Status), renderDirtyDetailValue, width),
-		model.inspectorFieldAtWidth("Size", sizeText(row), inspectorValueStyle, width),
+		model.inspectorRenderedFieldAtWidth("HEAD", headText(worktree), renderHeadValue, width),
+		model.inspectorFieldAtWidth("Path", model.relativePath(worktree.Path), inspectorValueStyle, width),
+		model.inspectorFieldAtWidth("Status", statusText(worktree), statusStyle(worktree), width),
+		model.inspectorRenderedFieldAtWidth("Dirty", dirtyDetailText(worktree.Status), renderDirtyDetailValue, width),
+		model.inspectorFieldAtWidth("Size", sizeText(worktree), inspectorValueStyle, width),
 	}
 	lines = append(lines,
-		model.inspectorRenderedFieldAtWidth("Remote", remoteText(row), func(value string) string {
-			return syncStyle(row).Render(value)
+		model.inspectorRenderedFieldAtWidth("Remote", remoteText(worktree), func(value string) string {
+			return syncStyle(worktree).Render(value)
 		}, width),
-		model.inspectorRenderedFieldAtWidth("Main", model.mainText(row), renderMainValue, width),
-		model.inspectorRenderedFieldAtWidth("Commit", commitText(row, now), renderCommitValue, width),
-		model.inspectorFieldAtWidth("PR", model.prText(row), inspectorValueStyle, width),
-		model.inspectorFieldAtWidth("Delete", deleteSafetyText(row), deleteSafetyStyle(row), width),
+		model.inspectorRenderedFieldAtWidth("Main", model.mainText(worktree), renderMainValue, width),
+		model.inspectorRenderedFieldAtWidth("Commit", commitText(worktree, now), renderCommitValue, width),
+		model.inspectorFieldAtWidth("PR", model.rowPRText(row), inspectorValueStyle, width),
+		model.inspectorFieldAtWidth("Delete", deleteSafetyText(worktree), deleteSafetyStyle(worktree), width),
 	)
+	return strings.Join(lines, "\n")
+}
+
+func (model Model) selectedBranchInspectorAtWidth(branch gitdata.Branch, now time.Time, width int) string {
+	lines := []string{
+		model.inspectorFieldAtWidth("Branch", branch.DisplayBranch(), branchOnlyDetailStyle, width),
+		model.inspectorRenderedFieldAtWidth("HEAD", branchHeadText(branch), renderHeadValue, width),
+		model.inspectorFieldAtWidth("Path", "not checked out", inspectorValueStyle, width),
+		model.inspectorFieldAtWidth("Status", "no worktree", inspectorValueStyle, width),
+		model.inspectorFieldAtWidth("Dirty", "-", inspectorValueStyle, width),
+		model.inspectorFieldAtWidth("Size", "-", inspectorValueStyle, width),
+		model.inspectorRenderedFieldAtWidth("Remote", branchRemoteText(branch), func(value string) string {
+			return branchSyncStyle(branch).Render(value)
+		}, width),
+		model.inspectorRenderedFieldAtWidth("Main", model.branchMainText(branch), renderMainValue, width),
+		model.inspectorRenderedFieldAtWidth("Commit", branchCommitText(branch, now), renderCommitValue, width),
+		model.inspectorFieldAtWidth("PR", model.rowPRText(gitdata.Row{Kind: gitdata.RowKindBranch, Branch: branch}), inspectorValueStyle, width),
+		model.inspectorFieldAtWidth("Action", "checkout branch as worktree", inspectorCleanStyle, width),
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -1195,14 +1376,22 @@ func (model Model) inspectorRenderedFieldAtWidth(label, value string, render fun
 }
 
 func (model Model) detailPanel(row gitdata.Worktree, now time.Time) string {
-	return model.detailPanelAtWidth(row, now, viewWidth(model))
+	return model.rowDetailPanel(gitdata.Row{Kind: gitdata.RowKindWorktree, Worktree: row}, now)
 }
 
-func (model Model) detailPanelAtWidth(row gitdata.Worktree, now time.Time, width int) string {
-	return model.selectedInspectorAtWidth(row, now, width)
+func (model Model) rowDetailPanel(row gitdata.Row, now time.Time) string {
+	return model.rowDetailPanelAtWidth(row, now, viewWidth(model))
+}
+
+func (model Model) rowDetailPanelAtWidth(row gitdata.Row, now time.Time, width int) string {
+	return model.selectedRowInspectorAtWidth(row, now, width)
 }
 
 func detailTitle(row gitdata.Worktree) string {
+	return rowDetailTitle(gitdata.Row{Kind: gitdata.RowKindWorktree, Worktree: row})
+}
+
+func rowDetailTitle(row gitdata.Row) string {
 	context := selectionContextTitle(row)
 	if context == "" {
 		return "Details"
@@ -1224,8 +1413,11 @@ func renderSectionTitle(title string, width int) string {
 	return panelTitleStyle.Render(name) + separator + titleRepoStyle.Render(truncatePlain(detail, detailWidth))
 }
 
-func detailFooterHints(width int) string {
+func detailFooterHints(row gitdata.Row, width int) string {
 	actionParts := []string{"↵ go", "o editor", "d delete", "y abs path", "p PR"}
+	if row.IsBranch() {
+		actionParts = []string{"↵ checkout", "n new from branch", "d delete", "y name", "p PR"}
+	}
 	availableWidth := max(0, width-5)
 	return joinPartsWithin(actionParts, availableWidth)
 }
@@ -1327,6 +1519,20 @@ func remoteText(row gitdata.Worktree) string {
 	return row.Upstream + ", " + state
 }
 
+func branchRemoteText(branch gitdata.Branch) string {
+	if branch.Upstream == "" {
+		return "no upstream"
+	}
+	if branch.UpstreamGone {
+		return "Remote branch gone, likely merged or deleted"
+	}
+	state := branch.HeadSync.Compact()
+	if state == "" {
+		state = "synced"
+	}
+	return branch.Upstream + ", " + state
+}
+
 func branchText(row gitdata.Worktree) string {
 	return row.DisplayBranch()
 }
@@ -1348,6 +1554,19 @@ func headText(row gitdata.Worktree) string {
 		return shortRef(row.Head) + " on " + row.Branch
 	}
 	return shortRef(row.Head)
+}
+
+func branchHeadText(branch gitdata.Branch) string {
+	if branch.Head == "" {
+		if branch.Name != "" {
+			return "on " + branch.Name
+		}
+		return "-"
+	}
+	if branch.Name != "" {
+		return shortRef(branch.Head) + " on " + branch.Name
+	}
+	return shortRef(branch.Head)
 }
 
 func statusText(row gitdata.Worktree) string {
@@ -1374,13 +1593,34 @@ func (model Model) mainText(row gitdata.Worktree) string {
 	return state + " vs local " + model.state.Repo.MainBranch
 }
 
-func selectionContextTitle(row gitdata.Worktree) string {
+func (model Model) branchMainText(branch gitdata.Branch) string {
+	if model.state.Repo.MainBranch == "" {
+		return "unknown"
+	}
+	if branch.Name == model.state.Repo.MainBranch {
+		return "on local " + model.state.Repo.MainBranch
+	}
+	state := branch.MainSync.Compact()
+	if state == "" {
+		if branch.MainSync.Available {
+			return "synced with local " + model.state.Repo.MainBranch
+		}
+		return "- vs local " + model.state.Repo.MainBranch
+	}
+	return state + " vs local " + model.state.Repo.MainBranch
+}
+
+func selectionContextTitle(row gitdata.Row) string {
+	if row.IsBranch() {
+		return "Local branch"
+	}
+	worktree := row.Worktree
 	switch {
-	case row.IsActive && row.IsMain:
+	case worktree.IsActive && worktree.IsMain:
 		return "Current root repository"
-	case row.IsActive:
+	case worktree.IsActive:
 		return "Current worktree"
-	case row.IsMain:
+	case worktree.IsMain:
 		return "Root repository"
 	default:
 		return ""
@@ -1404,14 +1644,39 @@ func dirtyDetailText(counts gitdata.StatusCounts) string {
 	return strings.Join(parts, "  ")
 }
 
+func branchSyncStyle(branch gitdata.Branch) lipgloss.Style {
+	if branch.UpstreamGone || branch.HeadSync.Ahead > 0 || branch.HeadSync.Behind > 0 {
+		return inspectorWarnStyle
+	}
+	if branch.Upstream != "" {
+		return inspectorCleanStyle
+	}
+	return inspectorValueStyle
+}
+
+func branchCommitText(branch gitdata.Branch, now time.Time) string {
+	if branch.CommitShort == "" {
+		return "-"
+	}
+	commit := branch.CommitShort + " " + branch.CommitSubject
+	if age := gitdata.RelativeAge(now, branch.CommitTime); age != "" {
+		commit += ", " + age
+	}
+	return commit
+}
+
 func (model Model) prText(row gitdata.Worktree) string {
-	if row.PR == nil {
+	return model.rowPRText(gitdata.Row{Kind: gitdata.RowKindWorktree, Worktree: row})
+}
+
+func (model Model) rowPRText(row gitdata.Row) string {
+	if row.PullRequest() == nil {
 		if model.pullRequestsPending() {
 			return listview.LoadingPlaceholder
 		}
 		return "none"
 	}
-	text := row.PR.Text()
+	text := row.PullRequest().Text()
 	if text == "" {
 		return "none"
 	}
@@ -1745,13 +2010,17 @@ func (model Model) statusLeftParts() []string {
 }
 
 func (model Model) listFooterHints() string {
+	branchHint := "b branches"
+	if model.showBranches {
+		branchHint = "b hide branches"
+	}
 	if model.searching {
-		return "search " + model.search.Value() + "▌ · Esc clear · Tab filter: " + model.filter.label()
+		return "search " + model.search.Value() + "▌ · Esc clear · Tab filter: " + model.filter.label() + " · " + branchHint
 	}
 	if model.filter != filterAll {
-		return "h root · a active · Tab filter: " + model.filter.label() + " · Esc clear filter · s search"
+		return "h root · a active · Tab filter: " + model.filter.label() + " · Esc clear filter · s search · " + branchHint
 	}
-	return "h root · a active · Tab filter: " + model.filter.label() + " · s search"
+	return "h root · a active · Tab filter: " + model.filter.label() + " · s search · " + branchHint
 }
 
 func (model Model) worktreesFeedback() string {
@@ -1829,9 +2098,9 @@ func (model Model) titleLeftContentAtWidth(visibleCount, width int) string {
 	if repoName == "." || repoName == string(filepath.Separator) {
 		repoName = model.state.Repo.Root
 	}
-	count := fmt.Sprintf("%d worktrees", len(model.state.Rows))
+	count := model.rowCountText(len(model.tableRows()))
 	if model.search.Value() != "" || model.filter != filterAll {
-		count = fmt.Sprintf("%d/%d worktrees", visibleCount, len(model.state.Rows))
+		count = fmt.Sprintf("%d/%s", visibleCount, model.rowCountText(len(model.tableRows())))
 	}
 	rootBranch := model.rootBranchTitle()
 	if width <= runewidth.StringWidth(appTitle) {
@@ -1868,6 +2137,13 @@ func (model Model) titleLeftContentAtWidth(visibleCount, width int) string {
 		return title + separator + repo + "  " + meta
 	}
 	return title + separator + repo + "  " + meta + "  " + titleMetaStyle.Render("root: ") + titleRepoStyle.Render(truncatePlain(rootBranch, rootWidth))
+}
+
+func (model Model) rowCountText(total int) string {
+	if model.showBranches || model.filter == filterBranches {
+		return fmt.Sprintf("%d rows", total)
+	}
+	return fmt.Sprintf("%d worktrees", len(model.state.Rows))
 }
 
 func (model Model) rootBranchTitle() string {
@@ -1992,22 +2268,27 @@ func (model Model) setRefreshFlash(text string) (Model, tea.Cmd) {
 }
 
 func (model Model) selectionAnchor() selectionAnchor {
-	row, ok := model.selectedRow()
+	row, ok := model.selectedTableRow()
 	if !ok {
 		return selectionAnchor{}
 	}
-	return selectionAnchor{path: row.Path, branch: row.Branch, head: row.Head}
+	if row.IsBranch() {
+		return selectionAnchor{branch: row.Branch.Name, head: row.Branch.Head}
+	}
+	return selectionAnchor{path: row.Worktree.Path, branch: row.Worktree.Branch, head: row.Worktree.Head}
 }
 
 func (model *Model) restoreSelection(anchor selectionAnchor) bool {
 	indexes := model.visibleIndexes()
+	rows := model.tableRows()
 	if len(indexes) == 0 {
 		model.selected = 0
 		return false
 	}
 	if anchor.path != "" {
 		for visibleIndex, rowIndex := range indexes {
-			if model.state.Rows[rowIndex].Path == anchor.path {
+			row := rows[rowIndex]
+			if row.IsWorktree() && row.Worktree.Path == anchor.path {
 				model.selected = visibleIndex
 				return true
 			}
@@ -2015,12 +2296,12 @@ func (model *Model) restoreSelection(anchor selectionAnchor) bool {
 	}
 	if anchor.branch != "" || anchor.head != "" {
 		for visibleIndex, rowIndex := range indexes {
-			row := model.state.Rows[rowIndex]
-			if anchor.branch != "" && row.Branch == anchor.branch {
+			row := rows[rowIndex]
+			if anchor.branch != "" && row.BranchName() == anchor.branch {
 				model.selected = visibleIndex
 				return true
 			}
-			if anchor.head != "" && row.Head == anchor.head {
+			if anchor.head != "" && row.Head() == anchor.head {
 				model.selected = visibleIndex
 				return true
 			}
@@ -2030,9 +2311,10 @@ func (model *Model) restoreSelection(anchor selectionAnchor) bool {
 	return false
 }
 
-func (model *Model) selectMatching(match func(gitdata.Worktree) bool) {
+func (model *Model) selectMatching(match func(gitdata.Row) bool) {
+	rows := model.tableRows()
 	for visibleIndex, rowIndex := range model.visibleIndexes() {
-		if match(model.state.Rows[rowIndex]) {
+		if match(rows[rowIndex]) {
 			model.selected = visibleIndex
 			return
 		}
@@ -2081,6 +2363,7 @@ func (model *Model) applyCachedPullRequests() {
 	}
 	model.showPR = true
 	model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache)
+	model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, model.prCache)
 }
 
 func (model Model) frame(content string) string {
@@ -2126,10 +2409,11 @@ type helpEntryKind int
 const (
 	helpEntryKey helpEntryKind = iota
 	helpEntryRoot
+	helpEntryWorktree
+	helpEntryBranch
 	helpEntryActive
 	helpEntryLocked
 	helpEntryPrunable
-	helpEntryDetached
 	helpEntryClean
 	helpEntryStaged
 	helpEntryModified
@@ -2234,15 +2518,16 @@ func helpKeySections() []helpSection {
 				{lead: "a", description: "active", kind: helpEntryKey},
 				{lead: "Tab", description: "filter", kind: helpEntryKey},
 				{lead: "s", description: "search", kind: helpEntryKey},
+				{lead: "b", description: "branches", kind: helpEntryKey},
 			},
 		},
 		{
 			title: "Worktree Detail",
 			entries: []helpEntry{
-				{lead: "Enter", description: "go", kind: helpEntryKey},
+				{lead: "Enter", description: "go/checkout", kind: helpEntryKey},
 				{lead: "o", description: "editor", kind: helpEntryKey},
 				{lead: "d", description: "delete", kind: helpEntryKey},
-				{lead: "y", description: "abs path", kind: helpEntryKey},
+				{lead: "y", description: "copy", kind: helpEntryKey},
 				{lead: "p", description: "PR/branch", kind: helpEntryKey},
 			},
 		},
@@ -2252,13 +2537,14 @@ func helpKeySections() []helpSection {
 func helpLegendSections() []helpSection {
 	return []helpSection{
 		{
-			title: "Worktree Markers",
+			title: "Row Icons",
 			entries: []helpEntry{
 				{lead: "⌂", description: "root", kind: helpEntryRoot},
+				{lead: "▣", description: "worktree", kind: helpEntryWorktree},
+				{lead: "⑂", description: "branch", kind: helpEntryBranch},
 				{lead: "!", description: "locked", kind: helpEntryLocked},
 				{lead: "×", description: "prunable", kind: helpEntryPrunable},
 				{lead: "bold", description: "active branch", kind: helpEntryActive},
-				{lead: "detached", description: "HEAD", kind: helpEntryDetached},
 			},
 		},
 		{
@@ -2309,8 +2595,12 @@ func renderHelpEntry(entry helpEntry) string {
 
 func helpEntryStyle(kind helpEntryKind) lipgloss.Style {
 	switch kind {
-	case helpEntryRoot, helpEntryDetached, helpEntryPullRequest, helpEntryMerged:
+	case helpEntryRoot, helpEntryPullRequest, helpEntryMerged:
 		return inspectorCommitStyle
+	case helpEntryWorktree:
+		return inspectorCleanStyle
+	case helpEntryBranch:
+		return hintStyle
 	case helpEntryActive:
 		return inspectorValueStyle.Bold(true)
 	case helpEntryLocked, helpEntryPrunable, helpEntryModified, helpEntryClosed, helpEntryRunning, helpEntryError:
@@ -2365,8 +2655,28 @@ func (model Model) createPathPreview() string {
 	return pathutil.ApplyTemplate(model.config.PathTemplate, model.state.Repo.Root, branch)
 }
 
+func (model Model) renderCheckoutAtWidth(width int) string {
+	dialog := model.checkoutDialog
+	contentWidth := max(1, width-4)
+	lines := []string{
+		truncatePlain("Branch: "+dialog.branch.DisplayBranch(), contentWidth),
+		truncatePlain("Path: "+dialog.path, contentWidth),
+	}
+	if dialog.error != "" {
+		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(truncatePlain(dialog.error, contentWidth)))
+	}
+	return dialogBox("Checkout branch", lines, colorKeyHints("Enter create + go · Esc cancel", false), width)
+}
+
 func (model Model) renderDeleteAtWidth(width int) string {
-	row, _ := model.selectedRow()
+	selected, ok := model.selectedTableRow()
+	if !ok {
+		return dialogBox("Delete", []string{"No row selected."}, deleteDialogHintsAtWidth("Esc cancel", width-6), width)
+	}
+	if selected.IsBranch() {
+		return model.renderDeleteBranchAtWidth(selected.Branch, width)
+	}
+	row := selected.Worktree
 	dialog := model.deleteDialog
 	contentWidth := max(1, width-4)
 	lines := model.deleteMetadataLines(row, contentWidth)
@@ -2466,6 +2776,33 @@ func (model Model) renderDeleteAtWidth(width int) string {
 	return dialogBox("Delete worktree", lines, deleteDialogHintsAtWidth(bottom, width-6), width)
 }
 
+func (model Model) renderDeleteBranchAtWidth(branch gitdata.Branch, width int) string {
+	contentWidth := max(1, width-4)
+	command := deleteBranchCommand(branch)
+	lines := []string{
+		dialogFieldLine("Branch", branch.DisplayBranch(), contentWidth),
+		dialogFieldLine("HEAD", branchHeadText(branch), contentWidth),
+		dialogFieldLine("PR", model.rowPRText(gitdata.Row{Kind: gitdata.RowKindBranch, Branch: branch}), contentWidth),
+		"",
+		deleteSectionTitle("Branch"),
+		"[x] " + deleteBranchLabel(branch),
+		deleteDetailLine("Local branch ref will be deleted. No worktree files are removed."),
+	}
+	if branch.BranchMergedToMain {
+		lines = append(lines, deleteDetailLine("Merged into "+model.deleteMainBranchName()+"."))
+	} else {
+		lines = append(lines, deleteDetailLine(deleteDangerStyle.Render("Not merged into "+model.deleteMainBranchName()+".")))
+	}
+	if branch.UpstreamGone {
+		lines = append(lines, deleteDetailLine("Remote branch already deleted, likely safe."))
+	}
+	lines = append(lines, deleteCommandLine(command.text, command.danger))
+	for index, line := range lines {
+		lines[index] = truncateStyled(line, contentWidth)
+	}
+	return dialogBox("Delete branch", lines, deleteDialogHintsAtWidth("Enter delete · Esc cancel", width-6), width)
+}
+
 func (model Model) deleteMetadataLines(row gitdata.Worktree, width int) []string {
 	return []string{
 		dialogFieldLine("Path", row.Path, width),
@@ -2479,6 +2816,20 @@ func (model Model) deleteMainBranchName() string {
 		return model.state.Repo.MainBranch
 	}
 	return "main"
+}
+
+func deleteBranchLabel(branch gitdata.Branch) string {
+	if branch.BranchMergedToMain {
+		return "delete local branch"
+	}
+	return "force delete local branch"
+}
+
+func deleteBranchCommand(branch gitdata.Branch) deleteCommand {
+	if branch.BranchMergedToMain {
+		return deleteCommand{text: "git branch -d " + branch.Name}
+	}
+	return deleteCommand{text: "git branch -D " + branch.Name, danger: true}
 }
 
 func dialogFieldLine(label, value string, width int) string {
@@ -2635,6 +2986,10 @@ func deleteDialogWidth(viewWidth int) int {
 	return modalWidth(viewWidth, 76)
 }
 
+func checkoutDialogWidth(viewWidth int) int {
+	return modalWidth(viewWidth, 76)
+}
+
 func paletteDialogWidth(viewWidth int) int {
 	return modalWidth(viewWidth, 72)
 }
@@ -2773,8 +3128,8 @@ func (model Model) availableTableHeight(now time.Time) int {
 	panelWidth := max(4, contentWidth)
 	panelContentWidth := max(1, panelWidth-2)
 	detail := ""
-	if row, ok := model.selectedRow(); ok {
-		detail = model.detailPanelAtWidth(row, now, panelContentWidth)
+	if row, ok := model.selectedTableRow(); ok {
+		detail = model.rowDetailPanelAtWidth(row, now, panelContentWidth)
 	}
 	return model.availableTableHeightForDetail(detail)
 }
@@ -2800,8 +3155,9 @@ func (model Model) visibleIndexes() []int {
 
 func (model Model) visibleIndexesForFilter(filter worktreeFilter) []int {
 	pattern := model.search.Value()
-	indexes := make([]int, 0, len(model.state.Rows))
-	for index, row := range model.state.Rows {
+	rows := model.tableRowsForFilter(filter)
+	indexes := make([]int, 0, len(rows))
+	for index, row := range rows {
 		branchMatches := pattern == "" || fuzzyMatch(row.DisplayBranch(), pattern)
 		if branchMatches && filter.matches(row) {
 			indexes = append(indexes, index)
@@ -2810,12 +3166,51 @@ func (model Model) visibleIndexesForFilter(filter worktreeFilter) []int {
 	return indexes
 }
 
-func (model Model) selectedRow() (gitdata.Worktree, bool) {
+func (model Model) tableRows() []gitdata.Row {
+	return model.tableRowsForFilter(model.filter)
+}
+
+func (model Model) tableRowsForFilter(filter worktreeFilter) []gitdata.Row {
+	return model.state.TableRows(model.showBranches || filter == filterBranches)
+}
+
+func (model Model) selectedTableRow() (gitdata.Row, bool) {
 	indexes := model.visibleIndexes()
 	if len(indexes) == 0 || model.selected < 0 || model.selected >= len(indexes) {
+		return gitdata.Row{}, false
+	}
+	rows := model.tableRows()
+	return rows[indexes[model.selected]], true
+}
+
+func (model Model) selectedWorktree() (gitdata.Worktree, bool) {
+	row, ok := model.selectedTableRow()
+	if !ok || !row.IsWorktree() {
 		return gitdata.Worktree{}, false
 	}
-	return model.state.Rows[indexes[model.selected]], true
+	return row.Worktree, true
+}
+
+func (model Model) selectedCopyText() (string, string, bool) {
+	row, ok := model.selectedTableRow()
+	if !ok {
+		return "", "", false
+	}
+	if row.IsBranch() {
+		name := row.Branch.Name
+		if name == "" {
+			return "", "", false
+		}
+		return name, "copied branch name: " + name, true
+	}
+	if row.Worktree.Path == "" {
+		return "", "", false
+	}
+	return row.Worktree.Path, "copied absolute path: " + row.Worktree.Path, true
+}
+
+func (model Model) selectedRow() (gitdata.Worktree, bool) {
+	return model.selectedWorktree()
 }
 
 func (model Model) startEnrichment(forcePullRequests bool) (Model, tea.Cmd) {
@@ -2900,7 +3295,7 @@ func (model Model) diskUsageCommand(ctx context.Context, now time.Time, id int) 
 	}
 	visiblePaths, backgroundPaths := model.diskUsagePaths(now)
 	fullPath := ""
-	if row, ok := model.selectedRow(); ok && diskUsageFullEligible(row) {
+	if row, ok := model.selectedWorktree(); ok && diskUsageFullEligible(row) {
 		fullPath = row.Path
 	}
 	if len(visiblePaths) == 0 && len(backgroundPaths) == 0 && fullPath == "" {
@@ -2918,15 +3313,19 @@ func (model Model) diskUsagePaths(now time.Time) ([]string, []string) {
 		return nil, nil
 	}
 	visible := model.visibleTableIndexes(now)
+	tableRows := model.tableRows()
 	seen := map[string]bool{}
 	visiblePaths := make([]string, 0, len(visible))
 	for _, rowIndex := range visible {
-		row := model.state.Rows[rowIndex]
-		if !diskUsageEligible(row) {
+		row := tableRows[rowIndex]
+		if !row.IsWorktree() {
 			continue
 		}
-		seen[row.Path] = true
-		visiblePaths = append(visiblePaths, row.Path)
+		if !diskUsageEligible(row.Worktree) {
+			continue
+		}
+		seen[row.Worktree.Path] = true
+		visiblePaths = append(visiblePaths, row.Worktree.Path)
 	}
 	backgroundPaths := []string{}
 	for _, row := range model.state.Rows {
@@ -3090,7 +3489,16 @@ func loadConfigIfChanged(path string, previousModTime time.Time) (config.Config,
 	return loadedConfig, info.ModTime(), true, nil
 }
 
-func copyPathCmd(path string) tea.Cmd {
+func persistShowBranchesCmd(showBranches bool) tea.Cmd {
+	return func() tea.Msg {
+		err := config.PatchDefault(func(config *config.Config) {
+			config.ShowBranches = showBranches
+		})
+		return settingsSavedMsg{err: err}
+	}
+}
+
+func copyTextCmd(text, message string) tea.Cmd {
 	return func() tea.Msg {
 		var command *exec.Cmd
 		switch runtime.GOOS {
@@ -3105,9 +3513,9 @@ func copyPathCmd(path string) tea.Cmd {
 				command = exec.Command("xclip", "-selection", "clipboard")
 			}
 		}
-		command.Stdin = strings.NewReader(path)
+		command.Stdin = strings.NewReader(text)
 		err := command.Run()
-		return actionMsg{text: "copied absolute path: " + path, err: err}
+		return actionMsg{text: message, err: err}
 	}
 }
 

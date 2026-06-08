@@ -39,6 +39,10 @@ func Render(state gitdata.State, options Options, now time.Time) string {
 }
 
 func RenderRows(rows []gitdata.Worktree, options Options, now time.Time) string {
+	return RenderMixedRows(gitdata.RowsFromWorktrees(rows), options, now)
+}
+
+func RenderMixedRows(rows []gitdata.Row, options Options, now time.Time) string {
 	width := options.Width
 	if width <= 0 {
 		width = 100
@@ -58,7 +62,7 @@ func RenderRows(rows []gitdata.Worktree, options Options, now time.Time) string 
 
 func chooseColumns(width int, showPR bool, gap int) []column {
 	columns := []column{
-		{key: "branch", title: "  branch", width: 20, elastic: true},
+		{key: "branch", title: "  name", width: 20, elastic: true},
 		{key: "status", title: "status", width: 8},
 	}
 	if width < 40 {
@@ -133,12 +137,12 @@ func renderHeader(columns []column, options Options) string {
 	return strings.Join(cells, strings.Repeat(" ", columnGap(options)))
 }
 
-func renderRow(row gitdata.Worktree, columns []column, options Options, now time.Time, rowIndex int) string {
+func renderRow(row gitdata.Row, columns []column, options Options, now time.Time, rowIndex int) string {
 	cells := make([]string, 0, len(columns))
 	selected := options.HighlightSelected && rowIndex == options.SelectedIndex
 	for _, column := range columns {
 		value := cellValue(row, column.key, now, options)
-		cell := pad(value, column.width, column.align)
+		cell := padCell(row, column, value)
 		if options.Color {
 			cell = colorCell(row, column.key, value, cell, selected)
 		}
@@ -158,52 +162,53 @@ func renderRow(row gitdata.Worktree, columns []column, options Options, now time
 	return line
 }
 
-func cellValue(row gitdata.Worktree, key string, now time.Time, options Options) string {
+func cellValue(row gitdata.Row, key string, now time.Time, options Options) string {
 	switch key {
 	case "branch":
-		marker := row.Marker()
-		if marker == "" {
-			return "  " + row.DisplayBranch()
+		value := row.TypeIcon() + " " + row.ListBranch()
+		if state := row.StateIcon(); state != "" {
+			value += " " + state
 		}
-		return marker + " " + row.DisplayBranch()
+		return value
 	case "status":
-		if !row.LocalMetadataLoaded && options.Pending != "" {
+		if !row.LocalMetadataLoaded() && options.Pending != "" {
 			return options.Pending
 		}
 		return row.StatusText()
 	case "remote":
-		if !row.LocalMetadataLoaded && options.Pending != "" {
+		if !row.LocalMetadataLoaded() && options.Pending != "" {
 			return options.Pending
 		}
-		return row.HeadSync.RemoteCompact(row.UpstreamGone)
+		return row.HeadSync().RemoteCompact(row.UpstreamGone())
 	case "main":
-		if !row.LocalMetadataLoaded && options.Pending != "" {
+		if !row.LocalMetadataLoaded() && options.Pending != "" {
 			return options.Pending
 		}
-		return row.MainSync.Compact()
+		return row.MainSync().Compact()
 	case "commit":
-		if !row.LocalMetadataLoaded && options.Pending != "" {
+		if !row.LocalMetadataLoaded() && options.Pending != "" {
 			return options.Pending
 		}
-		if row.CommitShort == "" {
+		if row.CommitShort() == "" {
 			return ""
 		}
-		return row.CommitShort + " " + row.CommitSubject
+		return row.CommitShort() + " " + row.CommitSubject()
 	case "age":
-		if !row.LocalMetadataLoaded && options.Pending != "" {
+		if !row.LocalMetadataLoaded() && options.Pending != "" {
 			return options.Pending
 		}
-		return gitdata.RelativeAge(now, row.CommitTime)
+		return gitdata.RelativeAge(now, row.CommitTime())
 	case "pr":
-		if row.PR == nil {
+		pr := row.PullRequest()
+		if pr == nil {
 			if options.PRPending && options.Pending != "" {
 				return options.Pending
 			}
 			return ""
 		}
-		text := row.PR.Text()
-		if options.Hyperlinks && row.PR.URL != "" {
-			return osc8(row.PR.URL, text)
+		text := pr.Text()
+		if options.Hyperlinks && pr.URL != "" {
+			return osc8(pr.URL, text)
 		}
 		return text
 	case "size":
@@ -226,8 +231,11 @@ var (
 	selectedRowStyle = lipgloss.NewStyle().
 				Background(lipgloss.Color("62"))
 	branchStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	branchOnlyStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	inactiveMarkerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	mainMarkerStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
+	worktreeMarkerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("108"))
+	branchMarkerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	cleanStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	dirtyStagedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	dirtyModifiedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
@@ -242,7 +250,7 @@ var (
 	sizeStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("108"))
 )
 
-func colorCell(row gitdata.Worktree, key, raw, value string, selected bool) string {
+func colorCell(row gitdata.Row, key, raw, value string, selected bool) string {
 	switch key {
 	case "branch":
 		return colorBranchCell(row, raw, value, selected)
@@ -251,7 +259,7 @@ func colorCell(row gitdata.Worktree, key, raw, value string, selected bool) stri
 	case "remote":
 		return colorRemoteCell(row, raw, value, selected)
 	case "main":
-		return colorSyncCell(row.MainSync, raw, value, selected)
+		return colorSyncCell(row.MainSync(), raw, value, selected)
 	case "commit":
 		return colorCommitCell(row, raw, value, selected)
 	case "age":
@@ -264,7 +272,7 @@ func colorCell(row gitdata.Worktree, key, raw, value string, selected bool) stri
 	return value
 }
 
-func colorBranchCell(row gitdata.Worktree, raw, padded string, selected bool) string {
+func colorBranchCell(row gitdata.Row, raw, padded string, selected bool) string {
 	content, padding := splitPadding(raw, padded)
 	if content == "" {
 		return selectedSegmentWhen(padding, selected)
@@ -273,23 +281,34 @@ func colorBranchCell(row gitdata.Worktree, raw, padded string, selected bool) st
 	if marker == " " {
 		return selectedSegmentWhen(marker, selected) + colorBranchText(row, rest, selected) + selectedSegmentWhen(padding, selected)
 	}
-	return styleForSelected(markerStyle(row), selected).Render(marker) + colorBranchText(row, rest, selected) + selectedSegmentWhen(padding, selected)
+	return styleForSelected(typeIconStyle(row), selected).Render(marker) + colorBranchText(row, rest, selected) + selectedSegmentWhen(padding, selected)
 }
 
-func markerStyle(row gitdata.Worktree) lipgloss.Style {
-	switch {
-	case row.Prunable:
-		return warningStyle
-	case row.Locked:
-		return lockedStyle
-	case row.IsMain:
+func typeIconStyle(row gitdata.Row) lipgloss.Style {
+	if row.IsBranch() {
+		return branchMarkerStyle
+	}
+	if row.Worktree.IsMain {
 		return mainMarkerStyle
+	}
+	return worktreeMarkerStyle
+}
+
+func stateIconStyle(row gitdata.Row) lipgloss.Style {
+	if row.IsBranch() {
+		return inactiveMarkerStyle
+	}
+	switch {
+	case row.Worktree.Prunable:
+		return warningStyle
+	case row.Worktree.Locked:
+		return lockedStyle
 	default:
 		return inactiveMarkerStyle
 	}
 }
 
-func colorBranchText(row gitdata.Worktree, value string, selected bool) string {
+func colorBranchText(row gitdata.Row, value string, selected bool) string {
 	if value == "" {
 		return value
 	}
@@ -298,69 +317,76 @@ func colorBranchText(row gitdata.Worktree, value string, selected bool) string {
 		prefix = " "
 		value = strings.TrimPrefix(value, " ")
 	}
+	lifecycleSuffix := ""
+	if state := row.StateIcon(); state != "" && strings.HasSuffix(value, " "+state) {
+		value = strings.TrimSuffix(value, " "+state)
+		lifecycleSuffix = " " + state
+	}
+	renderLifecycleSuffix := func() string {
+		if lifecycleSuffix == "" {
+			return ""
+		}
+		return styleForSelected(stateIconStyle(row), selected).Render(lifecycleSuffix)
+	}
 	boldStyle := func(style lipgloss.Style) lipgloss.Style {
-		if row.IsActive {
+		if row.IsWorktree() && row.Worktree.IsActive {
 			return style.Bold(true)
 		}
 		return style
 	}
-	if row.Detached {
+	if row.IsBranch() {
+		return selectedSegmentWhen(prefix, selected) +
+			styleForSelected(boldStyle(branchOnlyStyle), selected).Render(value) +
+			renderLifecycleSuffix()
+	}
+	if row.Worktree.Detached {
 		head, state, found := strings.Cut(value, " ")
 		if found {
 			return selectedSegmentWhen(prefix, selected) +
 				styleForSelected(boldStyle(commitHashStyle), selected).Render(head) +
-				styleForSelected(boldStyle(detachedStyle), selected).Render(" "+state)
+				styleForSelected(boldStyle(detachedStyle), selected).Render(" "+state) +
+				renderLifecycleSuffix()
 		}
-		return selectedSegmentWhen(prefix, selected) + styleForSelected(boldStyle(detachedStyle), selected).Render(value)
+		return selectedSegmentWhen(prefix, selected) +
+			styleForSelected(boldStyle(detachedStyle), selected).Render(value) +
+			renderLifecycleSuffix()
 	}
-	if row.Prunable {
-		branch, _, found := strings.Cut(value, " prunable")
-		if found {
-			return selectedSegmentWhen(prefix, selected) +
-				styleForSelected(boldStyle(mutedStyle), selected).Render(branch) +
-				styleForSelected(boldStyle(warningStyle), selected).Render(" prunable")
-		}
-	}
-	if row.Locked {
-		branch, _, found := strings.Cut(value, " locked")
-		if found {
-			return selectedSegmentWhen(prefix, selected) +
-				styleForSelected(boldStyle(branchStyle), selected).Render(branch) +
-				styleForSelected(boldStyle(lockedStyle), selected).Render(" locked")
-		}
-	}
-	return selectedSegmentWhen(prefix, selected) + styleForSelected(boldStyle(branchStyleFor(row)), selected).Render(value)
+	return selectedSegmentWhen(prefix, selected) +
+		styleForSelected(boldStyle(branchStyleFor(row)), selected).Render(value) +
+		renderLifecycleSuffix()
 }
 
-func branchStyleFor(row gitdata.Worktree) lipgloss.Style {
-	if row.Detached {
+func branchStyleFor(row gitdata.Row) lipgloss.Style {
+	if row.IsWorktree() && row.Worktree.Detached {
 		return detachedStyle
 	}
 	return branchStyle
 }
 
-func colorStatusCell(row gitdata.Worktree, raw, padded string, selected bool) string {
+func colorStatusCell(row gitdata.Row, raw, padded string, selected bool) string {
 	padding := strings.TrimPrefix(padded, raw)
 	if padding == padded {
 		padding = ""
 	}
 	switch {
-	case row.Status.Clean():
+	case row.IsBranch() || raw == "-":
+		return styleForSelected(mutedStyle, selected).Render(raw) + selectedSegmentWhen(padding, selected)
+	case row.Worktree.Status.Clean():
 		return styleForSelected(cleanStyle, selected).Render(raw) + selectedSegmentWhen(padding, selected)
 	default:
 		return colorDirtyTokens(raw, selected) + selectedSegmentWhen(padding, selected)
 	}
 }
 
-func colorRemoteCell(row gitdata.Worktree, raw, padded string, selected bool) string {
+func colorRemoteCell(row gitdata.Row, raw, padded string, selected bool) string {
 	content, padding := splitPadding(raw, padded)
 	if content == "" {
 		return selectedSegmentWhen(padding, selected)
 	}
-	if row.UpstreamGone || content == "gone" {
+	if row.UpstreamGone() || content == "gone" {
 		return styleForSelected(warningStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
 	}
-	return colorSyncCell(row.HeadSync, raw, padded, selected)
+	return colorSyncCell(row.HeadSync(), raw, padded, selected)
 }
 
 func colorDirtyTokens(value string, selected bool) string {
@@ -400,14 +426,15 @@ func colorSyncCell(sync gitdata.SyncState, raw, padded string, selected bool) st
 	return strings.Join(parts, selectedSegmentWhen(" ", selected)) + selectedSegmentWhen(padding, selected)
 }
 
-func colorCommitCell(row gitdata.Worktree, raw, padded string, selected bool) string {
+func colorCommitCell(row gitdata.Row, raw, padded string, selected bool) string {
 	content, padding := splitPadding(raw, padded)
 	if content == "" {
 		return selectedSegmentWhen(padding, selected)
 	}
-	if row.CommitShort != "" && strings.HasPrefix(content, row.CommitShort) {
-		rest := strings.TrimPrefix(content, row.CommitShort)
-		return styleForSelected(commitHashStyle, selected).Render(row.CommitShort) +
+	commitShort := row.CommitShort()
+	if commitShort != "" && strings.HasPrefix(content, commitShort) {
+		rest := strings.TrimPrefix(content, commitShort)
+		return styleForSelected(commitHashStyle, selected).Render(commitShort) +
 			styleForSelected(commitSubjectStyle, selected).Render(rest) +
 			selectedSegmentWhen(padding, selected)
 	}
@@ -491,6 +518,31 @@ func pad(value string, width int, align string) string {
 		return padding + value
 	}
 	return value + padding
+}
+
+func padCell(row gitdata.Row, column column, value string) string {
+	if column.key == "branch" {
+		return padBranchName(row, value, column.width)
+	}
+	return pad(value, column.width, column.align)
+}
+
+func padBranchName(row gitdata.Row, value string, width int) string {
+	state := row.StateIcon()
+	if state == "" {
+		return pad(value, width, "")
+	}
+	suffix := " " + state
+	name := strings.TrimSuffix(value, suffix)
+	if name == value {
+		return pad(value, width, "")
+	}
+	suffixWidth := runewidth.StringWidth(suffix)
+	if width <= suffixWidth+1 {
+		return pad(value, width, "")
+	}
+	value = truncate(name, width-suffixWidth) + suffix
+	return pad(value, width, "")
 }
 
 func padSelectedRow(value string, width int) string {

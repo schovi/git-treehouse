@@ -16,6 +16,7 @@ type Config struct {
 	Editor                      string `toml:"editor"`
 	PathTemplate                string `toml:"path_template"`
 	MainBranch                  string `toml:"main_branch"`
+	ShowBranches                bool   `toml:"show_branches"`
 	SkipShellIntegrationWelcome bool   `toml:"skip_shell_integration_welcome"`
 }
 

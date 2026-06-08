@@ -1,6 +1,6 @@
 # Git Treehouse — git worktree TUI
 
-A fast terminal UI for managing git worktrees: browse, switch, create, and delete them from one keyboard-driven table.
+A fast terminal UI for managing git worktrees and local branches: browse, switch, create, and delete worktrees from one keyboard-driven table.
 
 - **Binary name:** `git-treehouse`
 - **Smart shell wrapper:** `gth`
@@ -38,13 +38,12 @@ A child process cannot change its parent shell's cwd, so Git Treehouse uses the 
 
 ### 3.1 Table
 
-Borderless table, one row per worktree. Columns left to right:
+Borderless table. By default it shows one row per worktree unless `show_branches` is enabled. Pressing `b` also shows local branches that are not checked out by any worktree. Columns left to right:
 
 | Column | Content |
 |---|---|
-| marker | Row state glyph (see 3.2) |
-| branch | Branch name, with lifecycle state suffixes for `locked`, `prunable`, or `detached` rows, e.g. `cd5e190 detached` |
-| status | Working-tree state, compact (see 3.4) |
+| name | Row-type glyph plus display name, with optional lifecycle suffix, e.g. `⌂ main`, `▣ feature/work`, `▣ cd5e190 detached`, `▣ stale/abandoned ×`, or `⑂ feature/local-only` |
+| status | Working-tree state, compact (see 3.4); `-` for branch-only rows |
 | remote | Ahead/behind vs upstream, e.g. `↑2 ↓1`; `✓` when synced; `gone` when upstream was deleted; `-` when no upstream |
 | main± | Ahead/behind vs the local main branch, e.g. `↑5 ↓12`; blank only for rows already on the main branch |
 | commit | Short SHA + truncated subject line |
@@ -52,28 +51,36 @@ Borderless table, one row per worktree. Columns left to right:
 | PR | PR number + state + CI (see 3.6), rendered as a clickable OSC 8 hyperlink |
 | size | Git-aware worktree size, computed lazily from tracked and unignored untracked files (see 3.7) |
 
-Column sizing: branch and commit are elastic; commit truncates first, then size, PR, and age drop entirely on narrow terminals. Marker, branch, status, and remote survive until the minimum compact layout.
+Column sizing: name and commit are elastic; commit truncates first, then size, PR, and age drop entirely on narrow terminals. Name, status, and remote survive until the minimum compact layout.
 
 The header includes the root repository branch, e.g. `root: codex/list-rendering-polish`, because the root repository can be checked out to a non-main branch.
 
-### 3.2 Row markers
+### 3.2 Row lifecycle and type icons
 
-Markers are reserved for important type or lifecycle state. Selection and current-worktree state are rendered with text style, not marker glyphs.
+Row-type icons live inside the name column before the displayed name. Lifecycle icons for exceptional worktree states are suffixes in the name column. Selection and current-worktree state are rendered with text style, not marker glyphs.
+
+Lifecycle suffixes:
+
+| Glyph | Meaning |
+|---|---|
+| `!` | Locked worktree |
+| `×` | Prunable worktree, directory missing on disk |
+
+Type icons:
 
 | Glyph | Meaning |
 |---|---|
 | `⌂` | Root repository, the primary checkout that owns the worktree set |
-| `!` | Locked worktree |
-| `×` | Prunable worktree, directory missing on disk |
-| blank | Normal worktree |
+| `▣` | Checked-out worktree |
+| `⑂` | Local branch without a worktree |
 
-The marker column is one character wide with one space before the branch name.
+The name column starts with exactly one row-type glyph and one space before the displayed name. The header label `name` aligns with the displayed name, leaving the row-type glyph area untitled. Locked and prunable worktrees append one lifecycle glyph after the displayed name. Detached worktrees still show `<sha> detached`, prefixed by the worktree type icon.
 
 ### 3.3 Selection and current worktree
 
-- The current worktree, where `git-treehouse` was started, uses bold branch text.
+- The current worktree, where `git-treehouse` was started, uses bold name text.
 - The selected row uses a full-row background only. Selection does not add bold text or a row marker.
-- If the current row is selected, both styles apply: full-row background plus bold branch text.
+- If the current row is selected, both styles apply: full-row background plus bold name text.
 
 ### 3.4 Status column
 
@@ -81,8 +88,9 @@ The status column is only for working-tree file changes:
 
 - `✓` means clean
 - Counts for dirty trees: `+2 ~3 ?1` (staged / modified / untracked); only non-zero parts shown
+- `-` means the row is a local branch without a checked-out worktree
 
-Lifecycle and Git state words do not appear in this column. `locked`, `prunable`, and `detached` are rendered as branch suffixes. Upstream state is rendered in `remote`.
+Lifecycle and Git state words do not appear in this column. `locked` and `prunable` are rendered as name-column lifecycle suffixes. Detached HEAD rows show `detached` in the name column. Upstream state is rendered in `remote`.
 
 ### 3.5 Remote and main sync
 
@@ -111,7 +119,7 @@ Loaded via the `gh` CLI (one `gh pr list`-style call for all branches), only if 
 Instant app frame, async enrichment:
 
 1. **Synchronous (must be <50ms):** repository resolution plus one `git worktree list --porcelain`. The app frame renders immediately. Worktree rows may stay in a loading skeleton until local metadata is ready enough to sort consistently.
-2. **Async, streamed in as each resolves:** local metadata (dirty status, remote/main ahead-behind from already-fetched refs, commit + age), PR + CI data via `gh`, and size data. Pending cells and detail fields show a subtle `⋯`.
+2. **Async, streamed in as each resolves:** local metadata (dirty status, branch-only rows from local refs, remote/main ahead-behind from already-fetched refs, commit + age), PR + CI data via `gh`, and size data. Pending cells and detail fields show a subtle `⋯`.
 3. **Size data:** the table uses a fast Git-aware size from `git ls-files --cached --others --exclude-standard`. The selected-row detail panel may additionally load full filesystem size with a cancellable `du`-equivalent walk.
 4. **No `git fetch` on startup.** Ahead/behind reflects the last fetch. The TUI reloads local state every 30 seconds while idle; `r` triggers `git fetch --prune`, then loads local metadata before swapping the table so the existing rows stay visible during refresh.
 
@@ -123,34 +131,36 @@ Manual refresh shows scoped feedback in the Worktrees title: an 80ms Braille spi
 
 Below the table:
 
-- **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. In normal mode this shows `h root · a active · Tab filter: <state> · s search`. With an active filter, it also shows `Esc clear filter`. While searching, letter keys feed the live search input, so the footer shows `search <text>▌ · Esc clear · Tab filter: <state>`.
-- **Detail panel:** full info for the selected row: branch name, explicit `HEAD`, root/current state, absolute path, full status counts, Git-aware and full size when loaded, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes. Root/current context appears next to the Details title, for example `Details · Current root repository`; selected-row actions live in the bottom border: `↵ go · o editor · d delete · y abs path · p PR`.
+- **Worktrees footer:** list-local hints live in the bottom border of the Worktrees panel. In normal mode this shows `h root · a active · Tab filter: <state> · s search · b branches`. With branches visible it shows `b hide branches`. With an active filter, it also shows `Esc clear filter`. While searching, letter keys feed the live search input, so the footer shows `search <text>▌ · Esc clear · Tab filter: <state> · b branches`.
+- **Detail panel:** full info for the selected row. Worktree rows show branch name, explicit `HEAD`, root/current state, absolute path, full status counts, Git-aware and full size when loaded, upstream name and sync state, main branch comparison, full commit subject, lifecycle/delete notes. Branch-only rows show branch name, explicit `HEAD`, `Path: not checked out`, `Status: no worktree`, upstream/main comparison, commit, PR, and checkout action. Root/current context appears next to the Details title, for example `Details · Current root repository`; branch-only rows use `Details · Local branch`. Selected-row actions live in the bottom border: worktrees show `↵ go · o editor · d delete · y abs path · p PR`; branch-only rows show `↵ checkout · n new from branch · d delete · y name · p PR`.
 - **Status bar:** transient progress and flash messages only. The app frame title starts with `Git treehouse · <repo>`. The top controls show `n new`, refresh age, help, and quit. Table-scoped refresh feedback lives in the Worktrees title instead of the status bar.
-- **Help overlay:** groups shortcuts by context (`Global`, `Worktree List`, `Worktree Detail`) and groups visual legends (`Worktree Markers`, `Git Status`, `Pull Requests`). Category headers are bold white. The row-state and PR legends live here instead of the status bar.
+- **Help overlay:** groups shortcuts by context (`Global`, `Worktree List`, `Worktree Detail`) and groups visual legends (`Worktree Markers`, `Git Status`, `Pull Requests`). Category headers are bold white. The row lifecycle and PR legends live here instead of the status bar.
 - `g/G` remains available and documented in help, but is not shown in the main view.
 
 ### 3.9 Sorting, search, and filtering
 
 - **Order:** root repository pinned first, remaining rows by last-commit date, newest first.
 - **Search:** `s` opens a fuzzy search over branch names.
-- **Filter:** `Tab` cycles filters across all, modified, prunable, locked, and detached rows. Search and filters compose. `Esc` clears the current search while searching; otherwise it clears the active filter. Bare `Esc` does not quit.
+- **Branches:** `b` toggles branch-only rows in the list and persists the preference to config.
+- **Filter:** `Tab` cycles filters across all, modified, branches, prunable, locked, and detached rows. The branches filter shows branch-only rows even when the general branch-row toggle is off. Search and filters compose. `Esc` clears the current search while searching; otherwise it clears the active filter. Bare `Esc` does not quit.
 
 ## 4. Actions & keybindings
 
 | Key | Action |
 |---|---|
 | `↑`/`↓`, `k`/`j` | Move selection |
-| `Enter` | cd to selected worktree and exit (writes `--cd-file`). On the active row: just quit. On a prunable row: disabled (hint shown in status bar). |
+| `Enter` | cd to selected worktree and exit (writes `--cd-file`). On the active row: just quit. On a prunable row: disabled (hint shown in status bar). On a branch-only row: open checkout dialog (§5.1). |
 | `n` | Create worktree from focused row (§5) |
 | `Delete` / `Backspace` / `d` | Delete flow (§6) |
 | `o` | Open selected worktree in editor (config → `$EDITOR` fallback); TUI stays open |
 | `p` | Open selected row's PR in browser (`gh pr view --web`); no PR → open repo page for the branch |
-| `y` | Copy selected worktree's absolute path to clipboard; brief `copied` flash in status bar |
+| `y` | Copy selected worktree's absolute path, or selected branch-only row's branch name, to clipboard; brief `copied` flash in status bar |
 | `r` | `git fetch --prune` + stable refresh of all rows |
 | `h` | Jump to the root repository worktree |
 | `a` | Jump to the active worktree |
 | `s` | Fuzzy branch search |
-| `Tab` | Cycle filter: all → modified → prunable → locked → detached |
+| `b` | Toggle branch-only rows and persist the setting |
+| `Tab` | Cycle filter: all → modified → branches → prunable → locked → detached |
 | `Ctrl+P` | Open command palette |
 | `Esc` | Contextual cancel or clear: close topmost dialog, clear current search, or clear active filter. Does not quit. |
 | `q`, `Ctrl+C` | Quit immediately from list view (no cd) |
@@ -186,11 +196,29 @@ No multi-select / bulk operations in v1; every action applies to the focused row
   4. Success → **cd into the new worktree immediately** (write `--cd-file`, exit app).
   5. Failure → git's stderr shown in the dialog, dialog stays open.
 
-Checking out an *existing* branch into a new worktree is intentionally out of scope for v1 (the base picker covers spawn-from-existing-state).
+### 5.1 Checkout existing branch flow
+
+`Enter` on a branch-only row opens a confirmation modal:
+
+```
+┌ Checkout branch ─────────────────────────┐
+│ Branch: feature/list-branches            │
+│ Path: /repo/.worktrees/repo/feature-list │
+│                                          │
+│ Enter create + go · Esc cancel           │
+└──────────────────────────────────────────┘
+```
+
+- The target path uses the same path template as the create flow.
+- Path collision → inline error, dialog stays open.
+- On Enter, run `git worktree add <path> <branch>`.
+- Success → cd into the new worktree immediately (write `--cd-file`, exit app).
+- Failure → git's stderr shown in the dialog, dialog stays open.
+- Copying uncommitted changes from another worktree is intentionally not automatic; it needs an explicit safe design before adding mutation beyond `git worktree add`.
 
 ## 6. Delete flow
 
-`Delete`/`Backspace`/`d` on a row opens a confirmation dialog. Never on the active or root repository row (status bar explains why).
+`Delete`/`Backspace`/`d` on a row opens a confirmation dialog. Never on the active or root repository row (status bar explains why). Branch-only rows delete only the local branch ref and never remove worktree files.
 
 The delete flow states exactly what will happen:
 
@@ -203,6 +231,7 @@ The delete flow states exactly what will happen:
   - Branch merged into main → checked by default and uses safe `git branch -d`.
   - Branch unmerged → unchecked by default; checking it means force delete with `git branch -D`.
   - Upstream gone (PR merged) → hint `remote branch already deleted — likely safe`.
+- **Branch-only row:** opens a branch-only confirmation with metadata (`Branch`, `HEAD`, `PR`) and the exact branch command. Merged branches use `git branch -d`; unmerged branches are explicit force deletes with `git branch -D`.
 - `Enter` executes, `Esc` cancels. Result (or git error) flashes in the status bar; table reloads.
 
 **Prunable rows** (directory missing) open a prune-only confirmation. The dialog offers `git worktree prune`-equivalent cleanup and does not show the branch deletion checkbox.
@@ -235,20 +264,21 @@ Optional `~/.config/git-treehouse/config.toml`. Everything works with zero confi
 editor = "cursor"                          # default: $EDITOR, else `code`
 path_template = "{repo_parent}/{branch}"   # default; {repo}, {repo_parent}, {branch} (sanitized)
 main_branch = ""                           # default: auto-detect (origin/HEAD, fallback main/master)
+show_branches = false                      # default: hide branch-only rows until `b` is pressed
 ```
 
 ## 10. Edge cases & errors
 
 - **Main branch detection:** `origin/HEAD` symref; fallback to local `main`, then `master`. Override via config.
-- **Detached HEAD rows:** branch column shows `<sha> detached`; `remote` shows `-`; `main±` is computed against the commit; create-base option 2 omitted.
+- **Detached HEAD rows:** name column shows `▣ <sha> detached`; `remote` shows `-`; `main±` is computed against the commit; create-base option 2 omitted.
 - **No remotes at all:** `remote` shows `-`, PR column hidden, create dialog offers only local bases.
 - **Worktree path with uncommitted submodule/locked state:** surface git's own error verbatim in the status bar, never swallow it.
-- **Terminal too narrow (<60 cols):** drop columns per 3.1 priority; below ~40 cols show marker + branch + status only.
+- **Terminal too narrow (<60 cols):** drop columns per 3.1 priority; below ~40 cols show name + status only.
 - All git interaction shells out to `git` (no libgit2): behavior matches the user's git version and config, and porcelain formats keep parsing stable.
 
 ## 10. Out of scope (v1)
 
 - Multi-select / bulk delete
-- Checking out an existing branch or PR into a new worktree
+- Checking out a PR into a new worktree
 - Multi-repo dashboard
 - Renaming or moving worktrees

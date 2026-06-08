@@ -51,7 +51,7 @@ func TestRenderRowsOmitsAnsiAndHyperlinksWhenDisabled(t *testing.T) {
 		t.Fatalf("RenderRows() contains hyperlink URL when hyperlinks are disabled: %q", output)
 	}
 	for _, want := range []string{
-		"branch",
+		"name",
 		"remote",
 		"feature/plain",
 		"+1 ~2 ?3",
@@ -132,7 +132,7 @@ func TestColumnVisibilityThresholds(t *testing.T) {
 	}
 }
 
-func TestRenderRowsAlignsBranchWithHeader(t *testing.T) {
+func TestRenderRowsAlignsNameHeaderWithDisplayedName(t *testing.T) {
 	output := RenderRows([]gitdata.Worktree{
 		{Branch: "feature/plain"},
 	}, Options{Width: 100, ShowHeader: true}, time.Now())
@@ -141,10 +141,10 @@ func TestRenderRowsAlignsBranchWithHeader(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
 	}
-	headerColumn := visualIndex(lines[0], "branch")
+	headerColumn := visualIndex(lines[0], "name")
 	rowColumn := visualIndex(lines[1], "feature/plain")
 	if headerColumn != rowColumn {
-		t.Fatalf("branch column = %d, row branch column = %d:\n%s", headerColumn, rowColumn, output)
+		t.Fatalf("name header column = %d, displayed name column = %d:\n%s", headerColumn, rowColumn, output)
 	}
 }
 
@@ -236,7 +236,7 @@ func TestRenderRowsSelectedColorCoversWholeRow(t *testing.T) {
 	}
 }
 
-func TestRenderRowsFoldsMarkerIntoBranchColumn(t *testing.T) {
+func TestRenderRowsUsesTypeIconBeforeBranchColumn(t *testing.T) {
 	output := RenderRows([]gitdata.Worktree{
 		{Branch: "main", IsActive: true, IsMain: true},
 	}, Options{
@@ -252,11 +252,11 @@ func TestRenderRowsFoldsMarkerIntoBranchColumn(t *testing.T) {
 		t.Fatalf("RenderRows() should not start with a marker separator:\n%s", output)
 	}
 	if !strings.Contains(lines[1], "⌂ main") {
-		t.Fatalf("RenderRows() should render marker inside branch column:\n%s", output)
+		t.Fatalf("RenderRows() should render root type icon in branch column:\n%s", output)
 	}
 }
 
-func TestRenderRowsUsesBlankMarkerForNormalWorktrees(t *testing.T) {
+func TestRenderRowsLeavesTypeIconHeaderUntitled(t *testing.T) {
 	output := RenderRows([]gitdata.Worktree{
 		{Branch: "feature/plain"},
 	}, Options{
@@ -268,10 +268,14 @@ func TestRenderRowsUsesBlankMarkerForNormalWorktrees(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
 	}
-	headerColumn := visualIndex(lines[0], "branch")
-	rowColumn := visualIndex(lines[1], "feature/plain")
-	if rowColumn != headerColumn {
-		t.Fatalf("branch column = %d, row branch column = %d:\n%s", headerColumn, rowColumn, output)
+	headerColumn := visualIndex(lines[0], "name")
+	iconColumn := visualIndex(lines[1], "▣")
+	nameColumn := visualIndex(lines[1], "feature/plain")
+	if nameColumn != headerColumn {
+		t.Fatalf("name header column = %d, displayed name column = %d:\n%s", headerColumn, nameColumn, output)
+	}
+	if iconColumn != headerColumn-2 {
+		t.Fatalf("name header column = %d, row type icon column = %d:\n%s", headerColumn, iconColumn, output)
 	}
 }
 
@@ -287,15 +291,58 @@ func TestRenderRowsShowsLifecycleSuffixesAndRemoteState(t *testing.T) {
 	}, time.Now())
 
 	for _, want := range []string{
-		"! experiment/locked locked",
-		"× stale/abandoned prunable",
-		"abcdef1 detached",
+		"▣ experiment/locked !",
+		"▣ stale/abandoned ×",
+		"▣ abcdef1 detached",
 		"gone",
 		"✓",
 		"-",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("RenderRows() missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderRowsPreservesLifecycleSuffixWhenNameTruncates(t *testing.T) {
+	output := RenderRows([]gitdata.Worktree{
+		{Branch: "experiment/locked-branch-with-a-very-long-name", Locked: true},
+		{Branch: "stale/abandoned-branch-with-a-very-long-name", Prunable: true},
+	}, Options{
+		Width:      60,
+		ShowHeader: true,
+	}, time.Now())
+
+	for _, want := range []string{" !", " ×"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("RenderRows() should preserve lifecycle suffix %q when truncating:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderMixedRowsShowsBranchOnlyRows(t *testing.T) {
+	output := RenderMixedRows([]gitdata.Row{
+		{
+			Kind: gitdata.RowKindBranch,
+			Branch: gitdata.Branch{
+				Name:          "feature/list-branches",
+				HeadSync:      gitdata.SyncState{Available: true},
+				MainSync:      gitdata.SyncState{Available: true, Ahead: 3},
+				CommitShort:   "abc1234",
+				CommitSubject: "show branches",
+			},
+		},
+	}, Options{Width: 120, ShowHeader: true}, time.Now())
+
+	for _, want := range []string{
+		"⑂ feature/list-branches",
+		"-",
+		"✓",
+		"↑3",
+		"abc1234 show branches",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("RenderMixedRows() missing %q:\n%s", want, output)
 		}
 	}
 }

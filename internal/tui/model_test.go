@@ -255,6 +255,39 @@ func TestViewRendersDetailActionsInDetailsFooter(t *testing.T) {
 	}
 }
 
+func TestViewRendersBranchDetailActionsInDetailsFooter(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+	})
+	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
+	model.filter = filterBranches
+	model.width = 100
+	model.height = 24
+
+	output := model.View()
+	footerLine := ""
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "↵") && strings.Contains(line, "checkout") {
+			footerLine = line
+			break
+		}
+	}
+
+	if footerLine == "" {
+		t.Fatalf("View() should render branch detail actions in the Details footer:\n%s", output)
+	}
+	for _, want := range []string{"╰─", "↵", "checkout", "n", "new from branch", "d", "delete", "y", "name", "p", "PR", "╯"} {
+		if !strings.Contains(footerLine, want) {
+			t.Fatalf("Branch Details footer missing %q:\n%s", want, footerLine)
+		}
+	}
+	for _, unwanted := range []string{"o editor", "abs path"} {
+		if strings.Contains(footerLine, unwanted) {
+			t.Fatalf("Branch Details footer should not contain %q:\n%s", unwanted, footerLine)
+		}
+	}
+}
+
 func TestSelectedInspectorShowsPendingPRWhileLoading(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/feature", Branch: "feature"},
@@ -585,12 +618,183 @@ func TestTabCyclesFiltersInOrder(t *testing.T) {
 		{Path: "/repo/locked", Branch: "locked", Locked: true},
 		{Path: "/repo/detached", Head: "abc123456", Detached: true},
 	})
+	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
 
-	for _, want := range []worktreeFilter{filterModified, filterPrunable, filterLocked, filterDetached, filterAll} {
+	for _, want := range []worktreeFilter{filterModified, filterBranches, filterPrunable, filterLocked, filterDetached, filterAll} {
 		model = pressTab(model)
 		if model.filter != want {
 			t.Fatalf("filter after Tab = %q, want %q", model.filter.label(), want.label())
 		}
+	}
+}
+
+func TestBTogglesBranchRows(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
+
+	if got := strings.Join(visibleBranches(model), ","); got != "main" {
+		t.Fatalf("visible branches before b = %q, want main", got)
+	}
+
+	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+
+	if cmd == nil {
+		t.Fatal("b returned nil command, want settings persistence")
+	}
+	if !model.showBranches {
+		t.Fatal("b should show branch rows")
+	}
+	if !model.config.ShowBranches {
+		t.Fatal("b should update config ShowBranches")
+	}
+	if got := strings.Join(visibleBranches(model), ","); got != "main,feature/branch" {
+		t.Fatalf("visible branches after b = %q, want main,feature/branch", got)
+	}
+}
+
+func TestNewInitializesBranchToggleFromConfig(t *testing.T) {
+	model := New(gitdata.State{
+		Repo: gitdata.Repository{Root: "/repo/main"},
+		Rows: []gitdata.Worktree{{Path: "/repo/main", Branch: "main"}},
+		Branches: []gitdata.Branch{
+			{Name: "feature/branch"},
+		},
+	}, appconfig.Config{ShowBranches: true}, nil)
+
+	if !model.showBranches {
+		t.Fatal("New() should initialize showBranches from config")
+	}
+	if got := strings.Join(visibleBranches(model), ","); got != "main,feature/branch" {
+		t.Fatalf("visible branches = %q, want main,feature/branch", got)
+	}
+}
+
+func TestBTogglePersistsBranchVisibilitySetting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if err := appconfig.SaveDefault(appconfig.Config{
+		Editor:       "vim",
+		PathTemplate: "{repo_parent}/custom/{branch}",
+		MainBranch:   "trunk",
+	}); err != nil {
+		t.Fatalf("save initial config: %v", err)
+	}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+
+	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if cmd == nil {
+		t.Fatal("b returned nil command, want settings persistence")
+	}
+	message := cmd().(settingsSavedMsg)
+	if message.err != nil {
+		t.Fatalf("settings save error = %v", message.err)
+	}
+	config, err := appconfig.LoadDefault()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !config.ShowBranches {
+		t.Fatal("ShowBranches persisted false, want true")
+	}
+	if config.Editor != "vim" || config.PathTemplate != "{repo_parent}/custom/{branch}" || config.MainBranch != "trunk" {
+		t.Fatalf("persisting ShowBranches should preserve other config: %+v", config)
+	}
+
+	model, cmd = model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if cmd == nil {
+		t.Fatal("second b returned nil command, want settings persistence")
+	}
+	if model.showBranches {
+		t.Fatal("second b should hide branch rows")
+	}
+	message = cmd().(settingsSavedMsg)
+	if message.err != nil {
+		t.Fatalf("settings save error = %v", message.err)
+	}
+	config, err = appconfig.LoadDefault()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if config.ShowBranches {
+		t.Fatal("ShowBranches persisted true after second toggle, want false")
+	}
+}
+
+func TestEnterOnBranchRowOpensCheckoutDialog(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
+	model.filter = filterBranches
+
+	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd != nil {
+		t.Fatalf("Enter on branch returned a command, want nil")
+	}
+	if model.checkoutDialog == nil {
+		t.Fatal("Enter on branch should open checkout dialog")
+	}
+	if model.checkoutDialog.branch.Name != "feature/branch" {
+		t.Fatalf("checkout branch = %q, want feature/branch", model.checkoutDialog.branch.Name)
+	}
+	if model.checkoutDialog.path != "/repo/.worktrees/main/feature-branch" {
+		t.Fatalf("checkout path = %q, want default branch path", model.checkoutDialog.path)
+	}
+}
+
+func TestSelectedCopyTextUsesBranchNameForBranchRows(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+
+	text, message, ok := model.selectedCopyText()
+	if !ok || text != "/repo/main" || message != "copied absolute path: /repo/main" {
+		t.Fatalf("selectedCopyText() for worktree = %q, %q, %v; want path copy", text, message, ok)
+	}
+
+	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
+	model.filter = filterBranches
+
+	text, message, ok = model.selectedCopyText()
+	if !ok || text != "feature/branch" || message != "copied branch name: feature/branch" {
+		t.Fatalf("selectedCopyText() for branch = %q, %q, %v; want branch name copy", text, message, ok)
+	}
+}
+
+func TestCheckoutDialogAddsExistingBranchWorktree(t *testing.T) {
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|git worktree add /repo/.worktrees/main/feature-branch feature/branch": {},
+	}}
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+	model.runner = runner
+	model.checkoutDialog = &checkoutDialog{
+		branch: gitdata.Branch{Name: "feature/branch"},
+		path:   "/repo/.worktrees/main/feature-branch",
+	}
+
+	model, cmd := model.updateCheckout(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if model.loading != "creating…" {
+		t.Fatalf("loading = %q, want creating…", model.loading)
+	}
+	if cmd == nil {
+		t.Fatal("Enter checkout returned nil command")
+	}
+	message := cmd().(checkoutMsg)
+	if message.err != nil {
+		t.Fatalf("checkout command error = %v", message.err)
+	}
+	if message.path != "/repo/.worktrees/main/feature-branch" {
+		t.Fatalf("checkout path = %q, want dialog path", message.path)
+	}
+	if len(runner.commands) != 1 || runner.commands[0] != "/repo/main|git worktree add /repo/.worktrees/main/feature-branch feature/branch" {
+		t.Fatalf("commands = %v, want git worktree add existing branch", runner.commands)
 	}
 }
 
@@ -932,13 +1136,17 @@ func TestHelpRendersGroupedKeysAndLegends(t *testing.T) {
 		"Global",
 		"Worktree List",
 		"Worktree Detail",
-		"Worktree Markers",
+		"Row Icons",
 		"Git Status",
 		"Pull Requests",
 		"ctrl+p",
 		"Esc close/cancel",
 		"top/bottom",
+		"b branches",
+		"Enter go/checkout",
 		"PR/branch",
+		"▣ worktree",
+		"⑂ branch",
 		"bold active branch",
 		"remote gone",
 		"◌ draft",
@@ -956,7 +1164,7 @@ func TestHelpRendersGroupedKeysAndLegends(t *testing.T) {
 			t.Fatalf("renderHelpAtWidth() should not contain %q:\n%s", unwanted, output)
 		}
 	}
-	markerOrder := []string{"⌂ root", "! locked", "× prunable", "bold active branch", "detached HEAD"}
+	markerOrder := []string{"⌂ root", "▣ worktree", "⑂ branch", "! locked", "× prunable", "bold active branch"}
 	previousIndex := -1
 	for _, marker := range markerOrder {
 		index := strings.Index(output, marker)
@@ -1339,6 +1547,78 @@ func TestOpenDeleteDefaultsBranchDeletionForRegularWorktree(t *testing.T) {
 	}
 }
 
+func TestOpenDeleteRendersBranchOnlyDeleteDialog(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.state.Repo.MainBranch = "main"
+	model.state.Branches = []gitdata.Branch{
+		{
+			Name:               "feature/branch",
+			Head:               "abcdef123456",
+			CommitShort:        "abcdef1",
+			BranchMergedToMain: true,
+			PR:                 &gitdata.PullRequest{Number: 42, State: "○", CI: "✓"},
+		},
+	}
+	model.filter = filterBranches
+	model.showPR = true
+
+	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+
+	if cmd != nil {
+		t.Fatalf("d returned command, want nil")
+	}
+	if model.deleteDialog == nil {
+		t.Fatal("d on branch row should open delete dialog")
+	}
+	output := model.renderDeleteAtWidth(80)
+	for _, want := range []string{
+		"Delete branch",
+		"Branch:",
+		"feature/branch",
+		"HEAD:",
+		"abcdef1 on feature/branch",
+		"PR:",
+		"#42 ○ ✓",
+		"[x] delete local branch",
+		"Local branch ref will be deleted. No worktree files are removed.",
+		"Merged into main.",
+		"git branch -d feature/branch",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("branch delete dialog missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"remove worktree", "git worktree remove"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("branch delete dialog should not contain %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestOpenDeleteRendersForceBranchOnlyDeleteDialog(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.state.Repo.MainBranch = "main"
+	model.state.Branches = []gitdata.Branch{{Name: "feature/unmerged"}}
+	model.filter = filterBranches
+
+	model, _ = model.openDelete()
+
+	output := model.renderDeleteAtWidth(80)
+	for _, want := range []string{
+		"[x] force delete local branch",
+		"Not merged into main.",
+		"git branch -D feature/unmerged",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("force branch delete dialog missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestDeleteSectionHeaderStylesShortcutInline(t *testing.T) {
 	output := deleteSectionHeader("Worktree", "t", true)
 
@@ -1563,6 +1843,36 @@ func TestDeleteRowPrunableOnlyPrunes(t *testing.T) {
 	}
 }
 
+func TestDeleteBranchRowUsesSafeDeleteForMergedBranch(t *testing.T) {
+	runner := &recordingRunner{}
+	branch := gitdata.Branch{Name: "feature", BranchMergedToMain: true}
+
+	err := deleteBranchRow(context.Background(), gitdata.Repository{Root: "/repo/main"}, branch, runner)
+
+	if err != nil {
+		t.Fatalf("deleteBranchRow() error = %v", err)
+	}
+	want := []string{"/repo/main|git branch -d feature"}
+	if got := strings.Join(runner.commands, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("commands = %v, want %v", runner.commands, want)
+	}
+}
+
+func TestDeleteBranchRowUsesForceDeleteForUnmergedBranch(t *testing.T) {
+	runner := &recordingRunner{}
+	branch := gitdata.Branch{Name: "feature"}
+
+	err := deleteBranchRow(context.Background(), gitdata.Repository{Root: "/repo/main"}, branch, runner)
+
+	if err != nil {
+		t.Fatalf("deleteBranchRow() error = %v", err)
+	}
+	want := []string{"/repo/main|git branch -D feature"}
+	if got := strings.Join(runner.commands, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("commands = %v, want %v", runner.commands, want)
+	}
+}
+
 func TestDeleteRowUsesSafeBranchDeleteForMergedBranch(t *testing.T) {
 	runner := &recordingRunner{}
 	row := gitdata.Worktree{Path: "/repo/feature", Branch: "feature", BranchMergedToMain: true}
@@ -1660,6 +1970,33 @@ func TestConfigReloadedMessageUpdatesCreatePathPreview(t *testing.T) {
 	output := model.renderCreateAtWidth(120)
 	if !strings.Contains(output, ".worktrees/git-treehouse/feature-login") {
 		t.Fatalf("renderCreateAtWidth() should use reloaded path template:\n%s", output)
+	}
+}
+
+func TestConfigReloadedMessageUpdatesBranchVisibility(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
+
+	updated, _ := model.Update(configReloadedMsg{config: appconfig.Config{ShowBranches: true}})
+	model = updated.(Model)
+
+	if !model.showBranches {
+		t.Fatal("config reload should enable branch rows")
+	}
+	if got := strings.Join(visibleBranches(model), ","); got != "main,feature/branch" {
+		t.Fatalf("visible branches = %q, want main,feature/branch", got)
+	}
+
+	updated, _ = model.Update(configReloadedMsg{config: appconfig.Config{ShowBranches: false}})
+	model = updated.(Model)
+
+	if model.showBranches {
+		t.Fatal("config reload should disable branch rows")
+	}
+	if got := strings.Join(visibleBranches(model), ","); got != "main" {
+		t.Fatalf("visible branches = %q, want main", got)
 	}
 }
 
@@ -2251,9 +2588,10 @@ func pressTab(model Model) Model {
 
 func visibleBranches(model Model) []string {
 	indexes := model.visibleIndexes()
+	rows := model.tableRows()
 	branches := make([]string, 0, len(indexes))
 	for _, index := range indexes {
-		branches = append(branches, model.state.Rows[index].DisplayBranch())
+		branches = append(branches, rows[index].DisplayBranch())
 	}
 	return branches
 }

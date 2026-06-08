@@ -67,6 +67,37 @@ func (runner *recordingFakeRunner) Run(_ context.Context, dir, name string, args
 	return nil, errors.New("unexpected command: " + key)
 }
 
+type branchRowFakeRunner struct{}
+
+func (runner branchRowFakeRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+	if name != "git" {
+		return nil, errors.New("unexpected command: " + name)
+	}
+	command := strings.Join(args, " ")
+	switch {
+	case dir == "/repo/main" && command == "rev-parse --show-toplevel":
+		return []byte("/repo/main\n"), nil
+	case dir == "/repo/main" && command == "rev-parse --git-common-dir":
+		return []byte(".git\n"), nil
+	case dir == "/repo/main" && command == "rev-parse --path-format=absolute --git-common-dir":
+		return []byte("/repo/main/.git\n"), nil
+	case dir == "/repo/main" && command == "worktree list --porcelain":
+		return []byte("worktree /repo/main\nHEAD aaaaaaaa\nbranch refs/heads/main\n"), nil
+	case dir == "/repo/main" && command == "symbolic-ref --short refs/remotes/origin/HEAD":
+		return nil, errors.New("no origin")
+	case dir == "/repo/main" && command == "show-ref --verify --quiet refs/heads/main":
+		return nil, nil
+	case dir == "/repo/main" && command == "remote":
+		return []byte("origin\n"), nil
+	case dir == "/repo/main" && strings.HasPrefix(command, "for-each-ref --format="):
+		return []byte("main\x00aaaaaaaa\x00aaaaaaa\x001780000000\x00main commit\x00origin/main\x00\x000 0\n" +
+			"feature/branch\x00bbbbbbbb\x00bbbbbbb\x001780000100\x00branch commit\x00origin/feature/branch\x00ahead 1\x003 4\n"), nil
+	case dir == "/repo/main" && command == "status --porcelain=v1 -b --untracked-files=normal":
+		return []byte("## main...origin/main\n"), nil
+	}
+	return nil, errors.New("unexpected command: " + dir + "|" + name + " " + command)
+}
+
 func TestResolveRepositorySupportsBareInvocation(t *testing.T) {
 	runner := fakeRunner{
 		"/repo.git|git rev-parse --show-toplevel":                         {err: errors.New("no work tree")},
@@ -188,6 +219,29 @@ func TestLoadUsesOneWorktreeListAndBatchedRefMetadata(t *testing.T) {
 	}
 	if !feature.MainSync.Available || feature.MainSync.Ahead != 2 || feature.MainSync.Behind != 5 {
 		t.Fatalf("feature MainSync = %+v, want ↑2 ↓5", feature.MainSync)
+	}
+}
+
+func TestLoadAddsBranchRowsForLocalBranchesWithoutWorktrees(t *testing.T) {
+	state, err := Load(context.Background(), "/repo/main", config.Config{}, branchRowFakeRunner{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(state.Rows) != 1 {
+		t.Fatalf("worktree rows = %d, want 1", len(state.Rows))
+	}
+	if len(state.Branches) != 1 {
+		t.Fatalf("branch rows = %d, want 1: %+v", len(state.Branches), state.Branches)
+	}
+	branch := state.Branches[0]
+	if branch.Name != "feature/branch" || branch.CommitShort != "bbbbbbb" || branch.CommitSubject != "branch commit" {
+		t.Fatalf("branch metadata = %+v, want feature branch metadata", branch)
+	}
+	if !branch.HeadSync.Available || branch.HeadSync.Ahead != 1 {
+		t.Fatalf("branch HeadSync = %+v, want ↑1", branch.HeadSync)
+	}
+	if !branch.MainSync.Available || branch.MainSync.Ahead != 3 || branch.MainSync.Behind != 4 {
+		t.Fatalf("branch MainSync = %+v, want ↑3 ↓4", branch.MainSync)
 	}
 }
 

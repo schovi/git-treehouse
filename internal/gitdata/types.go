@@ -2,6 +2,7 @@ package gitdata
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -18,8 +19,213 @@ type Repository struct {
 }
 
 type State struct {
-	Repo Repository
-	Rows []Worktree
+	Repo     Repository
+	Rows     []Worktree
+	Branches []Branch
+}
+
+type RowKind int
+
+const (
+	RowKindWorktree RowKind = iota
+	RowKindBranch
+)
+
+type Row struct {
+	Kind     RowKind
+	Worktree Worktree
+	Branch   Branch
+}
+
+type Branch struct {
+	Name               string
+	Head               string
+	Upstream           string
+	UpstreamGone       bool
+	HeadSync           SyncState
+	MainSync           SyncState
+	CommitShort        string
+	CommitSubject      string
+	CommitTime         time.Time
+	BranchMergedToMain bool
+	PR                 *PullRequest
+}
+
+func RowsFromWorktrees(worktrees []Worktree) []Row {
+	rows := make([]Row, 0, len(worktrees))
+	for _, worktree := range worktrees {
+		rows = append(rows, Row{Kind: RowKindWorktree, Worktree: worktree})
+	}
+	return rows
+}
+
+func (state State) TableRows(showBranches bool) []Row {
+	rows := RowsFromWorktrees(state.Rows)
+	if showBranches {
+		for _, branch := range state.Branches {
+			rows = append(rows, Row{Kind: RowKindBranch, Branch: branch})
+		}
+	}
+	sortRows(rows)
+	return rows
+}
+
+func (row Row) IsWorktree() bool {
+	return row.Kind == RowKindWorktree
+}
+
+func (row Row) IsBranch() bool {
+	return row.Kind == RowKindBranch
+}
+
+func (row Row) DisplayBranch() string {
+	if row.IsBranch() {
+		return row.Branch.DisplayBranch()
+	}
+	return row.Worktree.DisplayBranch()
+}
+
+func (row Row) ListBranch() string {
+	if row.IsBranch() {
+		return row.Branch.DisplayBranch()
+	}
+	return row.Worktree.ListBranch()
+}
+
+func (row Row) BranchName() string {
+	if row.IsBranch() {
+		return row.Branch.Name
+	}
+	return row.Worktree.Branch
+}
+
+func (row Row) Head() string {
+	if row.IsBranch() {
+		return row.Branch.Head
+	}
+	return row.Worktree.Head
+}
+
+func (row Row) CommitShort() string {
+	if row.IsBranch() {
+		return row.Branch.CommitShort
+	}
+	return row.Worktree.CommitShort
+}
+
+func (row Row) CommitSubject() string {
+	if row.IsBranch() {
+		return row.Branch.CommitSubject
+	}
+	return row.Worktree.CommitSubject
+}
+
+func (row Row) CommitTime() time.Time {
+	if row.IsBranch() {
+		return row.Branch.CommitTime
+	}
+	return row.Worktree.CommitTime
+}
+
+func (row Row) Upstream() string {
+	if row.IsBranch() {
+		return row.Branch.Upstream
+	}
+	return row.Worktree.Upstream
+}
+
+func (row Row) UpstreamGone() bool {
+	if row.IsBranch() {
+		return row.Branch.UpstreamGone
+	}
+	return row.Worktree.UpstreamGone
+}
+
+func (row Row) HeadSync() SyncState {
+	if row.IsBranch() {
+		return row.Branch.HeadSync
+	}
+	return row.Worktree.HeadSync
+}
+
+func (row Row) MainSync() SyncState {
+	if row.IsBranch() {
+		return row.Branch.MainSync
+	}
+	return row.Worktree.MainSync
+}
+
+func (row Row) PullRequest() *PullRequest {
+	if row.IsBranch() {
+		return row.Branch.PR
+	}
+	return row.Worktree.PR
+}
+
+func (row Row) TypeIcon() string {
+	if row.IsBranch() {
+		return "⑂"
+	}
+	if row.Worktree.IsMain {
+		return "⌂"
+	}
+	return "▣"
+}
+
+func (row Row) StateIcon() string {
+	if row.IsBranch() {
+		return ""
+	}
+	switch {
+	case row.Worktree.Prunable:
+		return "×"
+	case row.Worktree.Locked:
+		return "!"
+	default:
+		return ""
+	}
+}
+
+func (row Row) StatusText() string {
+	if row.IsBranch() {
+		return "-"
+	}
+	return row.Worktree.StatusText()
+}
+
+func (row Row) LocalMetadataLoaded() bool {
+	return row.IsBranch() || row.Worktree.LocalMetadataLoaded
+}
+
+func (row Row) TableSize() (int64, bool) {
+	if row.IsBranch() {
+		return 0, false
+	}
+	return row.Worktree.TableSize()
+}
+
+func (branch Branch) DisplayBranch() string {
+	if branch.Name == "" {
+		return "(unknown)"
+	}
+	return branch.Name
+}
+
+func sortRows(rows []Row) {
+	sort.SliceStable(rows, func(leftIndex, rightIndex int) bool {
+		left := rows[leftIndex]
+		right := rows[rightIndex]
+		if left.IsWorktree() && right.IsWorktree() && left.Worktree.IsMain != right.Worktree.IsMain {
+			return left.Worktree.IsMain
+		}
+		if left.IsWorktree() && left.Worktree.IsMain {
+			return true
+		}
+		if right.IsWorktree() && right.Worktree.IsMain {
+			return false
+		}
+		return left.CommitTime().After(right.CommitTime())
+	})
 }
 
 type StatusCounts struct {
@@ -194,6 +400,19 @@ func (worktree Worktree) Marker() string {
 		return "⌂"
 	}
 	return ""
+}
+
+func (worktree Worktree) ListBranch() string {
+	if worktree.Detached {
+		if worktree.Head == "" {
+			return "detached"
+		}
+		return shortHash(worktree.Head) + " detached"
+	}
+	if worktree.Branch == "" {
+		return "(unknown)"
+	}
+	return worktree.Branch
 }
 
 func (worktree Worktree) StatusText() string {
