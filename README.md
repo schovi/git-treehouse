@@ -327,6 +327,14 @@ git-treehouse init fish
 git-treehouse init zsh
 ```
 
+Print help:
+
+```sh
+git-treehouse -h
+git-treehouse help
+git-treehouse help list
+```
+
 ## GitHub Integration
 
 If `gh` is installed and authenticated, `git-treehouse` loads PR data in the background:

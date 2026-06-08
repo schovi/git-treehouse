@@ -44,8 +44,14 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if globalOptions.showHelp {
+		fmt.Print(helpText())
+		return nil
+	}
 	if len(remaining) > 0 {
 		switch remaining[0] {
+		case "help":
+			return runHelp(remaining[1:])
 		case "init":
 			return runInit(remaining[1:])
 		case "list":
@@ -62,6 +68,7 @@ func run(args []string) error {
 type globalOptions struct {
 	cdFile   string
 	repoPath string
+	showHelp bool
 }
 
 func parseGlobalOptions(args []string) (globalOptions, []string, error) {
@@ -69,10 +76,16 @@ func parseGlobalOptions(args []string) (globalOptions, []string, error) {
 	flags.SetOutput(os.Stderr)
 	cdFile := flags.String("cd-file", "", "write selected worktree path to file")
 	repoPath := flags.String("repo", defaultRepoPath, "load repository from path")
+	shortHelp := flags.Bool("h", false, "print help")
+	longHelp := flags.Bool("help", false, "print help")
 	if err := flags.Parse(args); err != nil {
 		return globalOptions{}, nil, err
 	}
-	return globalOptions{cdFile: *cdFile, repoPath: normalizeRepoPath(*repoPath)}, flags.Args(), nil
+	return globalOptions{
+		cdFile:   *cdFile,
+		repoPath: normalizeRepoPath(*repoPath),
+		showHelp: *shortHelp || *longHelp,
+	}, flags.Args(), nil
 }
 
 func normalizeRepoPath(repoPath string) string {
@@ -82,7 +95,87 @@ func normalizeRepoPath(repoPath string) string {
 	return pathutil.ExpandHome(repoPath)
 }
 
+func isHelpArg(arg string) bool {
+	return arg == "-h" || arg == "--help" || arg == "-help"
+}
+
+func runHelp(args []string) error {
+	if len(args) == 0 || len(args) == 1 && isHelpArg(args[0]) {
+		fmt.Print(helpText())
+		return nil
+	}
+	if len(args) != 1 {
+		return fmt.Errorf("usage: %s help [list|init|doctor]", commandName)
+	}
+	switch args[0] {
+	case "list":
+		fmt.Print(listHelpText())
+		return nil
+	case "init":
+		fmt.Print(initHelpText())
+		return nil
+	case "doctor":
+		fmt.Print(doctorHelpText())
+		return nil
+	default:
+		return fmt.Errorf("usage: %s help [list|init|doctor]", commandName)
+	}
+}
+
+func helpText() string {
+	shells := strings.Join(shellinit.SupportedShells(), "|")
+	return fmt.Sprintf(`git-treehouse manages Git worktrees from a terminal UI.
+
+Usage:
+  %[1]s [--repo <path>] [--cd-file <path>]
+  %[1]s list [--repo <path>] [--no-github] [--json]
+  %[1]s init [%[2]s]
+  %[1]s doctor [--repo <path>]
+  %[1]s help [list|init|doctor]
+
+What it can do:
+  Browse worktrees with branch, dirty state, sync state, commit age, PR/CI, and size signals.
+  Switch directories through gth shell integration, create worktrees, open editors, copy paths, and delete with safeguards.
+  Print plain tables or JSON for scripts, generate shell integration, and diagnose setup.
+
+Commands:
+  list     Print worktrees without launching the TUI.
+  init     Print shell integration that defines gth.
+  doctor   Check Git, config, GitHub CLI, shell, editor, and clipboard setup.
+  help     Print this help.
+
+Options:
+  --repo <path>     Load a repository or worktree path. Default: current directory.
+  --cd-file <path>  Write the selected worktree path for shell integration.
+  -h, --help        Print this help.
+
+Examples:
+  %[1]s
+  gth
+  %[1]s list --no-github
+  %[1]s list --json --repo ~/code/project-worktree
+  eval "$(%[1]s init zsh)"
+`, commandName, shells)
+}
+
+func initHelpText() string {
+	shells := strings.Join(shellinit.SupportedShells(), "|")
+	return fmt.Sprintf(`git-treehouse init prints shell integration that defines gth.
+
+Usage:
+  %[1]s init [%[2]s]
+
+Examples:
+  eval "$(%[1]s init zsh)"
+  %[1]s init fish | source
+`, commandName, shells)
+}
+
 func runInit(args []string) error {
+	if len(args) == 1 && isHelpArg(args[0]) {
+		fmt.Print(initHelpText())
+		return nil
+	}
 	if len(args) > 1 {
 		return fmt.Errorf("usage: %s init [%s]", commandName, strings.Join(shellinit.SupportedShells(), "|"))
 	}
@@ -107,6 +200,10 @@ func runList(args []string, repoPath string) error {
 	options, err := parseListOptions(args, repoPath)
 	if err != nil {
 		return err
+	}
+	if options.showHelp {
+		fmt.Print(listHelpText())
+		return nil
 	}
 	config, err := config.LoadDefault()
 	if err != nil {
@@ -151,6 +248,7 @@ type listOptions struct {
 	noGitHub   bool
 	jsonOutput bool
 	repoPath   string
+	showHelp   bool
 }
 
 func parseListOptions(args []string, repoPath string) (listOptions, error) {
@@ -159,10 +257,31 @@ func parseListOptions(args []string, repoPath string) (listOptions, error) {
 	noGitHub := flags.Bool("no-github", false, "skip GitHub PR lookup")
 	jsonOutput := flags.Bool("json", false, "print structured JSON")
 	selectedRepoPath := flags.String("repo", repoPath, "load repository from path")
+	shortHelp := flags.Bool("h", false, "print help")
+	longHelp := flags.Bool("help", false, "print help")
 	if err := flags.Parse(args); err != nil {
 		return listOptions{}, err
 	}
-	return listOptions{noGitHub: *noGitHub, jsonOutput: *jsonOutput, repoPath: normalizeRepoPath(*selectedRepoPath)}, nil
+	return listOptions{
+		noGitHub:   *noGitHub,
+		jsonOutput: *jsonOutput,
+		repoPath:   normalizeRepoPath(*selectedRepoPath),
+		showHelp:   *shortHelp || *longHelp,
+	}, nil
+}
+
+func listHelpText() string {
+	return fmt.Sprintf(`git-treehouse list prints worktrees without launching the TUI.
+
+Usage:
+  %[1]s list [--repo <path>] [--no-github] [--json]
+
+Options:
+  --repo <path>  Load a repository or worktree path. Default: current directory.
+  --no-github    Skip GitHub PR lookup.
+  --json         Print structured JSON.
+  -h, --help     Print this help.
+`, commandName)
 }
 
 type listEnrichmentOptions struct {
@@ -440,8 +559,14 @@ func runDoctor(args []string, repoPath string) error {
 	flags := flag.NewFlagSet(commandName+" doctor", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	selectedRepoPath := flags.String("repo", repoPath, "load repository from path")
+	shortHelp := flags.Bool("h", false, "print help")
+	longHelp := flags.Bool("help", false, "print help")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if *shortHelp || *longHelp {
+		fmt.Print(doctorHelpText())
+		return nil
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("usage: %s doctor [--repo <path>]", commandName)
@@ -450,6 +575,18 @@ func runDoctor(args []string, repoPath string) error {
 	checks := doctorChecks(context.Background(), runner, normalizeRepoPath(*selectedRepoPath))
 	fmt.Print(formatDoctorChecks(checks))
 	return nil
+}
+
+func doctorHelpText() string {
+	return fmt.Sprintf(`git-treehouse doctor checks Git, config, GitHub CLI, shell, editor, and clipboard setup.
+
+Usage:
+  %[1]s doctor [--repo <path>]
+
+Options:
+  --repo <path>  Load a repository or worktree path. Default: current directory.
+  -h, --help     Print this help.
+`, commandName)
 }
 
 func doctorChecks(ctx context.Context, runner gitdata.Runner, repoPath string) []doctorCheck {

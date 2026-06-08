@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +108,165 @@ func TestParseGlobalOptionsUsesExplicitRepo(t *testing.T) {
 	}
 }
 
+func TestParseGlobalOptionsAcceptsHelpFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "short", args: []string{"-h"}},
+		{name: "long", args: []string{"--help"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options, remaining, err := parseGlobalOptions(test.args)
+			if err != nil {
+				t.Fatalf("parseGlobalOptions() error = %v", err)
+			}
+			if !options.showHelp {
+				t.Fatal("showHelp = false, want true")
+			}
+			if len(remaining) != 0 {
+				t.Fatalf("remaining args = %v, want none", remaining)
+			}
+		})
+	}
+}
+
+func TestHelpTextDescribesAppCommandsAndOptions(t *testing.T) {
+	output := helpText()
+
+	for _, want := range []string{
+		"git-treehouse manages Git worktrees",
+		"Usage:",
+		"git-treehouse [--repo <path>] [--cd-file <path>]",
+		"git-treehouse list [--repo <path>] [--no-github] [--json]",
+		"git-treehouse init [",
+		"git-treehouse doctor [--repo <path>]",
+		"git-treehouse help [list|init|doctor]",
+		"Browse worktrees",
+		"Switch directories through gth shell integration",
+		"Print plain tables or JSON",
+		"list     Print worktrees",
+		"init     Print shell integration",
+		"doctor   Check Git",
+		"-h, --help",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("helpText() missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestSubcommandHelpTextDescribesOptions(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   []string
+	}{
+		{
+			name:   "list",
+			output: listHelpText(),
+			want: []string{
+				"git-treehouse list prints worktrees",
+				"git-treehouse list [--repo <path>] [--no-github] [--json]",
+				"--no-github",
+				"--json",
+				"-h, --help",
+			},
+		},
+		{
+			name:   "init",
+			output: initHelpText(),
+			want: []string{
+				"git-treehouse init prints shell integration",
+				"git-treehouse init [",
+				"eval \"$(git-treehouse init zsh)\"",
+				"git-treehouse init fish | source",
+			},
+		},
+		{
+			name:   "doctor",
+			output: doctorHelpText(),
+			want: []string{
+				"git-treehouse doctor checks Git",
+				"git-treehouse doctor [--repo <path>]",
+				"--repo <path>",
+				"-h, --help",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, want := range test.want {
+				if !strings.Contains(test.output, want) {
+					t.Fatalf("%s help missing %q:\n%s", test.name, want, test.output)
+				}
+			}
+		})
+	}
+}
+
+func TestRunHelpFlagsAndCommandsReturnNil(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "short global", args: []string{"-h"}, want: "git-treehouse manages Git worktrees"},
+		{name: "long global", args: []string{"--help"}, want: "git-treehouse manages Git worktrees"},
+		{name: "help command", args: []string{"help"}, want: "git-treehouse manages Git worktrees"},
+		{name: "help list", args: []string{"help", "list"}, want: "git-treehouse list prints worktrees"},
+		{name: "help init", args: []string{"help", "init"}, want: "git-treehouse init prints shell integration"},
+		{name: "help doctor", args: []string{"help", "doctor"}, want: "git-treehouse doctor checks Git"},
+		{name: "list help", args: []string{"list", "-h"}, want: "git-treehouse list prints worktrees"},
+		{name: "init help", args: []string{"init", "-h"}, want: "git-treehouse init prints shell integration"},
+		{name: "doctor help", args: []string{"doctor", "-h"}, want: "git-treehouse doctor checks Git"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output, err := captureStdout(t, func() error {
+				return run(test.args)
+			})
+			if err != nil {
+				t.Fatalf("run(%v) error = %v", test.args, err)
+			}
+			if !strings.Contains(output, test.want) {
+				t.Fatalf("run(%v) output missing %q:\n%s", test.args, test.want, output)
+			}
+		})
+	}
+}
+
+func captureStdout(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+
+	original := os.Stdout
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	os.Stdout = write
+	defer func() {
+		os.Stdout = original
+	}()
+
+	fnErr := fn()
+	if err := write.Close(); err != nil {
+		t.Fatalf("stdout pipe close error = %v", err)
+	}
+	output, readErr := io.ReadAll(read)
+	if readErr != nil {
+		t.Fatalf("stdout pipe read error = %v", readErr)
+	}
+	if err := read.Close(); err != nil {
+		t.Fatalf("stdout pipe read close error = %v", err)
+	}
+	return string(output), fnErr
+}
+
 func TestParseListOptionsInheritsGlobalRepo(t *testing.T) {
 	options, err := parseListOptions([]string{"--json"}, "/repo/feature")
 	if err != nil {
@@ -129,6 +290,28 @@ func TestParseListOptionsAllowsSubcommandRepoOverride(t *testing.T) {
 	}
 	if options.repoPath != "/repo/docs" {
 		t.Fatalf("repoPath = %q, want /repo/docs", options.repoPath)
+	}
+}
+
+func TestParseListOptionsAcceptsHelpFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "short", args: []string{"-h"}},
+		{name: "long", args: []string{"--help"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options, err := parseListOptions(test.args, "/repo/feature")
+			if err != nil {
+				t.Fatalf("parseListOptions() error = %v", err)
+			}
+			if !options.showHelp {
+				t.Fatal("showHelp = false, want true")
+			}
+		})
 	}
 }
 

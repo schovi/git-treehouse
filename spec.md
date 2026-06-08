@@ -22,6 +22,7 @@ A fast terminal UI for managing git worktrees: browse, switch, create, and delet
 | `git-treehouse list [--repo <path>]` | Print the table to stdout, no TUI, no ANSI when piped. For scripting. `--json` prints structured repository/worktree data. |
 | `git-treehouse init <shell>` | Print shell integration functions that define `gth` (see §2) |
 | `git-treehouse doctor [--repo <path>]` | Print environment diagnostics for required and optional integrations. |
+| `git-treehouse help [list|init|doctor]` | Print command help. Root and subcommands also accept `-h` and `--help`. |
 
 ## 2. Shell integration (cd mechanism)
 
