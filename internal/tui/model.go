@@ -2652,7 +2652,7 @@ func helpLegendSections() []helpSection {
 				{lead: "⑂", description: "branch", kind: helpEntryBranch},
 				{lead: "!", description: "locked", kind: helpEntryLocked},
 				{lead: "×", description: "prunable", kind: helpEntryPrunable},
-				{lead: "bold", description: "active branch", kind: helpEntryActive},
+				{lead: "bold", description: "active row", kind: helpEntryActive},
 			},
 		},
 		{

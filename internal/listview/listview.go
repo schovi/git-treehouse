@@ -259,15 +259,15 @@ func colorCell(row gitdata.Row, key, raw, value string, selected bool) string {
 	case "remote":
 		return colorRemoteCell(row, raw, value, selected)
 	case "main":
-		return colorSyncCell(row.MainSync(), raw, value, selected)
+		return colorSyncCell(row, row.MainSync(), raw, value, selected)
 	case "commit":
 		return colorCommitCell(row, raw, value, selected)
 	case "age":
-		return mutedCell(raw, value, selected)
+		return mutedCell(row, raw, value, selected)
 	case "pr":
-		return colorPullRequestCell(raw, value, selected)
+		return colorPullRequestCell(row, raw, value, selected)
 	case "size":
-		return colorSizeCell(raw, value, selected)
+		return colorSizeCell(row, raw, value, selected)
 	}
 	return value
 }
@@ -281,7 +281,7 @@ func colorBranchCell(row gitdata.Row, raw, padded string, selected bool) string 
 	if marker == " " {
 		return selectedSegmentWhen(marker, selected) + colorBranchText(row, rest, selected) + selectedSegmentWhen(padding, selected)
 	}
-	return styleForSelected(typeIconStyle(row), selected).Render(marker) + colorBranchText(row, rest, selected) + selectedSegmentWhen(padding, selected)
+	return styleForRow(row, typeIconStyle(row), selected).Render(marker) + colorBranchText(row, rest, selected) + selectedSegmentWhen(padding, selected)
 }
 
 func typeIconStyle(row gitdata.Row) lipgloss.Style {
@@ -326,33 +326,27 @@ func colorBranchText(row gitdata.Row, value string, selected bool) string {
 		if lifecycleSuffix == "" {
 			return ""
 		}
-		return styleForSelected(stateIconStyle(row), selected).Render(lifecycleSuffix)
-	}
-	boldStyle := func(style lipgloss.Style) lipgloss.Style {
-		if row.IsWorktree() && row.Worktree.IsActive {
-			return style.Bold(true)
-		}
-		return style
+		return styleForRow(row, stateIconStyle(row), selected).Render(lifecycleSuffix)
 	}
 	if row.IsBranch() {
 		return selectedSegmentWhen(prefix, selected) +
-			styleForSelected(boldStyle(branchOnlyStyle), selected).Render(value) +
+			styleForRow(row, branchOnlyStyle, selected).Render(value) +
 			renderLifecycleSuffix()
 	}
 	if row.Worktree.Detached {
 		head, state, found := strings.Cut(value, " ")
 		if found {
 			return selectedSegmentWhen(prefix, selected) +
-				styleForSelected(boldStyle(commitHashStyle), selected).Render(head) +
-				styleForSelected(boldStyle(detachedStyle), selected).Render(" "+state) +
+				styleForRow(row, commitHashStyle, selected).Render(head) +
+				styleForRow(row, detachedStyle, selected).Render(" "+state) +
 				renderLifecycleSuffix()
 		}
 		return selectedSegmentWhen(prefix, selected) +
-			styleForSelected(boldStyle(detachedStyle), selected).Render(value) +
+			styleForRow(row, detachedStyle, selected).Render(value) +
 			renderLifecycleSuffix()
 	}
 	return selectedSegmentWhen(prefix, selected) +
-		styleForSelected(boldStyle(branchStyleFor(row)), selected).Render(value) +
+		styleForRow(row, branchStyleFor(row), selected).Render(value) +
 		renderLifecycleSuffix()
 }
 
@@ -370,11 +364,11 @@ func colorStatusCell(row gitdata.Row, raw, padded string, selected bool) string 
 	}
 	switch {
 	case row.IsBranch() || raw == "-":
-		return styleForSelected(mutedStyle, selected).Render(raw) + selectedSegmentWhen(padding, selected)
+		return styleForRow(row, mutedStyle, selected).Render(raw) + selectedSegmentWhen(padding, selected)
 	case row.Worktree.Status.Clean():
-		return styleForSelected(cleanStyle, selected).Render(raw) + selectedSegmentWhen(padding, selected)
+		return styleForRow(row, cleanStyle, selected).Render(raw) + selectedSegmentWhen(padding, selected)
 	default:
-		return colorDirtyTokens(raw, selected) + selectedSegmentWhen(padding, selected)
+		return colorDirtyTokens(row, raw, selected) + selectedSegmentWhen(padding, selected)
 	}
 }
 
@@ -384,43 +378,43 @@ func colorRemoteCell(row gitdata.Row, raw, padded string, selected bool) string 
 		return selectedSegmentWhen(padding, selected)
 	}
 	if row.UpstreamGone() || content == "gone" {
-		return styleForSelected(warningStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
+		return styleForRow(row, warningStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
 	}
-	return colorSyncCell(row.HeadSync(), raw, padded, selected)
+	return colorSyncCell(row, row.HeadSync(), raw, padded, selected)
 }
 
-func colorDirtyTokens(value string, selected bool) string {
+func colorDirtyTokens(row gitdata.Row, value string, selected bool) string {
 	parts := strings.Split(value, " ")
 	for index, part := range parts {
 		switch {
 		case strings.HasPrefix(part, "+"):
-			parts[index] = styleForSelected(dirtyStagedStyle, selected).Render(part)
+			parts[index] = styleForRow(row, dirtyStagedStyle, selected).Render(part)
 		case strings.HasPrefix(part, "~"):
-			parts[index] = styleForSelected(dirtyModifiedStyle, selected).Render(part)
+			parts[index] = styleForRow(row, dirtyModifiedStyle, selected).Render(part)
 		case strings.HasPrefix(part, "?"):
-			parts[index] = styleForSelected(dirtyUnknownStyle, selected).Render(part)
+			parts[index] = styleForRow(row, dirtyUnknownStyle, selected).Render(part)
 		}
 	}
 	return strings.Join(parts, selectedSegmentWhen(" ", selected))
 }
 
-func colorSyncCell(sync gitdata.SyncState, raw, padded string, selected bool) string {
+func colorSyncCell(row gitdata.Row, sync gitdata.SyncState, raw, padded string, selected bool) string {
 	content, padding := splitPadding(raw, padded)
 	if content == "" {
 		return selectedSegmentWhen(padding, selected)
 	}
 	if content == "-" || sync.NoUpstream || !sync.Available {
-		return styleForSelected(mutedStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
+		return styleForRow(row, mutedStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
 	}
 	parts := strings.Split(content, " ")
 	for index, part := range parts {
 		switch {
 		case strings.HasPrefix(part, "↑"):
-			parts[index] = styleForSelected(dirtyModifiedStyle, selected).Render(part)
+			parts[index] = styleForRow(row, dirtyModifiedStyle, selected).Render(part)
 		case strings.HasPrefix(part, "↓"):
-			parts[index] = styleForSelected(warningStyle, selected).Render(part)
+			parts[index] = styleForRow(row, warningStyle, selected).Render(part)
 		default:
-			parts[index] = styleForSelected(cleanStyle, selected).Render(part)
+			parts[index] = styleForRow(row, cleanStyle, selected).Render(part)
 		}
 	}
 	return strings.Join(parts, selectedSegmentWhen(" ", selected)) + selectedSegmentWhen(padding, selected)
@@ -434,54 +428,54 @@ func colorCommitCell(row gitdata.Row, raw, padded string, selected bool) string 
 	commitShort := row.CommitShort()
 	if commitShort != "" && strings.HasPrefix(content, commitShort) {
 		rest := strings.TrimPrefix(content, commitShort)
-		return styleForSelected(commitHashStyle, selected).Render(commitShort) +
-			styleForSelected(commitSubjectStyle, selected).Render(rest) +
+		return styleForRow(row, commitHashStyle, selected).Render(commitShort) +
+			styleForRow(row, commitSubjectStyle, selected).Render(rest) +
 			selectedSegmentWhen(padding, selected)
 	}
-	return styleForSelected(commitSubjectStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
+	return styleForRow(row, commitSubjectStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
 }
 
-func colorPullRequestCell(raw, padded string, selected bool) string {
+func colorPullRequestCell(row gitdata.Row, raw, padded string, selected bool) string {
 	content, padding := splitPadding(raw, padded)
 	if content == "" {
 		return selectedSegmentWhen(padding, selected)
 	}
 	if strings.Contains(content, "\x1b]8;;") {
-		return styleForSelected(prStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
+		return styleForRow(row, prStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
 	}
 	parts := strings.Split(content, " ")
 	for index, part := range parts {
 		switch {
 		case strings.HasPrefix(part, "#"):
-			parts[index] = styleForSelected(prStyle, selected).Render(part)
+			parts[index] = styleForRow(row, prStyle, selected).Render(part)
 		case part == "✓" || part == "◆":
-			parts[index] = styleForSelected(cleanStyle, selected).Render(part)
+			parts[index] = styleForRow(row, cleanStyle, selected).Render(part)
 		case part == "×" || part == "✗" || part == "✕" || part == "●":
-			parts[index] = styleForSelected(warningStyle, selected).Render(part)
+			parts[index] = styleForRow(row, warningStyle, selected).Render(part)
 		default:
-			parts[index] = styleForSelected(mutedStyle, selected).Render(part)
+			parts[index] = styleForRow(row, mutedStyle, selected).Render(part)
 		}
 	}
 	return strings.Join(parts, selectedSegmentWhen(" ", selected)) + selectedSegmentWhen(padding, selected)
 }
 
-func colorSizeCell(raw, padded string, selected bool) string {
+func colorSizeCell(row gitdata.Row, raw, padded string, selected bool) string {
 	content, padding := splitPadding(raw, padded)
 	if content == "" {
 		return selectedSegmentWhen(padding, selected)
 	}
 	if content == LoadingPlaceholder || content == "…" || content == "-" {
-		return styleForSelected(mutedStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
+		return styleForRow(row, mutedStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
 	}
-	return styleForSelected(sizeStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
+	return styleForRow(row, sizeStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
 }
 
-func mutedCell(raw, padded string, selected bool) string {
+func mutedCell(row gitdata.Row, raw, padded string, selected bool) string {
 	content, padding := splitPadding(raw, padded)
 	if content == "" {
 		return selectedSegmentWhen(padding, selected)
 	}
-	return styleForSelected(mutedStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
+	return styleForRow(row, mutedStyle, selected).Render(content) + selectedSegmentWhen(padding, selected)
 }
 
 func splitPadding(raw, padded string) (string, string) {
@@ -556,7 +550,10 @@ func padSelectedRow(value string, width int) string {
 	return value + selectedSegment(strings.Repeat(" ", width-visible))
 }
 
-func styleForSelected(style lipgloss.Style, selected bool) lipgloss.Style {
+func styleForRow(row gitdata.Row, style lipgloss.Style, selected bool) lipgloss.Style {
+	if row.IsWorktree() && row.Worktree.IsActive {
+		style = style.Bold(true)
+	}
 	if selected {
 		return style.Background(lipgloss.Color("62"))
 	}

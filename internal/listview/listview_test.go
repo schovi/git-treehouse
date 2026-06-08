@@ -236,6 +236,67 @@ func TestRenderRowsSelectedColorCoversWholeRow(t *testing.T) {
 	}
 }
 
+func TestRenderRowsActiveColorBoldsWholeRow(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previousProfile)
+	})
+
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	row := gitdata.Worktree{
+		Branch:              "feature/current",
+		IsActive:            true,
+		LocalMetadataLoaded: true,
+		Status:              gitdata.StatusCounts{Staged: 1, Modified: 2, Untracked: 3},
+		HeadSync:            gitdata.SyncState{Available: true, Ahead: 1, Behind: 2},
+		MainSync:            gitdata.SyncState{Available: true, Behind: 4},
+		CommitShort:         "abc1234",
+		CommitSubject:       "bold all columns",
+		CommitTime:          now.Add(-1 * time.Hour),
+		PR:                  &gitdata.PullRequest{Number: 42, State: "○", CI: "✓"},
+		SizeBytes:           1536,
+		SizeLoaded:          true,
+	}
+
+	tests := []struct {
+		name    string
+		options Options
+	}{
+		{
+			name: "unselected",
+			options: Options{
+				Width:      160,
+				Color:      true,
+				ShowHeader: true,
+				ShowPR:     true,
+			},
+		},
+		{
+			name: "selected",
+			options: Options{
+				Width:             160,
+				Color:             true,
+				ShowHeader:        true,
+				ShowPR:            true,
+				HighlightSelected: true,
+				SelectedIndex:     0,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output := RenderRows([]gitdata.Worktree{row}, test.options, now)
+			lines := strings.Split(output, "\n")
+			if len(lines) < 2 {
+				t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
+			}
+			assertNonSpaceColumnsBold(t, lines[1])
+		})
+	}
+}
+
 func TestRenderRowsUsesTypeIconBeforeBranchColumn(t *testing.T) {
 	output := RenderRows([]gitdata.Worktree{
 		{Branch: "main", IsActive: true, IsMain: true},
@@ -444,4 +505,75 @@ func updateSelectedBackground(selected bool, sequence string) bool {
 		}
 	}
 	return selected
+}
+
+type styledColumn struct {
+	character rune
+	bold      bool
+}
+
+func assertNonSpaceColumnsBold(t *testing.T, line string) {
+	t.Helper()
+
+	columns := boldColumns(line)
+	if len(columns) == 0 {
+		t.Fatalf("line has no visible columns:\n%q", line)
+	}
+	for column, state := range columns {
+		if state.character != ' ' && !state.bold {
+			t.Fatalf("column %d containing %q is not bold:\n%q", column, string(state.character), line)
+		}
+	}
+}
+
+func boldColumns(value string) []styledColumn {
+	columns := []styledColumn{}
+	bold := false
+	for len(value) > 0 {
+		if strings.HasPrefix(value, "\x1b[") {
+			end := strings.IndexByte(value, 'm')
+			if end < 0 {
+				return columns
+			}
+			bold = updateBold(bold, value[2:end])
+			value = value[end+1:]
+			continue
+		}
+		if strings.HasPrefix(value, "\x1b]") {
+			end := strings.Index(value, "\x1b\\")
+			if end < 0 {
+				return columns
+			}
+			value = value[end+2:]
+			continue
+		}
+
+		character, size := utf8.DecodeRuneInString(value)
+		if character == utf8.RuneError && size == 0 {
+			return columns
+		}
+		width := runewidth.RuneWidth(character)
+		for range width {
+			columns = append(columns, styledColumn{character: character, bold: bold})
+		}
+		value = value[size:]
+	}
+	return columns
+}
+
+func updateBold(bold bool, sequence string) bool {
+	if sequence == "" {
+		return false
+	}
+	for _, code := range strings.Split(sequence, ";") {
+		switch code {
+		case "0":
+			bold = false
+		case "1":
+			bold = true
+		case "22":
+			bold = false
+		}
+	}
+	return bold
 }

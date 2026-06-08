@@ -78,9 +78,9 @@ The name column starts with exactly one row-type glyph and one space before the 
 
 ### 3.3 Selection and current worktree
 
-- The current worktree, where `git-treehouse` was started, uses bold name text.
+- The current worktree, where `git-treehouse` was started, uses bold row text.
 - The selected row uses a full-row background only. Selection does not add bold text or a row marker.
-- If the current row is selected, both styles apply: full-row background plus bold name text.
+- If the current row is selected, both styles apply: full-row background plus bold row text.
 
 ### 3.4 Status column
 

@@ -1314,7 +1314,7 @@ func TestHelpRendersGroupedKeysAndLegends(t *testing.T) {
 		"PR/branch",
 		"▣ worktree",
 		"⑂ branch",
-		"bold active branch",
+		"bold active row",
 		"remote gone",
 		"◌ draft",
 		"○ ready/open",
@@ -1331,7 +1331,7 @@ func TestHelpRendersGroupedKeysAndLegends(t *testing.T) {
 			t.Fatalf("renderHelpAtWidth() should not contain %q:\n%s", unwanted, output)
 		}
 	}
-	markerOrder := []string{"⌂ root", "▣ worktree", "⑂ branch", "! locked", "× prunable", "bold active branch"}
+	markerOrder := []string{"⌂ root", "▣ worktree", "⑂ branch", "! locked", "× prunable", "bold active row"}
 	previousIndex := -1
 	for _, marker := range markerOrder {
 		index := strings.Index(output, marker)
