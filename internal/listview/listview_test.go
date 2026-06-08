@@ -330,7 +330,7 @@ func TestRenderRowsLeavesTypeIconHeaderUntitled(t *testing.T) {
 		t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
 	}
 	headerColumn := visualIndex(lines[0], "name")
-	iconColumn := visualIndex(lines[1], "▣")
+	iconColumn := visualIndex(lines[1], "⊡")
 	nameColumn := visualIndex(lines[1], "feature/plain")
 	if nameColumn != headerColumn {
 		t.Fatalf("name header column = %d, displayed name column = %d:\n%s", headerColumn, nameColumn, output)
@@ -352,9 +352,9 @@ func TestRenderRowsShowsLifecycleSuffixesAndRemoteState(t *testing.T) {
 	}, time.Now())
 
 	for _, want := range []string{
-		"▣ experiment/locked !",
-		"▣ stale/abandoned ×",
-		"▣ abcdef1 detached",
+		"⊡ experiment/locked !",
+		"⊡ stale/abandoned ×",
+		"⊡ abcdef1 detached",
 		"gone",
 		"✓",
 		"-",
@@ -396,7 +396,7 @@ func TestRenderMixedRowsShowsBranchOnlyRows(t *testing.T) {
 	}, Options{Width: 120, ShowHeader: true}, time.Now())
 
 	for _, want := range []string{
-		"⑂ feature/list-branches",
+		"⎇ feature/list-branches",
 		"-",
 		"✓",
 		"↑3",

@@ -234,7 +234,7 @@ var (
 	branchOnlyStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	inactiveMarkerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	mainMarkerStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("110")).Bold(true)
-	worktreeMarkerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("108"))
+	worktreeMarkerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	branchMarkerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	cleanStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	dirtyStagedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
@@ -286,12 +286,24 @@ func colorBranchCell(row gitdata.Row, raw, padded string, selected bool) string 
 
 func typeIconStyle(row gitdata.Row) lipgloss.Style {
 	if row.IsBranch() {
-		return branchMarkerStyle
+		return BranchTypeIconStyle()
 	}
 	if row.Worktree.IsMain {
-		return mainMarkerStyle
+		return RootTypeIconStyle()
 	}
+	return WorktreeTypeIconStyle()
+}
+
+func RootTypeIconStyle() lipgloss.Style {
+	return mainMarkerStyle
+}
+
+func WorktreeTypeIconStyle() lipgloss.Style {
 	return worktreeMarkerStyle
+}
+
+func BranchTypeIconStyle() lipgloss.Style {
+	return branchMarkerStyle
 }
 
 func stateIconStyle(row gitdata.Row) lipgloss.Style {

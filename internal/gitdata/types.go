@@ -164,12 +164,12 @@ func (row Row) PullRequest() *PullRequest {
 
 func (row Row) TypeIcon() string {
 	if row.IsBranch() {
-		return "⑂"
+		return "⎇"
 	}
 	if row.Worktree.IsMain {
 		return "⌂"
 	}
-	return "▣"
+	return "⊡"
 }
 
 func (row Row) StateIcon() string {

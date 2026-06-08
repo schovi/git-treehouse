@@ -2648,8 +2648,8 @@ func helpLegendSections() []helpSection {
 			title: "Row Icons",
 			entries: []helpEntry{
 				{lead: "⌂", description: "root", kind: helpEntryRoot},
-				{lead: "▣", description: "worktree", kind: helpEntryWorktree},
-				{lead: "⑂", description: "branch", kind: helpEntryBranch},
+				{lead: "⊡", description: "worktree", kind: helpEntryWorktree},
+				{lead: "⎇", description: "branch", kind: helpEntryBranch},
 				{lead: "!", description: "locked", kind: helpEntryLocked},
 				{lead: "×", description: "prunable", kind: helpEntryPrunable},
 				{lead: "bold", description: "active row", kind: helpEntryActive},
@@ -2703,12 +2703,14 @@ func renderHelpEntry(entry helpEntry) string {
 
 func helpEntryStyle(kind helpEntryKind) lipgloss.Style {
 	switch kind {
-	case helpEntryRoot, helpEntryPullRequest, helpEntryMerged:
-		return inspectorCommitStyle
+	case helpEntryRoot:
+		return listview.RootTypeIconStyle()
 	case helpEntryWorktree:
-		return inspectorCleanStyle
+		return listview.WorktreeTypeIconStyle()
 	case helpEntryBranch:
-		return hintStyle
+		return listview.BranchTypeIconStyle()
+	case helpEntryPullRequest, helpEntryMerged:
+		return inspectorCommitStyle
 	case helpEntryActive:
 		return inspectorValueStyle.Bold(true)
 	case helpEntryLocked, helpEntryPrunable, helpEntryModified, helpEntryClosed, helpEntryRunning, helpEntryError:

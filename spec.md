@@ -42,7 +42,7 @@ Borderless table. By default it shows one row per worktree unless `show_branches
 
 | Column | Content |
 |---|---|
-| name | Row-type glyph plus display name, with optional lifecycle suffix, e.g. `⌂ main`, `▣ feature/work`, `▣ cd5e190 detached`, `▣ stale/abandoned ×`, or `⑂ feature/local-only` |
+| name | Row-type glyph plus display name, with optional lifecycle suffix, e.g. `⌂ main`, `⊡ feature/work`, `⊡ cd5e190 detached`, `⊡ stale/abandoned ×`, or `⎇ feature/local-only` |
 | status | Working-tree state, compact (see 3.4); `-` for branch-only rows |
 | remote | Ahead/behind vs upstream, e.g. `↑2 ↓1`; `✓` when synced; `gone` when upstream was deleted; `-` when no upstream |
 | main± | Ahead/behind vs the local main branch, e.g. `↑5 ↓12`; blank only for rows already on the main branch |
@@ -71,8 +71,8 @@ Type icons:
 | Glyph | Meaning |
 |---|---|
 | `⌂` | Root repository, the primary checkout that owns the worktree set |
-| `▣` | Checked-out worktree |
-| `⑂` | Local branch without a worktree |
+| `⊡` | Checked-out worktree |
+| `⎇` | Local branch without a worktree |
 
 The name column starts with exactly one row-type glyph and one space before the displayed name. The header label `name` aligns with the displayed name, leaving the row-type glyph area untitled. Locked and prunable worktrees append one lifecycle glyph after the displayed name. Detached worktrees still show `<sha> detached`, prefixed by the worktree type icon.
 
@@ -299,7 +299,7 @@ show_branches = false                      # default: hide branch-only rows unti
 ## 10. Edge cases & errors
 
 - **Main branch detection:** `origin/HEAD` symref; fallback to local `main`, then `master`. Override via config.
-- **Detached HEAD rows:** name column shows `▣ <sha> detached`; `remote` shows `-`; `main±` is computed against the commit; create-base option 2 omitted.
+- **Detached HEAD rows:** name column shows `⊡ <sha> detached`; `remote` shows `-`; `main±` is computed against the commit; create-base option 2 omitted.
 - **No remotes at all:** `remote` shows `-`, PR column hidden, create dialog offers only local bases.
 - **Worktree path with uncommitted submodule/locked state:** surface git's own error verbatim in the status bar, never swallow it.
 - **Terminal too narrow (<60 cols):** drop columns per 3.1 priority; below ~40 cols show name + status only.

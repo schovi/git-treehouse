@@ -1312,8 +1312,8 @@ func TestHelpRendersGroupedKeysAndLegends(t *testing.T) {
 		"Enter go/create",
 		"c checkout root",
 		"PR/branch",
-		"▣ worktree",
-		"⑂ branch",
+		"⊡ worktree",
+		"⎇ branch",
 		"bold active row",
 		"remote gone",
 		"◌ draft",
@@ -1331,7 +1331,7 @@ func TestHelpRendersGroupedKeysAndLegends(t *testing.T) {
 			t.Fatalf("renderHelpAtWidth() should not contain %q:\n%s", unwanted, output)
 		}
 	}
-	markerOrder := []string{"⌂ root", "▣ worktree", "⑂ branch", "! locked", "× prunable", "bold active row"}
+	markerOrder := []string{"⌂ root", "⊡ worktree", "⎇ branch", "! locked", "× prunable", "bold active row"}
 	previousIndex := -1
 	for _, marker := range markerOrder {
 		index := strings.Index(output, marker)
@@ -1351,6 +1351,33 @@ func TestHelpCategoryStyleIsBoldWhite(t *testing.T) {
 	}
 	if got := fmt.Sprint(helpCategoryStyle.GetForeground()); got != "255" {
 		t.Fatalf("helpCategoryStyle foreground = %q, want 255", got)
+	}
+}
+
+func TestHelpRowIconStylesMatchListRenderer(t *testing.T) {
+	tests := []struct {
+		name string
+		kind helpEntryKind
+		want lipgloss.Style
+	}{
+		{name: "root", kind: helpEntryRoot, want: listview.RootTypeIconStyle()},
+		{name: "worktree", kind: helpEntryWorktree, want: listview.WorktreeTypeIconStyle()},
+		{name: "branch", kind: helpEntryBranch, want: listview.BranchTypeIconStyle()},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := helpEntryStyle(test.kind)
+			if fmt.Sprint(got.GetForeground()) != fmt.Sprint(test.want.GetForeground()) || got.GetBold() != test.want.GetBold() {
+				t.Fatalf("helpEntryStyle(%s) = foreground %v bold %t, want foreground %v bold %t",
+					test.name,
+					got.GetForeground(),
+					got.GetBold(),
+					test.want.GetForeground(),
+					test.want.GetBold(),
+				)
+			}
+		})
 	}
 }
 
