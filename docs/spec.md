@@ -163,7 +163,7 @@ Below the table:
 
 ### 3.10 Command palette
 
-`Ctrl+P` opens a fuzzy command palette over named actions, an alternative to memorizing keys. It includes the row actions (go, create, checkout, delete, open editor, open PR, copy), the view toggles, direct jumps to each filter (`filter-all`, `filter-modified`, `filter-branches`, `filter-merged`, `filter-prunable`, `filter-locked`, `filter-detached`), `toggle-help`, and `open-config` (`Ctrl+O`, opens the config file in the editor). Typing filters the list; `Enter` runs the highlighted command; `Esc` closes the palette. Each entry shows its direct keybinding when one exists.
+`Ctrl+P` opens a fuzzy command palette over named actions, an alternative to memorizing keys. It includes the row actions (go, create, checkout, delete, open editor, open PR, copy, copy PR URL), the view toggles, direct jumps to each filter (`filter-all`, `filter-modified`, `filter-branches`, `filter-merged`, `filter-prunable`, `filter-locked`, `filter-detached`), `toggle-help`, and `open-config` (`Ctrl+O`, opens the config file in the editor). Typing filters the list; `Enter` runs the highlighted command; `Esc` closes the palette. Each entry shows its direct keybinding when one exists; copy PR URL is palette-only.
 
 ## 4. Actions & keybindings
 

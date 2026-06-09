@@ -284,28 +284,29 @@ var orderedFilters = []worktreeFilter{
 type paletteCommandID string
 
 const (
-	paletteGoSelected      paletteCommandID = "go-selected"
-	paletteCreate          paletteCommandID = "create"
-	paletteDelete          paletteCommandID = "delete"
-	paletteOpenEditor      paletteCommandID = "open-editor"
-	paletteOpenPullRequest paletteCommandID = "open-pull-request"
-	paletteCopyPath        paletteCommandID = "copy-path"
-	paletteRefresh         paletteCommandID = "refresh"
-	paletteSearch          paletteCommandID = "search"
-	paletteJumpRoot        paletteCommandID = "jump-root"
-	paletteJumpActive      paletteCommandID = "jump-active"
-	paletteJumpTop         paletteCommandID = "jump-top"
-	paletteJumpBottom      paletteCommandID = "jump-bottom"
-	paletteCycleFilter     paletteCommandID = "cycle-filter"
-	paletteFilterAll       paletteCommandID = "filter-all"
-	paletteFilterModified  paletteCommandID = "filter-modified"
-	paletteFilterMerged    paletteCommandID = "filter-merged"
-	paletteFilterPrunable  paletteCommandID = "filter-prunable"
-	paletteFilterLocked    paletteCommandID = "filter-locked"
-	paletteFilterDetached  paletteCommandID = "filter-detached"
-	paletteOpenConfig      paletteCommandID = "open-config"
-	paletteToggleHelp      paletteCommandID = "toggle-help"
-	paletteQuit            paletteCommandID = "quit"
+	paletteGoSelected         paletteCommandID = "go-selected"
+	paletteCreate             paletteCommandID = "create"
+	paletteDelete             paletteCommandID = "delete"
+	paletteOpenEditor         paletteCommandID = "open-editor"
+	paletteOpenPullRequest    paletteCommandID = "open-pull-request"
+	paletteCopyPath           paletteCommandID = "copy-path"
+	paletteCopyPullRequestURL paletteCommandID = "copy-pull-request-url"
+	paletteRefresh            paletteCommandID = "refresh"
+	paletteSearch             paletteCommandID = "search"
+	paletteJumpRoot           paletteCommandID = "jump-root"
+	paletteJumpActive         paletteCommandID = "jump-active"
+	paletteJumpTop            paletteCommandID = "jump-top"
+	paletteJumpBottom         paletteCommandID = "jump-bottom"
+	paletteCycleFilter        paletteCommandID = "cycle-filter"
+	paletteFilterAll          paletteCommandID = "filter-all"
+	paletteFilterModified     paletteCommandID = "filter-modified"
+	paletteFilterMerged       paletteCommandID = "filter-merged"
+	paletteFilterPrunable     paletteCommandID = "filter-prunable"
+	paletteFilterLocked       paletteCommandID = "filter-locked"
+	paletteFilterDetached     paletteCommandID = "filter-detached"
+	paletteOpenConfig         paletteCommandID = "open-config"
+	paletteToggleHelp         paletteCommandID = "toggle-help"
+	paletteQuit               paletteCommandID = "quit"
 )
 
 type paletteCommand struct {
@@ -322,6 +323,7 @@ var paletteCommands = []paletteCommand{
 	{id: paletteOpenEditor, title: "Open in editor", shortcut: "o", keywords: "code cursor"},
 	{id: paletteOpenPullRequest, title: "Open PR or branch page", shortcut: "p", keywords: "github browser"},
 	{id: paletteCopyPath, title: "Copy path or branch name", shortcut: "y", keywords: "clipboard branch path"},
+	{id: paletteCopyPullRequestURL, title: "Copy PR URL", keywords: "clipboard pull request link github url"},
 	{id: paletteRefresh, title: "Fetch and reload", shortcut: "r", keywords: "refresh prune"},
 	{id: paletteSearch, title: "Search branches", shortcut: "s", keywords: "find filter"},
 	{id: paletteJumpRoot, title: "Jump to root repository", shortcut: "h", keywords: "main"},
@@ -959,6 +961,12 @@ func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
 		text, flash, ok := model.selectedCopyText()
 		if !ok {
 			return model, nil
+		}
+		return model, copyTextCmd(text, flash)
+	case paletteCopyPullRequestURL:
+		text, flash, ok := model.selectedPullRequestCopy()
+		if !ok {
+			return model.setFlash("no pull request URL for this row")
 		}
 		return model, copyTextCmd(text, flash)
 	case paletteRefresh:
@@ -3731,6 +3739,18 @@ func (model Model) selectedCopyText() (string, string, bool) {
 		return "", "", false
 	}
 	return row.Worktree.Path, "copied absolute path: " + row.Worktree.Path, true
+}
+
+func (model Model) selectedPullRequestCopy() (string, string, bool) {
+	row, ok := model.selectedTableRow()
+	if !ok {
+		return "", "", false
+	}
+	pr := row.PullRequest()
+	if pr == nil || pr.URL == "" {
+		return "", "", false
+	}
+	return pr.URL, "copied PR URL: " + pr.URL, true
 }
 
 func (model Model) selectedRow() (gitdata.Worktree, bool) {

@@ -936,6 +936,42 @@ func TestSelectedCopyTextUsesBranchNameForBranchRows(t *testing.T) {
 	}
 }
 
+func TestSelectedPullRequestCopyReturnsPullRequestURL(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{
+			Path:   "/repo/feature",
+			Branch: "feature",
+			PR:     &gitdata.PullRequest{URL: "https://github.com/acme/repo/pull/42"},
+		},
+	})
+
+	text, message, ok := model.selectedPullRequestCopy()
+
+	if !ok || text != "https://github.com/acme/repo/pull/42" || message != "copied PR URL: https://github.com/acme/repo/pull/42" {
+		t.Fatalf("selectedPullRequestCopy() = %q, %q, %v; want PR URL copy", text, message, ok)
+	}
+}
+
+func TestSelectedPullRequestCopyReturnsFalseWithoutURL(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/no-pr", Branch: "no-pr"},
+	})
+
+	text, message, ok := model.selectedPullRequestCopy()
+
+	if ok || text != "" || message != "" {
+		t.Fatalf("selectedPullRequestCopy() without PR = %q, %q, %v; want no copy", text, message, ok)
+	}
+
+	model.state.Rows[0].PR = &gitdata.PullRequest{}
+
+	text, message, ok = model.selectedPullRequestCopy()
+
+	if ok || text != "" || message != "" {
+		t.Fatalf("selectedPullRequestCopy() without PR URL = %q, %q, %v; want no copy", text, message, ok)
+	}
+}
+
 func TestNOnBranchRowShowsEnterHint(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main", IsMain: true},
@@ -1385,6 +1421,39 @@ func TestCommandPaletteFiltersMerged(t *testing.T) {
 	}
 	if model.filter != filterMerged {
 		t.Fatalf("filter = %q, want merged", model.filter.label())
+	}
+}
+
+func TestCommandPaletteIncludesCopyPullRequestURL(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main"},
+	})
+	model, _ = model.openPalette()
+
+	for _, query := range []string{"url", "pull request"} {
+		model.paletteDialog.input.SetValue(query)
+		commands := model.matchingPaletteCommands()
+		if len(commands) != 1 || commands[0].id != paletteCopyPullRequestURL || commands[0].title != "Copy PR URL" {
+			t.Fatalf("matching palette commands for %q = %+v, want Copy PR URL", query, commands)
+		}
+		if commands[0].shortcut != "" {
+			t.Fatalf("Copy PR URL shortcut = %q, want palette-only command", commands[0].shortcut)
+		}
+	}
+}
+
+func TestExecutePaletteCopyPullRequestURLFlashesWithoutPullRequest(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/no-pr", Branch: "no-pr"},
+	})
+
+	model, cmd := model.executePaletteCommand(paletteCopyPullRequestURL)
+
+	if model.flash != "no pull request URL for this row" {
+		t.Fatalf("flash = %q, want no pull request URL message", model.flash)
+	}
+	if cmd == nil {
+		t.Fatal("executePaletteCommand should return flash clear command")
 	}
 }
 
