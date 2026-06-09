@@ -4,6 +4,14 @@ Release notes for Git Treehouse.
 
 Dates use the GitHub release publication date for published releases. Entries without a GitHub release use the annotated tag date.
 
+## v0.8.0 - 2026-06-09
+
+### New Features
+
+#### Scrollbar for the Worktree List
+
+The worktree list now renders a scrollbar in a right-hand gutter when the rows overflow the visible height. The gutter shows `↑`/`↓` arrows when there is more content above or below, a `█` thumb that tracks the scroll position, and a `│` track elsewhere. The footer shows the current position as `start/total`. The scrollbar only appears when the list is taller than the viewport, so narrow or short lists are unaffected.
+
 ## v0.7.0 - 2026-06-09
 
 ### New Features
