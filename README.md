@@ -20,14 +20,16 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/screen-app-1.png" alt="Git Treehouse app screenshot">
+  <img src="docs/assets/screens/screen-app-1.png" alt="Git Treehouse app screenshot">
 </p>
 
 <p align="center">
   More screenshots:
-  <a href="docs/assets/screen-onboarding.png">onboarding</a> |
-  <a href="docs/assets/screen-app-2.png">app example #2</a> |
-  <a href="docs/assets/screen-new-worktree.png">create new worktree</a>
+  <a href="docs/assets/screens/screen-onboarding.png">onboarding</a> |
+  <a href="docs/assets/screens/screen-app-2.png">app example #2</a> |
+  <a href="docs/assets/screens/screen-new-worktree.png">create new worktree</a>
+  <a href="docs/assets/screens/screen-new-worktree-from-branch.png">create new worktree</a>
+  <a href="docs/assets/screens/screen-help.png">create new worktree</a>
 </p>
 
 ## What It Does
