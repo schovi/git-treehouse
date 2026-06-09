@@ -218,9 +218,11 @@ func runList(args []string, repoPath string) error {
 	}
 	enrichmentContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	showPullRequestColumn := !options.noGitHub && state.Repo.RemoteConfigured && listview.ShowsPullRequestColumn(width)
+	showGitSizeColumn := listview.ShowsGitSizeColumn(width) || listview.ShowsGitSizeColumnWithPullRequests(width, showPullRequestColumn)
 	showPR, prPending := enrichListState(enrichmentContext, &state, runner, listEnrichmentOptions{
-		LoadPullRequests: !options.noGitHub && (options.jsonOutput || listview.ShowsPullRequestColumn(width)),
-		LoadGitSize:      options.jsonOutput || listview.ShowsGitSizeColumn(width),
+		LoadPullRequests: !options.noGitHub && (options.jsonOutput || showPullRequestColumn),
+		LoadGitSize:      options.jsonOutput || showGitSizeColumn,
 		LoadFullSize:     options.jsonOutput,
 	})
 	if options.jsonOutput {

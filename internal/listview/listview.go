@@ -14,6 +14,23 @@ import (
 
 const LoadingPlaceholder = "⋯"
 
+const (
+	defaultWidth                  = 100
+	compactWidth                  = 40
+	defaultBranchColumnWidth      = 20
+	minimumBranchColumnWidth      = 6
+	statusColumnWidth             = 8
+	remoteColumnWidth             = 7
+	mainColumnWidth               = 8
+	defaultCommitColumnWidth      = 28
+	minimumCommitColumnWidth      = 7
+	ageColumnWidth                = 5
+	minimumPullRequestColumnWidth = 7
+	maximumPullRequestColumnWidth = 10
+	minimumSizeColumnWidth        = 4
+	maximumSizeColumnWidth        = 8
+)
+
 type Options struct {
 	Width             int
 	Color             bool
@@ -45,10 +62,11 @@ func RenderRows(rows []gitdata.Worktree, options Options, now time.Time) string 
 func RenderMixedRows(rows []gitdata.Row, options Options, now time.Time) string {
 	width := options.Width
 	if width <= 0 {
-		width = 100
+		width = defaultWidth
+		options.Width = width
 	}
 	gap := columnGap(options)
-	columns := chooseColumns(width, options.ShowPR, gap)
+	columns := chooseColumns(width, rows, options.ShowPR, gap)
 	lines := make([]string, 0, len(rows)+1)
 	if options.ShowHeader {
 		header := renderHeader(columns, options)
@@ -60,32 +78,45 @@ func RenderMixedRows(rows []gitdata.Row, options Options, now time.Time) string 
 	return strings.Join(lines, "\n")
 }
 
-func chooseColumns(width int, showPR bool, gap int) []column {
+func chooseColumns(width int, rows []gitdata.Row, showPR bool, gap int) []column {
 	columns := []column{
-		{key: "branch", title: "  name", width: 20, elastic: true},
-		{key: "status", title: "status", width: 8},
+		{key: "branch", title: "  name", width: defaultBranchColumnWidth, elastic: true},
+		{key: "status", title: "status", width: statusColumnWidth},
 	}
-	if width < 40 {
+	if width < compactWidth {
 		statusWidth := min(10, max(6, width/3))
 		columns[0].width = max(6, width-gap-statusWidth)
 		columns[1].width = statusWidth
 		return columns
 	}
 	optional := []column{
-		{key: "remote", title: "remote", width: 7},
-		{key: "main", title: "main±", width: 8},
-		{key: "commit", title: "commit", width: 28, elastic: true},
+		{key: "remote", title: "remote", width: remoteColumnWidth},
+		{key: "main", title: "main±", width: mainColumnWidth},
+		{key: "commit", title: "commit", width: defaultCommitColumnWidth, elastic: true},
+		{key: "age", title: "age", width: ageColumnWidth},
 	}
-	if width >= 90 {
-		optional = append(optional, column{key: "age", title: "age", width: 5})
+	if showPR {
+		optional = append(optional, column{key: "pr", title: "PR", width: pullRequestColumnWidth(rows)})
 	}
-	if showPR && ShowsPullRequestColumn(width) {
-		optional = append(optional, column{key: "pr", title: "PR", width: 13})
-	}
-	if ShowsGitSizeColumn(width) {
-		optional = append(optional, column{key: "size", title: "size", width: 8, align: "right"})
-	}
+	optional = append(optional, column{key: "size", title: "size", width: sizeColumnWidth(rows), align: "right"})
 	columns = append(columns, optional...)
+	columns = fitColumns(columns, width, gap)
+	return distributeExtra(columns, width, gap)
+}
+
+func fitColumns(columns []column, width, gap int) []column {
+	columns = removeColumnIfTooWide(columns, width, gap, "size")
+	columns = shrinkColumnIfTooWide(columns, width, gap, "commit", minimumCommitColumnWidth)
+	columns = removeColumnIfTooWide(columns, width, gap, "pr")
+	columns = removeColumnIfTooWide(columns, width, gap, "age")
+	columns = shrinkColumnIfTooWide(columns, width, gap, "branch", minimumBranchColumnWidth)
+	columns = removeColumnIfTooWide(columns, width, gap, "main")
+	columns = removeColumnIfTooWide(columns, width, gap, "remote")
+	columns = removeColumnIfTooWide(columns, width, gap, "commit")
+	return columns
+}
+
+func distributeExtra(columns []column, width, gap int) []column {
 	totalFixed := gap * (len(columns) - 1)
 	elasticCount := 0
 	for _, column := range columns {
@@ -105,24 +136,103 @@ func chooseColumns(width int, showPR bool, gap int) []column {
 			}
 		}
 	}
-	if extra < 0 {
-		for index := range columns {
-			if columns[index].key == "commit" {
-				reduction := min(columns[index].width-12, -extra)
-				columns[index].width -= reduction
-				extra += reduction
-			}
+	return columns
+}
+
+func ShowsPullRequestColumn(width int) bool {
+	width = widthOrDefault(width)
+	return hasColumn(chooseColumns(width, nil, true, columnGapForWidth(width)), "pr")
+}
+
+func ShowsGitSizeColumn(width int) bool {
+	return ShowsGitSizeColumnWithPullRequests(width, false)
+}
+
+func ShowsGitSizeColumnWithPullRequests(width int, showPR bool) bool {
+	width = widthOrDefault(width)
+	return hasColumn(chooseColumns(width, nil, showPR, columnGapForWidth(width)), "size")
+}
+
+func removeColumnIfTooWide(columns []column, width, gap int, key string) []column {
+	if columnsWidth(columns, gap) <= width {
+		return columns
+	}
+	return removeColumn(columns, key)
+}
+
+func removeColumn(columns []column, key string) []column {
+	for index, column := range columns {
+		if column.key == key {
+			return append(columns[:index], columns[index+1:]...)
 		}
 	}
 	return columns
 }
 
-func ShowsPullRequestColumn(width int) bool {
-	return width >= 128
+func shrinkColumnIfTooWide(columns []column, width, gap int, key string, minimumWidth int) []column {
+	overflow := columnsWidth(columns, gap) - width
+	if overflow <= 0 {
+		return columns
+	}
+	for index := range columns {
+		if columns[index].key != key {
+			continue
+		}
+		reduction := min(columns[index].width-minimumWidth, overflow)
+		if reduction > 0 {
+			columns[index].width -= reduction
+		}
+		return columns
+	}
+	return columns
 }
 
-func ShowsGitSizeColumn(width int) bool {
-	return width >= 144
+func columnsWidth(columns []column, gap int) int {
+	if len(columns) == 0 {
+		return 0
+	}
+	width := gap * (len(columns) - 1)
+	for _, column := range columns {
+		width += column.width
+	}
+	return width
+}
+
+func hasColumn(columns []column, key string) bool {
+	for _, column := range columns {
+		if column.key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func widthOrDefault(width int) int {
+	if width <= 0 {
+		return defaultWidth
+	}
+	return width
+}
+
+func pullRequestColumnWidth(rows []gitdata.Row) int {
+	width := len("PR")
+	for _, row := range rows {
+		if pullRequest := row.PullRequest(); pullRequest != nil {
+			width = max(width, runewidth.StringWidth(pullRequest.Text()))
+		}
+	}
+	return min(max(width, minimumPullRequestColumnWidth), maximumPullRequestColumnWidth)
+}
+
+func sizeColumnWidth(rows []gitdata.Row) int {
+	width := len("size")
+	for _, row := range rows {
+		size, loaded := row.TableSize()
+		if loaded {
+			width = max(width, runewidth.StringWidth(formatSize(size)))
+		}
+	}
+	return min(max(width, minimumSizeColumnWidth), maximumSizeColumnWidth)
 }
 
 func renderHeader(columns []column, options Options) string {
@@ -507,7 +617,11 @@ func splitFirstRune(value string) (string, string) {
 }
 
 func columnGap(options Options) int {
-	if options.Width < 40 {
+	return columnGapForWidth(options.Width)
+}
+
+func columnGapForWidth(width int) int {
+	if width < compactWidth {
 		return 1
 	}
 	return 2
@@ -530,7 +644,21 @@ func padCell(row gitdata.Row, column column, value string) string {
 	if column.key == "branch" {
 		return padBranchName(row, value, column.width)
 	}
+	if column.key == "commit" {
+		return padCommit(row, value, column.width)
+	}
 	return pad(value, column.width, column.align)
+}
+
+func padCommit(row gitdata.Row, value string, width int) string {
+	commitShort := row.CommitShort()
+	if commitShort == "" {
+		return pad(value, width, "")
+	}
+	if runewidth.StringWidth(value) > width && width <= runewidth.StringWidth(commitShort)+1 {
+		return pad(commitShort, width, "")
+	}
+	return pad(value, width, "")
 }
 
 func padBranchName(row gitdata.Row, value string, width int) string {

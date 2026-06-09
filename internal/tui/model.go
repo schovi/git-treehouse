@@ -3660,7 +3660,7 @@ func (model Model) diskUsageCommand(ctx context.Context, now time.Time, id int) 
 }
 
 func (model Model) diskUsagePaths(now time.Time) ([]string, []string) {
-	if !listview.ShowsGitSizeColumn(model.tableContentWidth()) {
+	if !listview.ShowsGitSizeColumnWithPullRequests(model.tableContentWidth(), model.showPR) {
 		return nil, nil
 	}
 	visible := model.visibleTableIndexes(now)

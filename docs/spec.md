@@ -67,7 +67,7 @@ Borderless table. By default it shows one row per worktree unless `show_branches
 | PR | PR number + state + CI (see 3.6), rendered as a clickable OSC 8 hyperlink |
 | size | Git-aware worktree size, computed lazily from tracked and unignored untracked files (see 3.7) |
 
-Column sizing: name and commit are elastic; commit truncates first, then size, PR, and age drop entirely on narrow terminals. Name, status, and remote survive until the minimum compact layout.
+Column sizing: name and commit are elastic. On narrow terminals, size drops first, then commit truncates down to the short SHA, then PR and age drop entirely. Name, status, and remote survive until the minimum compact layout.
 
 The header includes the root repository branch, e.g. `root: codex/list-rendering-polish`, because the root repository can be checked out to a non-main branch.
 

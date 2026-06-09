@@ -118,17 +118,129 @@ func TestRenderRowsUsesSharedLoadingPlaceholder(t *testing.T) {
 }
 
 func TestColumnVisibilityThresholds(t *testing.T) {
-	if ShowsPullRequestColumn(127) {
-		t.Fatal("PR column should be hidden at width 127")
+	if ShowsPullRequestColumn(73) {
+		t.Fatal("PR column should be hidden at width 73")
 	}
-	if !ShowsPullRequestColumn(128) {
-		t.Fatal("PR column should be visible at width 128")
+	if !ShowsPullRequestColumn(74) {
+		t.Fatal("PR column should be visible at width 74")
 	}
-	if ShowsGitSizeColumn(143) {
-		t.Fatal("size column should be hidden at width 143")
+	if ShowsGitSizeColumnWithPullRequests(100, true) {
+		t.Fatal("size column should be hidden at width 100 when PR is visible")
 	}
-	if !ShowsGitSizeColumn(144) {
-		t.Fatal("size column should be visible at width 144")
+	if !ShowsGitSizeColumnWithPullRequests(101, true) {
+		t.Fatal("size column should be visible at width 101 when PR is visible")
+	}
+	if ShowsGitSizeColumn(91) {
+		t.Fatal("size column should be hidden at width 91 without PR")
+	}
+	if !ShowsGitSizeColumn(92) {
+		t.Fatal("size column should be visible at width 92 without PR")
+	}
+}
+
+func TestRenderRowsDropsSizeBeforeTruncatingCommitSubject(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	row := gitdata.Worktree{
+		Branch:              "feature/responsive",
+		LocalMetadataLoaded: true,
+		HeadSync:            gitdata.SyncState{Available: true},
+		MainSync:            gitdata.SyncState{Available: true, Ahead: 1},
+		CommitShort:         "abcdefg",
+		CommitSubject:       "responsive table layout",
+		CommitTime:          now.Add(-2 * time.Hour),
+		PR:                  &gitdata.PullRequest{Number: 12, State: "○", CI: "✓"},
+		SizeBytes:           1536,
+		SizeLoaded:          true,
+	}
+
+	wide := RenderRows([]gitdata.Worktree{row}, Options{
+		Width:      101,
+		ShowHeader: true,
+		ShowPR:     true,
+	}, now)
+	if !strings.Contains(wide, "size") || !strings.Contains(wide, "1.5K") {
+		t.Fatalf("RenderRows() should show size at width 101:\n%s", wide)
+	}
+
+	narrow := RenderRows([]gitdata.Worktree{row}, Options{
+		Width:      100,
+		ShowHeader: true,
+		ShowPR:     true,
+	}, now)
+	if strings.Contains(narrow, "size") || strings.Contains(narrow, "1.5K") {
+		t.Fatalf("RenderRows() should hide size before truncating commit:\n%s", narrow)
+	}
+	if !strings.Contains(narrow, "abcdefg responsive table") {
+		t.Fatalf("RenderRows() should keep useful commit subject after size drops:\n%s", narrow)
+	}
+}
+
+func TestRenderRowsTruncatesCommitSubjectToSHA(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	row := gitdata.Worktree{
+		Branch:              "feature/responsive",
+		LocalMetadataLoaded: true,
+		HeadSync:            gitdata.SyncState{Available: true},
+		MainSync:            gitdata.SyncState{Available: true, Ahead: 1},
+		CommitShort:         "abcdefg",
+		CommitSubject:       "subject should disappear",
+		CommitTime:          now.Add(-2 * time.Hour),
+		PR:                  &gitdata.PullRequest{Number: 12, State: "○", CI: "✓"},
+		SizeBytes:           1536,
+		SizeLoaded:          true,
+	}
+
+	output := RenderRows([]gitdata.Worktree{row}, Options{
+		Width:      74,
+		ShowHeader: true,
+		ShowPR:     true,
+	}, now)
+
+	if strings.Contains(output, "subject") || strings.Contains(output, "abcdef…") {
+		t.Fatalf("RenderRows() should end commit truncation at the SHA:\n%s", output)
+	}
+	if !strings.Contains(output, "abcdefg") {
+		t.Fatalf("RenderRows() missing commit SHA:\n%s", output)
+	}
+	if !strings.Contains(output, "PR") {
+		t.Fatalf("RenderRows() should keep PR while commit is SHA-only:\n%s", output)
+	}
+}
+
+func TestRenderRowsFitsResponsiveWidths(t *testing.T) {
+	now := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	row := gitdata.Worktree{
+		Branch:              "feature/responsive",
+		LocalMetadataLoaded: true,
+		Status:              gitdata.StatusCounts{Staged: 1, Modified: 1},
+		HeadSync:            gitdata.SyncState{Available: true, Ahead: 1, Behind: 1},
+		MainSync:            gitdata.SyncState{Available: true, Ahead: 2, Behind: 2},
+		CommitShort:         "abcdefg",
+		CommitSubject:       "responsive table layout keeps fitting",
+		CommitTime:          now.Add(-2 * time.Hour),
+		PR:                  &gitdata.PullRequest{Number: 12, State: "○", CI: "✓"},
+		SizeBytes:           1536,
+		SizeLoaded:          true,
+	}
+
+	for _, width := range []int{39, 40, 44, 58, 65, 74, 100, 101, 160} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			output := RenderRows([]gitdata.Worktree{row}, Options{
+				Width:             width,
+				Color:             true,
+				ShowHeader:        true,
+				ShowPR:            true,
+				HighlightSelected: true,
+				SelectedIndex:     0,
+			}, now)
+			lines := strings.Split(output, "\n")
+			if len(lines) < 2 {
+				t.Fatalf("RenderRows() lines = %d, want header and row:\n%s", len(lines), output)
+			}
+			if got := lipgloss.Width(lines[1]); got != width {
+				t.Fatalf("selected row width = %d, want %d:\n%q", got, width, lines[1])
+			}
+		})
 	}
 }
 
