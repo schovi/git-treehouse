@@ -1260,6 +1260,48 @@ func TestNewReservesPullRequestColumnForRemoteRepository(t *testing.T) {
 	}
 }
 
+func TestViewRendersScrollbarForOverflowingWorktreeList(t *testing.T) {
+	rows := make([]gitdata.Worktree, 18)
+	rows[0] = gitdata.Worktree{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true}
+	for index := 1; index < len(rows); index++ {
+		rows[index] = gitdata.Worktree{Path: fmt.Sprintf("/repo/worktree-%d", index), Branch: fmt.Sprintf("worktree-%d", index)}
+	}
+	model := testModelWithRows(rows)
+	model.width = 100
+	model.height = 24
+
+	output := model.View()
+	plainOutput := ansi.Strip(output)
+
+	for _, want := range []string{"↑", "█", "↓", "0/18"} {
+		if !strings.Contains(plainOutput, want) {
+			t.Fatalf("View() missing scrollbar element %q:\n%s", want, output)
+		}
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if width := lipgloss.Width(line); width != model.width {
+			t.Fatalf("View() line width = %d, want %d:\n%q\n%s", width, model.width, line, output)
+		}
+	}
+}
+
+func TestViewHidesScrollbarWhenWorktreeListFits(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+		{Path: "/repo/docs", Branch: "docs"},
+	})
+	model.width = 100
+	model.height = 24
+
+	plainOutput := ansi.Strip(model.View())
+
+	for _, unwanted := range []string{"↑", "█", "↓", "0/2"} {
+		if strings.Contains(plainOutput, unwanted) {
+			t.Fatalf("View() should not render scrollbar element %q when rows fit:\n%s", unwanted, plainOutput)
+		}
+	}
+}
+
 func TestHelpRendersCenteredOverlayInAppFrame(t *testing.T) {
 	rows := make([]gitdata.Worktree, 24)
 	rows[0] = gitdata.Worktree{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true}

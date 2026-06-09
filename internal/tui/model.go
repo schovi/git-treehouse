@@ -87,6 +87,9 @@ var (
 	branchOnlyDetailStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	keyStyle              = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
 	hintStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	scrollbarArrowStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true)
+	scrollbarThumbStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	scrollbarTrackStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	helpCategoryStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
 	statusMessageStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	refreshActivityStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
@@ -94,12 +97,13 @@ var (
 )
 
 const (
-	autoRefreshInterval = 30 * time.Second
-	clockTickInterval   = time.Second
-	refreshTickInterval = 80 * time.Millisecond
-	refreshFlashTimeout = 3 * time.Second
-	prRefreshTTL        = 5 * time.Minute
-	appTitle            = "Git treehouse"
+	autoRefreshInterval  = 30 * time.Second
+	clockTickInterval    = time.Second
+	refreshTickInterval  = 80 * time.Millisecond
+	refreshFlashTimeout  = 3 * time.Second
+	prRefreshTTL         = 5 * time.Minute
+	scrollbarGutterWidth = 2
+	appTitle             = "Git treehouse"
 )
 
 var refreshSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -1346,6 +1350,13 @@ type viewSnapshot struct {
 	hasSelected bool
 	detail      string
 	start       int
+	scrollbar   listScrollbar
+}
+
+type listScrollbar struct {
+	total   int
+	visible int
+	start   int
 }
 
 func (model Model) View() string {
@@ -1359,13 +1370,16 @@ func (model Model) View() string {
 	detail := ""
 	var detailRow gitdata.Row
 	lines := []string{"Loading worktrees…"}
+	worktreeScrollbar := listScrollbar{}
 	if model.localMetadataReady() {
 		snapshot := model.viewSnapshot(now, panelContentWidth)
 		rowCount = len(snapshot.rows)
 		detail = snapshot.detail
 		detailRow = snapshot.selectedRow
+		worktreeScrollbar = snapshot.scrollbar
+		tableWidth := tableContentWidth(panelContentWidth, snapshot.scrollbar)
 		table := listview.RenderMixedRows(snapshot.visibleRows, listview.Options{
-			Width:             panelContentWidth,
+			Width:             tableWidth,
 			Color:             true,
 			Hyperlinks:        true,
 			ShowHeader:        true,
@@ -1379,10 +1393,12 @@ func (model Model) View() string {
 		if len(snapshot.rows) == 0 {
 			lines = []string{"No rows"}
 		}
+		lines = renderLinesWithListScrollbar(lines, panelContentWidth, snapshot.scrollbar)
 	}
+	leftFooter, rightFooter := model.listFooterHintsForScrollbar(worktreeScrollbar, panelContentWidth)
 	parts := []string{
 		model.appTopLine(rowCount, outerWidth),
-		model.wrapOuter(sectionBoxWithSplitFooterTopRight("Worktrees", lines, model.listFooterLeftHints(), model.listFooterRightHints(), model.worktreesFeedback(), panelWidth), outerWidth),
+		model.wrapOuter(sectionBoxWithSplitFooterTopRight("Worktrees", lines, leftFooter, rightFooter, model.worktreesFeedback(), panelWidth), outerWidth),
 	}
 	if detail != "" {
 		parts = append(parts, model.wrapOuter(sectionBoxWithFooter(rowDetailTitle(detailRow), strings.Split(detail, "\n"), detailFooterHints(detailRow, panelWidth), panelWidth), outerWidth))
@@ -1451,7 +1467,77 @@ func (model Model) viewSnapshot(now time.Time, panelContentWidth int) viewSnapsh
 	if snapshot.start < end {
 		snapshot.visibleRows = rows[snapshot.start:end]
 	}
+	snapshot.scrollbar = listScrollbar{
+		total:   len(rows),
+		visible: len(snapshot.visibleRows),
+		start:   snapshot.start,
+	}
 	return snapshot
+}
+
+func tableContentWidth(width int, scrollbar listScrollbar) int {
+	if scrollbar.shouldRender(width) {
+		return max(1, width-scrollbarGutterWidth)
+	}
+	return width
+}
+
+func renderLinesWithListScrollbar(lines []string, width int, scrollbar listScrollbar) []string {
+	if !scrollbar.shouldRender(width) {
+		return lines
+	}
+	contentWidth := tableContentWidth(width, scrollbar)
+	output := make([]string, len(lines))
+	for index, line := range lines {
+		output[index] = padStyled(truncateStyled(line, contentWidth), contentWidth) + " " + scrollbar.glyphAt(index, len(lines))
+	}
+	return output
+}
+
+func (scrollbar listScrollbar) shouldRender(width int) bool {
+	return width > scrollbarGutterWidth && scrollbar.total > scrollbar.visible && scrollbar.visible > 0
+}
+
+func (scrollbar listScrollbar) positionText() string {
+	if scrollbar.total <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d", scrollbar.start, scrollbar.total)
+}
+
+func (scrollbar listScrollbar) glyphAt(index, height int) string {
+	if index == 0 {
+		return scrollbar.arrow("↑", scrollbar.start > 0)
+	}
+	if index == height-1 {
+		return scrollbar.arrow("↓", scrollbar.start+scrollbar.visible < scrollbar.total)
+	}
+	if scrollbar.trackHasThumbAt(index-1, max(0, height-2)) {
+		return scrollbarThumbStyle.Render("█")
+	}
+	return scrollbarTrackStyle.Render("│")
+}
+
+func (scrollbar listScrollbar) arrow(value string, enabled bool) string {
+	if !enabled {
+		return scrollbarTrackStyle.Render(value)
+	}
+	return scrollbarArrowStyle.Render(value)
+}
+
+func (scrollbar listScrollbar) trackHasThumbAt(index, trackHeight int) bool {
+	if trackHeight <= 0 {
+		return false
+	}
+	thumbHeight := max(1, trackHeight*scrollbar.visible/scrollbar.total)
+	thumbHeight = min(trackHeight, thumbHeight)
+	availablePositions := trackHeight - thumbHeight
+	maxStart := max(1, scrollbar.total-scrollbar.visible)
+	thumbStart := 0
+	if availablePositions > 0 {
+		thumbStart = (scrollbar.start*availablePositions + maxStart/2) / maxStart
+	}
+	return index >= thumbStart && index < thumbStart+thumbHeight
 }
 
 func (model Model) selectedInspector(row gitdata.Worktree, now time.Time) string {
@@ -2189,6 +2275,13 @@ func (model Model) listFooterRightHints() string {
 		return "h root · a active · Tab filter: " + model.filter.label() + " · Esc clear filter · s search · " + branchHint
 	}
 	return "h root · a active · Tab filter: " + model.filter.label() + " · s search · " + branchHint
+}
+
+func (model Model) listFooterHintsForScrollbar(scrollbar listScrollbar, width int) (string, string) {
+	if scrollbar.shouldRender(width) {
+		return model.listFooterLeftHints(), scrollbar.positionText()
+	}
+	return model.listFooterLeftHints(), model.listFooterRightHints()
 }
 
 func (model Model) worktreesFeedback() string {
