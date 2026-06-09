@@ -465,6 +465,9 @@ func TestRefreshSpinnerPattern(t *testing.T) {
 	if refreshFlashTimeout != 3*time.Second {
 		t.Fatalf("refresh flash timeout = %s, want 3s", refreshFlashTimeout)
 	}
+	if restoreOfferTimeout != 10*time.Second {
+		t.Fatalf("restore offer timeout = %s, want 10s", restoreOfferTimeout)
+	}
 }
 
 func TestAppControlsDropRefreshAgeBeforeCoreControls(t *testing.T) {
@@ -2770,6 +2773,221 @@ func TestDeleteCommandReloadsStableStateBeforeSuccess(t *testing.T) {
 	}
 }
 
+func TestDeleteBranchSuccessOffersRestore(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
+	results := stableLoadResults(worktreeList)
+	results["/repo/main|git branch -d feature"] = recordingResult{}
+	runner := &recordingRunner{results: results}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.runner = runner
+	model.filter = filterBranches
+	model.state.Branches = []gitdata.Branch{{
+		Name:               "feature",
+		Head:               sha,
+		CommitShort:        "0123456",
+		BranchMergedToMain: true,
+	}}
+	model, _ = model.openDelete()
+
+	started, cmd := model.updateDelete(tea.KeyMsg{Type: tea.KeyEnter})
+	message := firstDeleteMessage(t, cmd)
+
+	if message.restore == nil {
+		t.Fatal("branch delete success should include restore metadata")
+	}
+	if *message.restore != (pendingBranchRestore{branch: "feature", sha: sha, short: "0123456"}) {
+		t.Fatalf("restore metadata = %+v, want feature at %s", *message.restore, sha)
+	}
+
+	updated, _ := updateModel(t, started, message)
+
+	if updated.pendingRestore == nil {
+		t.Fatal("delete success should leave pending restore available")
+	}
+	if *updated.pendingRestore != *message.restore {
+		t.Fatalf("pending restore = %+v, want %+v", *updated.pendingRestore, *message.restore)
+	}
+	for _, want := range []string{"deleted feature", "0123456", "u to restore"} {
+		if !strings.Contains(updated.refreshFlash, want) {
+			t.Fatalf("restore offer missing %q: %q", want, updated.refreshFlash)
+		}
+	}
+}
+
+func TestDeleteWorktreeWithBranchOffersRestore(t *testing.T) {
+	sha := "fedcba9876543210fedcba9876543210fedcba98"
+	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
+	results := stableLoadResults(worktreeList)
+	results["/repo/main|git worktree remove /repo/feature"] = recordingResult{}
+	results["/repo/main|git branch -d feature"] = recordingResult{}
+	runner := &recordingRunner{results: results}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{
+			Path:               "/repo/feature",
+			Branch:             "feature",
+			Head:               sha,
+			CommitShort:        "fedcba9",
+			BranchMergedToMain: true,
+		},
+	})
+	model.runner = runner
+	model.selected = 1
+	model, _ = model.openDelete()
+
+	_, cmd := model.updateDelete(tea.KeyMsg{Type: tea.KeyEnter})
+	message := firstDeleteMessage(t, cmd)
+
+	if message.restore == nil {
+		t.Fatal("worktree and branch delete should include restore metadata")
+	}
+	if *message.restore != (pendingBranchRestore{branch: "feature", sha: sha, short: "fedcba9"}) {
+		t.Fatalf("restore metadata = %+v, want feature at %s", *message.restore, sha)
+	}
+}
+
+func TestDeleteWorktreeWithoutBranchDeleteDoesNotOfferRestore(t *testing.T) {
+	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
+	results := stableLoadResults(worktreeList)
+	results["/repo/main|git worktree remove /repo/feature"] = recordingResult{}
+	runner := &recordingRunner{results: results}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{
+			Path:        "/repo/feature",
+			Branch:      "feature",
+			Head:        "fedcba9876543210fedcba9876543210fedcba98",
+			CommitShort: "fedcba9",
+		},
+	})
+	model.runner = runner
+	model.selected = 1
+	model, _ = model.openDelete()
+
+	_, cmd := model.updateDelete(tea.KeyMsg{Type: tea.KeyEnter})
+	message := firstDeleteMessage(t, cmd)
+
+	if message.restore != nil {
+		t.Fatalf("worktree-only delete restore = %+v, want nil", *message.restore)
+	}
+}
+
+func TestRestoreKeyCreatesBranchAtPendingSHA(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
+	results := stableLoadResults(worktreeList)
+	results["/repo/main|git branch feature "+sha] = recordingResult{}
+	runner := &recordingRunner{results: results}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.runner = runner
+	model.pendingRestore = &pendingBranchRestore{branch: "feature", sha: sha, short: "0123456"}
+	model.refreshFlash = "deleted feature (0123456) · u to restore"
+
+	started, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+
+	if cmd == nil {
+		t.Fatal("u with pending restore should start a command")
+	}
+	if started.pendingRestore != nil {
+		t.Fatalf("pending restore after start = %+v, want nil", started.pendingRestore)
+	}
+	message := firstDeleteMessage(t, cmd)
+	if message.err != nil {
+		t.Fatalf("restore command error = %v", message.err)
+	}
+	if !hasCommand(runner.commands, "/repo/main|git branch feature "+sha) {
+		t.Fatalf("commands = %v, want git branch restore command", runner.commands)
+	}
+
+	updated, _ := updateModel(t, started, message)
+
+	if updated.refreshFlash != "✓ restored branch feature" {
+		t.Fatalf("restore success flash = %q, want restored branch", updated.refreshFlash)
+	}
+	if updated.pendingRestore != nil {
+		t.Fatalf("pending restore after success = %+v, want nil", updated.pendingRestore)
+	}
+}
+
+func TestRestoreKeyWithoutPendingRestoreIsNoOp(t *testing.T) {
+	runner := &recordingRunner{}
+	model := Model{runner: runner, selected: 2, refreshFlash: "kept"}
+
+	updated, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+
+	if cmd != nil {
+		t.Fatal("u without pending restore returned command, want nil")
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("commands = %v, want none", runner.commands)
+	}
+	if updated.selected != model.selected || updated.refreshFlash != model.refreshFlash || updated.pendingRestore != nil {
+		t.Fatalf("model changed on restore no-op: %+v", updated)
+	}
+}
+
+func TestRestoreOfferClearsWithRefreshFlashLifecycle(t *testing.T) {
+	restore := &pendingBranchRestore{branch: "feature", sha: "0123456789abcdef0123456789abcdef01234567", short: "0123456"}
+	model := Model{
+		refreshFlash:   "deleted feature (0123456) · u to restore",
+		refreshFlashID: 5,
+		pendingRestore: restore,
+	}
+
+	stale, _ := updateModel(t, model, clearRefreshFlashMsg{id: 4})
+	if stale.pendingRestore == nil || stale.refreshFlash == "" {
+		t.Fatalf("stale clear should keep offer, got flash %q restore %+v", stale.refreshFlash, stale.pendingRestore)
+	}
+
+	cleared, _ := updateModel(t, model, clearRefreshFlashMsg{id: 5})
+	if cleared.pendingRestore != nil || cleared.refreshFlash != "" {
+		t.Fatalf("matching clear should remove offer, got flash %q restore %+v", cleared.refreshFlash, cleared.pendingRestore)
+	}
+
+	model.pendingRestore = restore
+	model.refreshFlash = "deleted feature (0123456) · u to restore"
+	refreshed, _ := model.startRefresh(false, false)
+	if refreshed.pendingRestore != nil || refreshed.refreshFlash != "" {
+		t.Fatalf("startRefresh should clear offer, got flash %q restore %+v", refreshed.refreshFlash, refreshed.pendingRestore)
+	}
+
+	model.pendingRestore = restore
+	model.refreshFlash = "deleted feature (0123456) · u to restore"
+	deleting, _ := model.startDelete("deleted worktree", nil, func(context.Context) error { return nil })
+	if deleting.pendingRestore != nil || deleting.refreshFlash != "" {
+		t.Fatalf("startDelete should clear offer, got flash %q restore %+v", deleting.refreshFlash, deleting.pendingRestore)
+	}
+}
+
+func TestRestoreOfferRendersAsRefreshSuccessFeedback(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(previousProfile)
+	})
+
+	model, _ := Model{}.setRestoreOffer(pendingBranchRestore{branch: "feature", sha: "0123456789abcdef0123456789abcdef01234567", short: "0123456"})
+
+	output := model.worktreesFeedback()
+	want := refreshSuccessStyle.Render("deleted feature (0123456) · ") +
+		refreshSuccessStyle.Bold(true).Render("u") +
+		refreshSuccessStyle.Render(" to restore")
+	if output != want {
+		t.Fatalf("worktreesFeedback() = %q, want %q", output, want)
+	}
+	if !strings.Contains(output, "\x1b[38;5;42m") {
+		t.Fatalf("restore offer should use green SGR, got %q", output)
+	}
+	if !strings.Contains(output, refreshSuccessStyle.Bold(true).Render("u")) {
+		t.Fatalf("restore offer should bold the restore key, got %q", output)
+	}
+}
+
 func TestDeleteBranchProgressRendersInBottomBorder(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main", IsMain: true},
@@ -3481,6 +3699,24 @@ func updateModel(t *testing.T, model Model, message tea.Msg) (Model, tea.Cmd) {
 	return next, cmd
 }
 
+func firstDeleteMessage(t *testing.T, cmd tea.Cmd) deleteMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("delete command is nil")
+	}
+	batchMessage := cmd()
+	batch, ok := batchMessage.(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("delete command returned %T, want BatchMsg with delete command", batchMessage)
+	}
+	firstMessage := batch[0]()
+	message, ok := firstMessage.(deleteMsg)
+	if !ok {
+		t.Fatalf("first delete batch message = %T, want deleteMsg", firstMessage)
+	}
+	return message
+}
+
 func testModelWithRows(rows []gitdata.Worktree) Model {
 	for index := range rows {
 		rows[index].LocalMetadataLoaded = true
@@ -3492,6 +3728,27 @@ func testModelWithRows(rows []gitdata.Worktree) Model {
 		},
 		Rows: rows,
 	}, appconfig.Config{}, nil)
+}
+
+func stableLoadResults(worktreeList string) map[string]recordingResult {
+	return map[string]recordingResult{
+		"/repo/main|git rev-parse --show-toplevel":                         {output: "/repo/main\n"},
+		"/repo/main|git rev-parse --git-common-dir":                        {output: ".git\n"},
+		"/repo/main|git rev-parse --path-format=absolute --git-common-dir": {output: "/repo/main/.git\n"},
+		"/repo/main|git worktree list --porcelain":                         {output: worktreeList},
+		"/repo/main|git symbolic-ref --short refs/remotes/origin/HEAD":     {err: errors.New("no origin")},
+		"/repo/main|git show-ref --verify --quiet refs/heads/main":         {},
+		"/repo/main|git remote":                                            {},
+	}
+}
+
+func hasCommand(commands []string, want string) bool {
+	for _, command := range commands {
+		if command == want {
+			return true
+		}
+	}
+	return false
 }
 
 func visibleBranches(model Model) []string {

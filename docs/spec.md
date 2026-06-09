@@ -178,6 +178,7 @@ Below the table:
 | `p` | Open selected row's PR in browser (`gh pr view --web`); no PR → open repo page for the branch |
 | `y` | Copy selected worktree's absolute path, or selected branch-only row's branch name, to clipboard; brief `copied` flash in status bar |
 | `r` | `git fetch --prune` + stable refresh of all rows |
+| `u` | Restore the just-deleted branch (§6) |
 | `h` | Jump to the root repository worktree |
 | `a` | Jump to the active worktree |
 | `s` | Fuzzy branch search |
@@ -287,7 +288,9 @@ The delete flow states exactly what will happen:
   - Branch unmerged → unchecked by default; checking it means force delete with `git branch -D`.
   - Upstream gone (PR merged) → hint `remote branch already deleted — likely safe`.
 - **Branch-only row:** opens a branch-only confirmation with metadata (`Branch`, `HEAD`, `PR`) and the exact branch command. Merged branches use `git branch -d`; unmerged branches are explicit force deletes with `git branch -D`.
-- `Enter` executes, `Esc` cancels. Result (or git error) flashes in the status bar; table reloads.
+- `Enter` executes, `Esc` cancels. Success flashes in the Worktrees status; git errors stay in the dialog or status bar. The table reloads after successful writes.
+
+After a branch ref is deleted, either from a branch-only row or a worktree plus branch delete, a green Worktrees status offer appears for about 10 seconds: `deleted <name> (<short-sha>) · u to restore`, with `u` styled as a key. Pressing `u` recreates the ref with `git branch <name> <sha>`. This restores only the branch ref, not worktree files or discarded uncommitted changes. The offer is superseded by the next delete or refresh.
 
 **Prunable rows** (directory missing) open a prune-only confirmation. The dialog offers `git worktree prune`-equivalent cleanup and does not show the branch deletion checkbox.
 

@@ -257,6 +257,29 @@ func TestLoadAddsBranchRowsForLocalBranchesWithoutWorktrees(t *testing.T) {
 	}
 }
 
+func TestCreateBranchAtUsesGitBranchWithCommit(t *testing.T) {
+	runner := fakeRunner{
+		"/repo/main|git branch feature abcdef1234567890": {},
+	}
+
+	err := CreateBranchAt(context.Background(), "/repo/main", "feature", "abcdef1234567890", runner)
+
+	if err != nil {
+		t.Fatalf("CreateBranchAt() error = %v", err)
+	}
+}
+
+func TestCreateBranchAtSkipsEmptyBranchOrCommit(t *testing.T) {
+	runner := fakeRunner{}
+
+	if err := CreateBranchAt(context.Background(), "/repo/main", "", "abcdef1234567890", runner); err != nil {
+		t.Fatalf("CreateBranchAt() empty branch error = %v", err)
+	}
+	if err := CreateBranchAt(context.Background(), "/repo/main", "feature", "", runner); err != nil {
+		t.Fatalf("CreateBranchAt() empty commit error = %v", err)
+	}
+}
+
 func TestFullDiskUsageCanBeCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

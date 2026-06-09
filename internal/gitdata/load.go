@@ -478,6 +478,14 @@ func DeleteBranch(ctx context.Context, repoRoot, branch string, force bool, runn
 	return err
 }
 
+func CreateBranchAt(ctx context.Context, repoRoot, branch, commit string, runner Runner) error {
+	if branch == "" || commit == "" {
+		return nil
+	}
+	_, err := runner.Run(ctx, repoRoot, "git", "branch", branch, commit)
+	return err
+}
+
 func FetchPrune(ctx context.Context, repoRoot string, runner Runner) error {
 	_, err := runner.Run(ctx, repoRoot, "git", "fetch", "--prune")
 	return err

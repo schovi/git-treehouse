@@ -64,6 +64,7 @@ type Model struct {
 	refreshSpinnerFrame    int
 	refreshFlash           string
 	refreshFlashID         int
+	pendingRestore         *pendingBranchRestore
 	enrichmentID           int
 	enrichmentContext      context.Context
 	enrichmentCancel       context.CancelFunc
@@ -104,6 +105,7 @@ const (
 	clockTickInterval    = time.Second
 	refreshTickInterval  = 80 * time.Millisecond
 	refreshFlashTimeout  = 3 * time.Second
+	restoreOfferTimeout  = 10 * time.Second
 	prRefreshTTL         = 5 * time.Minute
 	scrollbarGutterWidth = 2
 	appTitle             = "Git treehouse"
@@ -139,6 +141,12 @@ type deleteDialog struct {
 	runBeforeDelete  bool
 	beforeDeleteHook string
 	error            string
+}
+
+type pendingBranchRestore struct {
+	branch string
+	sha    string
+	short  string
 }
 
 type deleteStage int
@@ -216,6 +224,7 @@ type deleteMsg struct {
 	hooksApproved bool
 	err           error
 	text          string
+	restore       *pendingBranchRestore
 	id            int
 	completedAt   time.Time
 }
@@ -620,12 +629,17 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.lastRefreshAt = message.completedAt
 		}
 		model.restoreSelection(anchor)
-		text := message.text
-		if text == "" {
-			text = "deleted worktree"
-		}
-		model, flashCmd := model.setRefreshFlash("✓ " + text)
 		model, enrichmentCmd := model.startEnrichment(true)
+		var flashCmd tea.Cmd
+		if message.restore != nil {
+			model, flashCmd = model.setRestoreOffer(*message.restore)
+		} else {
+			text := message.text
+			if text == "" {
+				text = "deleted worktree"
+			}
+			model, flashCmd = model.setRefreshFlash("✓ " + text)
+		}
 		return model, tea.Batch(enrichmentCmd, flashCmd)
 	case actionMsg:
 		if message.err != nil {
@@ -667,6 +681,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case clearRefreshFlashMsg:
 		if message.id == model.refreshFlashID {
 			model.refreshFlash = ""
+			model.pendingRestore = nil
 		}
 		return model, nil
 	case autoRefreshMsg:
@@ -802,6 +817,11 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 		return model, copyTextCmd(text, flash)
 	case "r":
 		return model.startRefresh(true, false)
+	case "u":
+		if model.pendingRestore == nil || model.deleteInFlight {
+			return model, nil
+		}
+		return model.startRestore()
 	case "s":
 		model.searching = true
 		model.search.Focus()
@@ -831,6 +851,7 @@ func (model Model) startRefresh(fetch, automatic bool) (Model, tea.Cmd) {
 	model.refreshSpinnerFrame = 0
 	model.refreshFlash = ""
 	model.refreshFlashID++
+	model.pendingRestore = nil
 	commands := []tea.Cmd{reloadCmd(model.reloadCwd(), model.config, model.runner, model.state.Repo, fetch, automatic, model.refreshID)}
 	if model.refreshProgressVisible {
 		commands = append(commands, refreshSpinnerTickCmd(model.refreshID))
@@ -1476,9 +1497,13 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		if selected.IsBranch() {
 			branch := selected.Branch
+			var restore *pendingBranchRestore
+			if branch.Head != "" {
+				restore = &pendingBranchRestore{branch: branch.Name, sha: branch.Head, short: branch.CommitShort}
+			}
 			repo := model.state.Repo
 			runner := model.runner
-			return model.startDelete("deleted branch", func(ctx context.Context) error {
+			return model.startDelete("deleted branch", restore, func(ctx context.Context) error {
 				return deleteBranchRow(ctx, repo, branch, runner)
 			})
 		}
@@ -1510,14 +1535,19 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 		repo := model.state.Repo
 		runner := model.runner
 		dialogSnapshot := *dialog
-		return model.startDelete("deleted worktree", func(ctx context.Context) error {
+		var restore *pendingBranchRestore
+		if dialogSnapshot.deleteWorktree && dialogSnapshot.deleteBranch &&
+			row.Branch != "" && !row.Detached && row.Head != "" {
+			restore = &pendingBranchRestore{branch: row.Branch, sha: row.Head, short: row.CommitShort}
+		}
+		return model.startDelete("deleted worktree", restore, func(ctx context.Context) error {
 			return deleteRow(ctx, repo, row, dialogSnapshot, runner)
 		})
 	}
 	return model, nil
 }
 
-func (model Model) startDelete(text string, action func(context.Context) error) (Model, tea.Cmd) {
+func (model Model) startDelete(text string, restore *pendingBranchRestore, action func(context.Context) error) (Model, tea.Cmd) {
 	model = model.cancelEnrichment()
 	model.enrichmentID++
 	model.deleteID++
@@ -1529,14 +1559,15 @@ func (model Model) startDelete(text string, action func(context.Context) error) 
 	model.refreshProgressVisible = false
 	model.refreshFlash = ""
 	model.refreshFlashID++
+	model.pendingRestore = nil
 	if model.deleteDialog != nil {
 		model.deleteDialog.error = ""
 	}
-	command := deleteAndLoadCmd(model.reloadCwd(), model.config, model.runner, model.deleteID, text, action)
+	command := deleteAndLoadCmd(model.reloadCwd(), model.config, model.runner, model.deleteID, text, restore, action)
 	return model, tea.Batch(command, deleteSpinnerTickCmd(model.deleteID))
 }
 
-func deleteAndLoadCmd(cwd string, config config.Config, runner gitdata.Runner, id int, text string, action func(context.Context) error) tea.Cmd {
+func deleteAndLoadCmd(cwd string, config config.Config, runner gitdata.Runner, id int, text string, restore *pendingBranchRestore, action func(context.Context) error) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		if err := action(ctx); err != nil {
@@ -1550,8 +1581,17 @@ func deleteAndLoadCmd(cwd string, config config.Config, runner gitdata.Runner, i
 		if err != nil {
 			return deleteMsg{id: id, err: fmt.Errorf("%s, but reload failed: %w", text, err)}
 		}
-		return deleteMsg{id: id, state: state, repoConfig: repoConfig, hooksApproved: hooksApproved, text: text, completedAt: time.Now()}
+		return deleteMsg{id: id, state: state, repoConfig: repoConfig, hooksApproved: hooksApproved, text: text, restore: restore, completedAt: time.Now()}
 	}
+}
+
+func (model Model) startRestore() (Model, tea.Cmd) {
+	restore := *model.pendingRestore
+	repo := model.state.Repo
+	runner := model.runner
+	return model.startDelete("restored branch "+restore.branch, nil, func(ctx context.Context) error {
+		return gitdata.CreateBranchAt(ctx, repo.Root, restore.branch, restore.sha, runner)
+	})
 }
 
 func deleteBranchRow(ctx context.Context, repo gitdata.Repository, branch gitdata.Branch, runner gitdata.Runner) error {
@@ -2554,6 +2594,9 @@ func (model Model) worktreesFeedback() string {
 		return refreshActivityStyle.Render(frame + " refreshing")
 	}
 	if model.refreshFlash != "" {
+		if model.pendingRestore != nil {
+			return restoreOfferFeedback(*model.pendingRestore)
+		}
 		return refreshSuccessStyle.Render(model.refreshFlash)
 	}
 	return ""
@@ -2786,12 +2829,38 @@ func (model Model) setFlash(text string) (Model, tea.Cmd) {
 }
 
 func (model Model) setRefreshFlash(text string) (Model, tea.Cmd) {
+	return model.setRefreshFlashFor(text, refreshFlashTimeout)
+}
+
+func (model Model) setRefreshFlashFor(text string, timeout time.Duration) (Model, tea.Cmd) {
+	model.pendingRestore = nil
 	model.refreshFlashID++
 	model.refreshFlash = text
 	id := model.refreshFlashID
-	return model, tea.Tick(refreshFlashTimeout, func(time.Time) tea.Msg {
+	return model, tea.Tick(timeout, func(time.Time) tea.Msg {
 		return clearRefreshFlashMsg{id: id}
 	})
+}
+
+func (model Model) setRestoreOffer(restore pendingBranchRestore) (Model, tea.Cmd) {
+	text := restoreOfferText(restore)
+	model, cmd := model.setRefreshFlashFor(text, restoreOfferTimeout)
+	model.pendingRestore = &restore
+	return model, cmd
+}
+
+func restoreOfferText(restore pendingBranchRestore) string {
+	return restoreOfferPrefix(restore) + "u to restore"
+}
+
+func restoreOfferFeedback(restore pendingBranchRestore) string {
+	return refreshSuccessStyle.Render(restoreOfferPrefix(restore)) +
+		refreshSuccessStyle.Bold(true).Render("u") +
+		refreshSuccessStyle.Render(" to restore")
+}
+
+func restoreOfferPrefix(restore pendingBranchRestore) string {
+	return "deleted " + restore.branch + " (" + restore.short + ") · "
 }
 
 func (model Model) selectionAnchor() selectionAnchor {
@@ -3024,6 +3093,7 @@ func helpKeySections() []helpSection {
 				{lead: "Tab", description: "filter", kind: helpEntryKey},
 				{lead: "s", description: "search", kind: helpEntryKey},
 				{lead: "b", description: "branches", kind: helpEntryKey},
+				{lead: "u", description: "restore deleted branch", kind: helpEntryKey},
 			},
 		},
 		{
