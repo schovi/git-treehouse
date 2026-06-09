@@ -4,6 +4,41 @@ Release notes for Git Treehouse.
 
 Dates use the GitHub release publication date for published releases. Entries without a GitHub release use the annotated tag date.
 
+## v0.7.0 - 2026-06-09
+
+### New Features
+
+#### Local Branches in the List
+
+The table can now show local branches that are not checked out by any worktree. Press `b` to toggle branch-only rows; the preference persists to config as `show_branches` (default `false`). The `Tab` filter cycle gains a `branches` state that surfaces branch-only rows even when the toggle is off.
+
+```toml
+show_branches = false   # default: hide branch-only rows until `b` is pressed
+```
+
+#### Create a Worktree from an Existing Branch
+
+`Enter` on a branch-only row opens a New worktree confirmation that uses your `path_template`, runs `git worktree add <path> <branch>`, and `cd`s into the new worktree on success.
+
+#### Checkout a Branch in the Root Worktree
+
+`c` on a branch-only row checks the branch out in the root worktree, then `cd`s into root. A clean root runs `git switch -- <branch>` directly. A dirty root opens a confirmation that blocks checkout until you enable stashing with `s`, which runs `git stash push -u` before switching. No force checkout or discard happens.
+
+#### Branch-Only Delete
+
+`d` on a branch-only row deletes just the local branch ref and never touches worktree files. Merged branches use safe `git branch -d`; unmerged branches require an explicit force delete with `git branch -D`.
+
+### Improvements
+
+- Reworked row glyphs into a single name column with row-type icons (`⌂` root, `⊡` worktree, `⎇` local branch) plus lifecycle suffixes (`!` locked, `×` prunable). The standalone marker column is gone.
+- The active worktree row is now bold, and row icons use softer accent colors.
+- `y` on a branch-only row copies the branch name; worktree rows still copy the absolute path.
+- The detail panel and footer adapt to branch-only rows with branch-specific metadata and actions.
+
+### Bug Fixes
+
+- Fixed the delete flow feedback: deletion now shows in-progress spinner feedback, keeps the dialog open and shows the git error inline on failure, and ignores stale delete results.
+
 ## v0.6.0 - 2026-06-08
 
 ### New Features
