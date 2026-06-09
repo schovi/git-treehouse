@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Git Treehouse: a Bubble Tea TUI for managing Git worktrees. Module is `github.com/schovi/git-treehouse`, binary is `git-treehouse` (shell wrapper function: `gth`). The directory name `git-worktree-tui` is the old project name; ignore the stale `gwt` binary in the repo root.
 
-`spec.md` is the authoritative behavior spec. `docs/ideas.md` is an aspirational backlog, not commitments.
+`docs/spec.md` is the authoritative behavior spec. `docs/ideas.md` is an aspirational backlog, not commitments.
 
 ## Commands
 
@@ -36,7 +36,7 @@ When finishing committed work or creating a version tag, merge the final commit 
 
 See `docs/harness.md` for the failure modes behind these rules.
 
-- Treat `spec.md` visual rules as test contracts. Width and string-presence checks are not enough for styled terminal output.
+- Treat `docs/spec.md` visual rules as test contracts. Width and string-presence checks are not enough for styled terminal output.
 - When changing Lip Gloss styling, selected rows, borders, or overlays, add regression tests that inspect ANSI/SGR state or border geometry. Cover marker and no-marker rows, plus narrow and wide widths when layout changes.
 - Force the Lip Gloss color profile inside tests that assert ANSI output, then restore the previous profile.
 - Similar UI states must share one renderer. Do not hand-assemble sibling blocks, such as Worktree and Branch sections, through separate append paths.
@@ -66,7 +66,7 @@ internal/listview             Pure table renderer, shared by the TUI and `list` 
 internal/pathutil             Branch sanitizing + worktree path templating
 internal/config               TOML at ~/.config/git-treehouse/config.toml, live-reloaded by mtime
 internal/onboarding           Separate Bubble Tea program for first-run shell setup
-internal/shellinit            Generates the gth wrapper for zsh/bash/fish/sh/ksh/nushell/powershell
+internal/shellinit            Generates the gth wrapper for zsh/bash/fish/sh/dash/ksh/nushell/powershell
 ```
 
 ### Key patterns

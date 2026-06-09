@@ -28,7 +28,7 @@ Failure: the selected-row highlight visually broke because nested ANSI resets
 from styled cells cleared an outer row background. Existing tests still passed
 because they only checked row width and text presence.
 
-Guardrail: visual contracts in `spec.md` need visual tests. For styled terminal
+Guardrail: visual contracts in `docs/spec.md` need visual tests. For styled terminal
 output, assert the actual ANSI/SGR state or exact border geometry. If a test
 expects color output, set the Lip Gloss color profile in the test and restore
 the previous profile afterward.
@@ -68,6 +68,6 @@ in the active session. If a correction repeats or reveals a blind spot, harden
 one of these before reporting done:
 
 - A focused regression test.
-- `spec.md` when behavior changed or was underspecified.
+- `docs/spec.md` when behavior changed or was underspecified.
 - `CLAUDE.md` when the agent workflow failed.
 - This file when the lesson explains why the harness rule exists.

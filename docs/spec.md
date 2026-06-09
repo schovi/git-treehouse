@@ -7,6 +7,20 @@ A fast terminal UI for managing git worktrees and local branches: browse, switch
 - **Stack:** Go + Bubble Tea (with Lip Gloss for styling, Bubbles for inputs/spinners)
 - **Scope:** single repo per invocation (the repo containing the cwd), single user, local tool
 
+## Contents
+
+1. [Invocation](#1-invocation)
+2. [Shell integration (cd mechanism)](#2-shell-integration-cd-mechanism)
+3. [Main view](#3-main-view)
+4. [Actions & keybindings](#4-actions--keybindings)
+5. [Create flow](#5-create-flow)
+6. [Delete flow](#6-delete-flow)
+7. [`git-treehouse list` (non-interactive)](#7-git-treehouse-list-non-interactive)
+8. [`git-treehouse doctor`](#8-git-treehouse-doctor)
+9. [Configuration](#9-configuration)
+10. [Edge cases & errors](#10-edge-cases--errors)
+11. [Out of scope (v1)](#11-out-of-scope-v1)
+
 ## 1. Invocation
 
 `git-treehouse` can be started from the main repo or any of its worktrees. It resolves the repo via `git rev-parse`; the full worktree set comes from `git worktree list --porcelain`. `--repo <path>` can explicitly select a repo or worktree path instead of the current directory.
@@ -33,6 +47,8 @@ A child process cannot change its parent shell's cwd, so Git Treehouse uses the 
 - `git-treehouse` remains the native CLI for non-navigating commands and direct invocation. `gth` is the directory-changing command.
 - Quitting without selecting writes nothing; the shell stays where it was.
 - **Graceful degradation:** without `--cd-file`, the selected path is printed to stdout on exit (TUI renders on stderr/tty), so `cd (git-treehouse)` works bare.
+
+**Supported shells** for `init`: `zsh`, `bash`, `fish`, `sh`, `dash`, `ksh`, `nushell`, `powershell`. Common aliases are normalized (`mksh` → `ksh`, `nu` → `nushell`, `pwsh`/`pwsh.exe`/`powershell.exe` → `powershell`). POSIX shells (zsh/bash/sh/dash/ksh) share one generated script. `init` with no shell argument auto-detects from the parent process, `$SHELL`, or `$PSModulePath`. The generated wrapper sets `GTH_SHELL_INTEGRATION=1`, whose presence suppresses the first-run onboarding screen.
 
 ## 3. Main view
 
@@ -144,6 +160,10 @@ Below the table:
 - **Branches:** `b` toggles branch-only rows in the list and persists the preference to config.
 - **Filter:** `Tab` cycles filters across all, modified, branches, prunable, locked, and detached rows. The branches filter shows branch-only rows even when the general branch-row toggle is off. Search and filters compose. `Esc` clears the current search while searching; otherwise it clears the active filter. Bare `Esc` does not quit.
 
+### 3.10 Command palette
+
+`Ctrl+P` opens a fuzzy command palette over named actions, an alternative to memorizing keys. It includes the row actions (go, create, checkout, delete, open editor, open PR, copy), the view toggles, direct jumps to each filter (`filter-all`, `filter-modified`, `filter-branches`, `filter-prunable`, `filter-locked`, `filter-detached`), `toggle-help`, and `open-config` (`Ctrl+O`, opens the config file in the editor). Typing filters the list; `Enter` runs the highlighted command; `Esc` closes the palette. Each entry shows its direct keybinding when one exists.
+
 ## 4. Actions & keybindings
 
 | Key | Action |
@@ -162,7 +182,8 @@ Below the table:
 | `s` | Fuzzy branch search |
 | `b` | Toggle branch-only rows and persist the setting |
 | `Tab` | Cycle filter: all → modified → branches → prunable → locked → detached |
-| `Ctrl+P` | Open command palette |
+| `Ctrl+P` | Open command palette (§3.10) |
+| `Ctrl+O` | Open the config file in the editor (also a palette command) |
 | `Esc` | Contextual cancel or clear: close topmost dialog, clear current search, or clear active filter. Does not quit. |
 | `q`, `Ctrl+C` | Quit immediately from list view (no cd) |
 | `?` | Toggle a help overlay with the full key list |
@@ -191,7 +212,7 @@ No multi-select / bulk operations in v1; every action applies to the focused row
   3. `origin/<main>` (last fetched; the everyday "fork off main" path)
   - Options that don't exist (no upstream, detached row) are omitted.
 - **On Enter:**
-  1. Compute target path from the path template (§8): default `<repo-parent>/<sanitized-branch>` (slashes → dashes).
+  1. Compute target path from the path template (§9): default `<repo-parent>/.worktrees/<repo-name>/<sanitized-branch>` (slashes → dashes).
   2. Path collision → inline error, dialog stays open.
   3. Run `git worktree add -b <name> <path> <base>`.
   4. Success → **cd into the new worktree immediately** (write `--cd-file`, exit app).
@@ -256,7 +277,7 @@ The delete flow states exactly what will happen:
 - **Worktree toggle:** `t` toggles worktree removal.
   - Clean worktree → checked by default and uses `git worktree remove`.
   - Dirty worktree → unchecked by default; checking it means uncommitted changes will be discarded with `git worktree remove --force`.
-- **Branch toggle:** `b` toggles local branch deletion. Branch deletion is disabled while worktree removal is unchecked, because Git will not delete a branch that is checked out in a worktree.
+- **Branch toggle:** `b` (or `Space`) toggles local branch deletion. Branch deletion is disabled while worktree removal is unchecked, because Git will not delete a branch that is checked out in a worktree.
   - Branch merged into main → checked by default and uses safe `git branch -d`.
   - Branch unmerged → unchecked by default; checking it means force delete with `git branch -D`.
   - Upstream gone (PR merged) → hint `remote branch already deleted — likely safe`.
@@ -269,8 +290,9 @@ The delete flow states exactly what will happen:
 
 - Prints the same columns as the TUI, aligned, one row per worktree.
 - TTY: colored, with hyperlinks. Piped: plain text, no ANSI.
-- Text output only loads async data for columns visible at the current width. PR lookup is skipped below the PR threshold, and table size is skipped below the size threshold. Otherwise async data is included only if it resolves within one short shared budget; unresolved cells print `-`. `--no-github` skips `gh` entirely.
-- `--json` prints structured JSON with repository metadata plus worktree fields for lifecycle state, status counts, sync state, commit info, PR info when loaded, `git_size`, `full_size`, and the compatibility `size` alias for full size.
+- Text output only loads async data for columns visible at the current width. The PR column is shown (and `gh` is queried) only at width ≥ 128 columns; the git-aware size column only at width ≥ 144. Width is taken from the terminal, then `$COLUMNS`, defaulting to 100. Otherwise async data is included only if it resolves within one short shared budget; unresolved cells print `-`. `--no-github` skips `gh` entirely.
+- TTY output is colored with OSC 8 hyperlinks; piped output is plain text with no ANSI.
+- `--json` ignores the width thresholds and forces full enrichment (PR + git size + full disk size). It prints structured JSON with repository metadata plus worktree fields for lifecycle state, status counts, `remote_sync` and `main_sync` state, `branch_merged_to_main`, commit info, `pull_request` info when loaded, `git_size`, `full_size`, and the compatibility `size` alias for full size.
 - `--repo <path>` loads the repository containing that repo or worktree path instead of the current directory.
 
 ## 8. `git-treehouse doctor`
@@ -290,11 +312,18 @@ Prints a stdout report for local setup diagnostics:
 Optional `~/.config/git-treehouse/config.toml`. Everything works with zero config.
 
 ```toml
-editor = "cursor"                          # default: $EDITOR, else `code`
-path_template = "{repo_parent}/{branch}"   # default; {repo}, {repo_parent}, {branch} (sanitized)
-main_branch = ""                           # default: auto-detect (origin/HEAD, fallback main/master)
-show_branches = false                      # default: hide branch-only rows until `b` is pressed
+editor = "cursor"          # default: $EDITOR, else `code`
+
+# default below; tokens: {repo}, {repo_name}, {repo_parent}, {branch} (sanitized)
+path_template = "{repo_parent}/.worktrees/{repo_name}/{branch}"
+
+main_branch = ""           # default: auto-detect (origin/HEAD, fallback main/master)
+show_branches = false      # default: hide branch-only rows until `b` is pressed
+
+skip_shell_integration_welcome = false  # set true by onboarding once the gth wrapper is installed; suppresses the first-run welcome
 ```
+
+Tokens: `{repo}` is the absolute root repository path, `{repo_name}` its basename, `{repo_parent}` its parent directory, `{branch}` the sanitized branch name (slashes, backslashes, and whitespace runs collapse to single dashes). The legacy default `{repo_parent}/{branch}` is silently upgraded to the current default on load.
 
 ## 10. Edge cases & errors
 
@@ -305,7 +334,7 @@ show_branches = false                      # default: hide branch-only rows unti
 - **Terminal too narrow (<60 cols):** drop columns per 3.1 priority; below ~40 cols show name + status only.
 - All git interaction shells out to `git` (no libgit2): behavior matches the user's git version and config, and porcelain formats keep parsing stable.
 
-## 10. Out of scope (v1)
+## 11. Out of scope (v1)
 
 - Multi-select / bulk delete
 - Checking out a PR into a new worktree
