@@ -55,6 +55,7 @@ type Model struct {
 	deleteID               int
 	deleteSpinnerFrame     int
 	paletteDialog          *paletteDialog
+	filterDialog           *filterDialog
 	lastRefreshAt          time.Time
 	refreshInFlight        bool
 	refreshID              int
@@ -151,6 +152,16 @@ const (
 type paletteDialog struct {
 	input    textinput.Model
 	selected int
+}
+
+type filterDialog struct {
+	selected int
+}
+
+type filterOption struct {
+	filter  worktreeFilter
+	count   int
+	enabled bool
 }
 
 type prLoadedMsg struct {
@@ -330,7 +341,7 @@ var paletteCommands = []paletteCommand{
 	{id: paletteJumpActive, title: "Jump to active worktree", shortcut: "a", keywords: "current"},
 	{id: paletteJumpTop, title: "Jump to top", shortcut: "g", keywords: "first"},
 	{id: paletteJumpBottom, title: "Jump to bottom", shortcut: "G", keywords: "last"},
-	{id: paletteCycleFilter, title: "Cycle filter", shortcut: "Tab", keywords: "all modified branches merged prunable locked detached"},
+	{id: paletteCycleFilter, title: "Open filter picker", shortcut: "Tab", keywords: "all modified branches merged prunable locked detached"},
 	{id: paletteFilterAll, title: "Filter: all", keywords: "show everything"},
 	{id: paletteFilterModified, title: "Filter: modified", keywords: "dirty changes"},
 	{id: paletteFilterMerged, title: "Filter: merged", keywords: "done clean safe remove cleanup"},
@@ -690,6 +701,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if model.paletteDialog != nil {
 			return model.updatePalette(message)
 		}
+		if model.filterDialog != nil {
+			return model.updateFilterDialog(message)
+		}
 		if model.searching {
 			return model.updateSearch(message)
 		}
@@ -738,7 +752,7 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 	case "a":
 		model.selectMatching(func(row gitdata.Row) bool { return row.IsWorktree() && row.Worktree.IsActive })
 	case "tab":
-		model.cycleFilter()
+		return model.openFilterDialog()
 	case "enter":
 		row, ok := model.selectedTableRow()
 		if !ok {
@@ -847,7 +861,8 @@ func (model Model) canApplyAutoRefresh() bool {
 		model.checkoutDialog == nil &&
 		model.branchWorktreeDialog == nil &&
 		model.deleteDialog == nil &&
-		model.paletteDialog == nil
+		model.paletteDialog == nil &&
+		model.filterDialog == nil
 }
 
 func (model Model) reloadCwd() string {
@@ -868,8 +883,7 @@ func (model Model) updateSearch(message tea.KeyMsg) (Model, tea.Cmd) {
 		model.searching = false
 		return model, nil
 	case "tab":
-		model.cycleFilter()
-		return model, nil
+		return model.openFilterDialog()
 	}
 	var cmd tea.Cmd
 	model.search, cmd = model.search.Update(message)
@@ -983,7 +997,7 @@ func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
 	case paletteJumpBottom:
 		model.selected = max(0, len(model.visibleIndexes())-1)
 	case paletteCycleFilter:
-		model.cycleFilter()
+		return model.openFilterDialog()
 	case paletteFilterAll:
 		model.setFilter(filterAll)
 	case paletteFilterModified:
@@ -1022,6 +1036,93 @@ func (model Model) matchingPaletteCommands() []paletteCommand {
 		}
 	}
 	return matches
+}
+
+func (model Model) openFilterDialog() (Model, tea.Cmd) {
+	model.help = false
+	model.paletteDialog = nil
+	options := model.filterOptions()
+	model.filterDialog = &filterDialog{selected: selectedFilterOptionIndex(options, model.filter)}
+	return model, nil
+}
+
+func (model Model) updateFilterDialog(message tea.KeyMsg) (Model, tea.Cmd) {
+	switch message.String() {
+	case "esc":
+		model.filterDialog = nil
+		return model, nil
+	case "up", "k", "shift+tab":
+		model.moveFilterDialogSelection(-1)
+		return model, nil
+	case "down", "j", "tab":
+		model.moveFilterDialogSelection(1)
+		return model, nil
+	case "enter":
+		options := model.filterOptions()
+		if len(options) == 0 {
+			model.filterDialog = nil
+			return model, nil
+		}
+		selected := clamp(model.filterDialog.selected, 0, len(options)-1)
+		option := options[selected]
+		if !option.enabled {
+			return model, nil
+		}
+		model.filterDialog = nil
+		model.setFilter(option.filter)
+		return model, nil
+	}
+	return model, nil
+}
+
+func (model *Model) moveFilterDialogSelection(direction int) {
+	if model.filterDialog == nil || direction == 0 {
+		return
+	}
+	options := model.filterOptions()
+	if len(options) == 0 {
+		model.filterDialog.selected = 0
+		return
+	}
+	selected := clamp(model.filterDialog.selected, 0, len(options)-1)
+	for offset := 1; offset <= len(options); offset++ {
+		next := (selected + direction*offset) % len(options)
+		if next < 0 {
+			next += len(options)
+		}
+		if options[next].enabled {
+			model.filterDialog.selected = next
+			return
+		}
+	}
+	model.filterDialog.selected = selectedFilterOptionIndex(options, model.filter)
+}
+
+func (model Model) filterOptions() []filterOption {
+	options := make([]filterOption, 0, len(orderedFilters))
+	for _, filter := range orderedFilters {
+		count := len(model.visibleIndexesForFilter(filter))
+		options = append(options, filterOption{
+			filter:  filter,
+			count:   count,
+			enabled: filter == filterAll || count > 0,
+		})
+	}
+	return options
+}
+
+func selectedFilterOptionIndex(options []filterOption, current worktreeFilter) int {
+	for index, option := range options {
+		if option.filter == current && option.enabled {
+			return index
+		}
+	}
+	for index, option := range options {
+		if option.enabled {
+			return index
+		}
+	}
+	return 0
 }
 
 func (model Model) openCreate() (Model, tea.Cmd) {
@@ -1574,6 +1675,9 @@ func (model Model) View() string {
 	}
 	if model.paletteDialog != nil {
 		output = centeredOverlay(output, model.renderPaletteAtWidth(paletteDialogWidth(outerWidth)), outerWidth, overlayHeight)
+	}
+	if model.filterDialog != nil {
+		output = centeredOverlay(output, model.renderFilterAtWidth(filterDialogWidth(outerWidth)), outerWidth, overlayHeight)
 	}
 	if model.deleteDialog != nil {
 		output = centeredOverlay(output, model.renderDeleteAtWidth(deleteDialogWidth(outerWidth)), outerWidth, overlayHeight)
@@ -2744,28 +2848,6 @@ func (model *Model) selectMatching(match func(gitdata.Row) bool) {
 	}
 }
 
-func (model *Model) cycleFilter() {
-	anchor := model.selectionAnchor()
-	currentIndex := 0
-	for index, filter := range orderedFilters {
-		if filter == model.filter {
-			currentIndex = index
-			break
-		}
-	}
-	for offset := 1; offset <= len(orderedFilters); offset++ {
-		filter := orderedFilters[(currentIndex+offset)%len(orderedFilters)]
-		if filter != filterAll && len(model.visibleIndexesForFilter(filter)) == 0 {
-			continue
-		}
-		model.filter = filter
-		if !model.restoreSelection(anchor) && len(model.visibleIndexes()) > 0 {
-			model.selected = 0
-		}
-		return
-	}
-}
-
 func (model *Model) setFilter(filter worktreeFilter) {
 	anchor := model.selectionAnchor()
 	model.filter = filter
@@ -3489,6 +3571,49 @@ func (model Model) renderPaletteAtWidth(width int) string {
 	return dialogBox("Commands", lines, paletteHintsAtWidth(width-6), width)
 }
 
+func (model Model) renderFilterAtWidth(width int) string {
+	dialog := model.filterDialog
+	contentWidth := max(1, width-4)
+	options := model.filterOptions()
+	lines := make([]string, 0, len(options))
+	if len(options) == 0 {
+		lines = append(lines, hintStyle.Render("No filters"))
+	} else {
+		selected := clamp(dialog.selected, 0, len(options)-1)
+		for index, option := range options {
+			prefix := "  "
+			if index == selected && option.enabled {
+				prefix = "› "
+			}
+			line := filterOptionLine(prefix, option, contentWidth)
+			if !option.enabled {
+				line = hintStyle.Render(line)
+			}
+			if index == selected && option.enabled {
+				line = paletteSelectedStyle.Render(padStyled(line, contentWidth))
+			}
+			lines = append(lines, line)
+		}
+	}
+	return dialogBox("Filters", lines, filterDialogHintsAtWidth(width-6), width)
+}
+
+func filterOptionLine(prefix string, option filterOption, width int) string {
+	label := option.filter.label()
+	count := filterCountLabel(option.count)
+	labelWidth := runewidth.StringWidth(prefix + label)
+	countWidth := runewidth.StringWidth(count)
+	gap := max(1, width-labelWidth-countWidth)
+	return truncatePlain(prefix+label+strings.Repeat(" ", gap)+count, width)
+}
+
+func filterCountLabel(count int) string {
+	if count == 1 {
+		return "1 row"
+	}
+	return fmt.Sprintf("%d rows", count)
+}
+
 func paletteHintsAtWidth(width int) string {
 	full := colorKeyHints("Enter run · ↑/↓ move · Esc cancel", false)
 	if lipgloss.Width(full) <= width {
@@ -3515,6 +3640,10 @@ func checkoutDialogWidth(viewWidth int) int {
 
 func paletteDialogWidth(viewWidth int) int {
 	return modalWidth(viewWidth, 72)
+}
+
+func filterDialogWidth(viewWidth int) int {
+	return modalWidth(viewWidth, 60)
 }
 
 func modalWidth(viewWidth, maximum int) int {
@@ -3577,6 +3706,22 @@ func createDialogHintsAtWidth(width int) string {
 		return medium
 	}
 	short := colorKeyHints("Enter · Tab · ctrl+o · Esc", false)
+	if lipgloss.Width(short) <= width {
+		return short
+	}
+	return ""
+}
+
+func filterDialogHintsAtWidth(width int) string {
+	full := colorKeyHints("Enter apply · ↑/↓ move · Tab next · Esc cancel", false)
+	if lipgloss.Width(full) <= width {
+		return full
+	}
+	medium := colorKeyHints("Enter apply · Tab next · Esc", false)
+	if lipgloss.Width(medium) <= width {
+		return medium
+	}
+	short := colorKeyHints("Enter · Tab · Esc", false)
 	if lipgloss.Width(short) <= width {
 		return short
 	}

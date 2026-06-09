@@ -630,7 +630,7 @@ func TestFilterFooterRendersEscClearFilter(t *testing.T) {
 	})
 	model.width = 120
 	model.height = 14
-	model = pressTab(model)
+	model.setFilter(filterModified)
 
 	output := model.View()
 
@@ -652,7 +652,7 @@ func TestStatusBarDropsWholeHintsWhenNarrow(t *testing.T) {
 	}
 }
 
-func TestTabCyclesFilterWhileSearching(t *testing.T) {
+func TestTabOpensFilterPickerWhileSearching(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main"},
 		{Path: "/repo/dirty", Branch: "dirty", Status: gitdata.StatusCounts{Modified: 1}},
@@ -664,12 +664,34 @@ func TestTabCyclesFilterWhileSearching(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("Tab while searching returned a command, want nil")
 	}
-	if model.filter != filterModified {
-		t.Fatalf("filter after Tab while searching = %q, want modified", model.filter.label())
+	if model.filterDialog == nil {
+		t.Fatal("Tab while searching should open filter picker")
+	}
+	if model.filter != filterAll {
+		t.Fatalf("filter after opening picker = %q, want all", model.filter.label())
 	}
 }
 
-func TestTabCyclesFiltersInOrder(t *testing.T) {
+func TestTabOpensFilterPickerFromList(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main"},
+		{Path: "/repo/dirty", Branch: "dirty", Status: gitdata.StatusCounts{Modified: 1}},
+	})
+
+	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyTab})
+
+	if cmd != nil {
+		t.Fatalf("Tab returned a command, want nil")
+	}
+	if model.filterDialog == nil {
+		t.Fatal("Tab should open filter picker")
+	}
+	if model.filter != filterAll {
+		t.Fatalf("filter after opening picker = %q, want all", model.filter.label())
+	}
+}
+
+func TestFilterPickerTabMovesThroughFiltersAndWraps(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main"},
 		{Path: "/repo/modified", Branch: "modified", Status: gitdata.StatusCounts{Modified: 1}},
@@ -679,12 +701,39 @@ func TestTabCyclesFiltersInOrder(t *testing.T) {
 		{Path: "/repo/detached", Head: "abc123456", Detached: true},
 	})
 	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
+	model, _ = model.openFilterDialog()
 
 	for _, want := range []worktreeFilter{filterModified, filterBranches, filterMerged, filterPrunable, filterLocked, filterDetached, filterAll} {
-		model = pressTab(model)
-		if model.filter != want {
-			t.Fatalf("filter after Tab = %q, want %q", model.filter.label(), want.label())
+		model, _ = model.updateFilterDialog(tea.KeyMsg{Type: tea.KeyTab})
+		options := model.filterOptions()
+		selected := options[model.filterDialog.selected].filter
+		if selected != want {
+			t.Fatalf("selected filter after Tab = %q, want %q", selected.label(), want.label())
 		}
+	}
+}
+
+func TestFilterPickerEnterAppliesSelectedFilter(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main"},
+		{Path: "/repo/modified", Branch: "modified", Status: gitdata.StatusCounts{Modified: 1}},
+	})
+	model, _ = model.openFilterDialog()
+	model, _ = model.updateFilterDialog(tea.KeyMsg{Type: tea.KeyTab})
+
+	model, cmd := model.updateFilterDialog(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd != nil {
+		t.Fatalf("filter picker enter returned a command, want nil")
+	}
+	if model.filterDialog != nil {
+		t.Fatal("filter picker should close after applying")
+	}
+	if model.filter != filterModified {
+		t.Fatalf("filter after picker enter = %q, want modified", model.filter.label())
+	}
+	if got := strings.Join(visibleBranches(model), ","); got != "modified" {
+		t.Fatalf("visible branches = %q, want modified", got)
 	}
 }
 
@@ -1176,25 +1225,49 @@ func TestBranchWorktreeDialogRunsApprovedPostCreate(t *testing.T) {
 	}
 }
 
-func TestTabSkipsEmptyFilters(t *testing.T) {
+func TestFilterPickerSkipsEmptyFilters(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main"},
 		{Path: "/repo/locked", Branch: "locked", Locked: true},
 	})
+	model, _ = model.openFilterDialog()
 
-	model = pressTab(model)
+	model, _ = model.updateFilterDialog(tea.KeyMsg{Type: tea.KeyTab})
+	options := model.filterOptions()
 
+	if selected := options[model.filterDialog.selected].filter; selected != filterLocked {
+		t.Fatalf("selected filter after Tab = %q, want locked", selected.label())
+	}
+	model, _ = model.updateFilterDialog(tea.KeyMsg{Type: tea.KeyEnter})
 	if model.filter != filterLocked {
-		t.Fatalf("filter after Tab = %q, want locked", model.filter.label())
+		t.Fatalf("filter after Enter = %q, want locked", model.filter.label())
 	}
 	if got := strings.Join(visibleBranches(model), ","); got != "locked locked" {
 		t.Fatalf("visible branches = %q, want locked locked", got)
 	}
 
-	model = pressTab(model)
+	model, _ = model.openFilterDialog()
+	model, _ = model.updateFilterDialog(tea.KeyMsg{Type: tea.KeyTab})
+	options = model.filterOptions()
 
-	if model.filter != filterAll {
-		t.Fatalf("filter after second Tab = %q, want all", model.filter.label())
+	if selected := options[model.filterDialog.selected].filter; selected != filterAll {
+		t.Fatalf("selected filter after wrapped Tab = %q, want all", selected.label())
+	}
+}
+
+func TestFilterPickerRendersCounts(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main"},
+		{Path: "/repo/dirty", Branch: "dirty", Status: gitdata.StatusCounts{Modified: 1}},
+	})
+	model, _ = model.openFilterDialog()
+
+	output := ansi.Strip(model.renderFilterAtWidth(60))
+
+	for _, want := range []string{"Filters", "all", "2 rows", "modified", "1 row", "branches", "0 rows", "Enter", "apply", "Tab", "next", "Esc", "cancel"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("filter picker missing %q:\n%s", want, output)
+		}
 	}
 }
 
@@ -1206,10 +1279,10 @@ func TestModifiedFilterIncludesAnyDirtyState(t *testing.T) {
 		{Path: "/repo/untracked", Branch: "untracked", Status: gitdata.StatusCounts{Untracked: 1}},
 	})
 
-	model = pressTab(model)
+	model.setFilter(filterModified)
 
 	if model.filter != filterModified {
-		t.Fatalf("filter after Tab = %q, want modified", model.filter.label())
+		t.Fatalf("filter = %q, want modified", model.filter.label())
 	}
 	if got := strings.Join(visibleBranches(model), ","); got != "staged,modified,untracked" {
 		t.Fatalf("visible branches = %q, want staged,modified,untracked", got)
@@ -1246,10 +1319,10 @@ func TestFilterCombinesWithBranchSearch(t *testing.T) {
 	})
 	model.search.SetValue("alpha")
 
-	model = pressTab(model)
+	model.setFilter(filterModified)
 
 	if model.filter != filterModified {
-		t.Fatalf("filter after Tab = %q, want modified", model.filter.label())
+		t.Fatalf("filter = %q, want modified", model.filter.label())
 	}
 	if got := strings.Join(visibleBranches(model), ","); got != "alpha-dirty" {
 		t.Fatalf("visible branches = %q, want alpha-dirty", got)
@@ -1310,7 +1383,7 @@ func TestEscClearsFilterWithoutQuitting(t *testing.T) {
 		{Path: "/repo/main", Branch: "main"},
 		{Path: "/repo/dirty", Branch: "dirty", Status: gitdata.StatusCounts{Modified: 1}},
 	})
-	model = pressTab(model)
+	model.setFilter(filterModified)
 
 	var cmd tea.Cmd
 	model, cmd = model.updateList(tea.KeyMsg{Type: tea.KeyEsc})
@@ -1325,6 +1398,35 @@ func TestEscClearsFilterWithoutQuitting(t *testing.T) {
 	_, cmd = model.updateList(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd != nil {
 		t.Fatalf("Esc after clearing filter returned a command, want nil")
+	}
+}
+
+func TestFilterPickerEscClosesBeforeFilterClear(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main"},
+		{Path: "/repo/dirty", Branch: "dirty", Status: gitdata.StatusCounts{Modified: 1}},
+	})
+	model.setFilter(filterModified)
+	model, _ = model.openFilterDialog()
+
+	model, cmd := model.updateFilterDialog(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if cmd != nil {
+		t.Fatalf("Esc in filter picker returned a command, want nil")
+	}
+	if model.filterDialog != nil {
+		t.Fatal("Esc should close filter picker")
+	}
+	if model.filter != filterModified {
+		t.Fatalf("filter after closing picker = %q, want modified", model.filter.label())
+	}
+
+	model, cmd = model.updateList(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Fatalf("Esc after picker close returned a command, want nil")
+	}
+	if model.filter != filterAll {
+		t.Fatalf("filter after second Esc = %q, want all", model.filter.label())
 	}
 }
 
@@ -3128,6 +3230,10 @@ func TestAutoRefreshSkipsBlockedStates(t *testing.T) {
 			name:  "command palette",
 			model: Model{refreshID: 7, paletteDialog: &paletteDialog{}},
 		},
+		{
+			name:  "filter picker",
+			model: Model{refreshID: 7, filterDialog: &filterDialog{}},
+		},
 	}
 
 	for _, test := range tests {
@@ -3386,11 +3492,6 @@ func testModelWithRows(rows []gitdata.Worktree) Model {
 		},
 		Rows: rows,
 	}, appconfig.Config{}, nil)
-}
-
-func pressTab(model Model) Model {
-	model, _ = model.updateList(tea.KeyMsg{Type: tea.KeyTab})
-	return model
 }
 
 func visibleBranches(model Model) []string {

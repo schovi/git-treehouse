@@ -225,7 +225,7 @@ Then `git-treehouse` reloads the table.
 | `g` / `G` | Jump to top / bottom |
 | `m` | Jump to main worktree |
 | `a` | Jump to active worktree |
-| `Tab` | Cycle filter: all, modified, prunable, locked, detached |
+| `Tab` | Open filter picker |
 | `Enter` | Go to selected worktree and exit |
 | `n` | Create a new worktree |
 | `d`, `Delete`, `Backspace` | Delete focused worktree |

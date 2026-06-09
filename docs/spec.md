@@ -159,7 +159,7 @@ Below the table:
 - **Order:** root repository pinned first, remaining rows by last-commit date, newest first.
 - **Search:** `s` opens a fuzzy search over branch names.
 - **Branches:** `b` toggles branch-only rows in the list and persists the preference to config.
-- **Filter:** `Tab` cycles filters across all, modified, branches, merged, prunable, locked, and detached rows. The branches filter shows branch-only rows even when the general branch-row toggle is off. The merged filter surfaces rows that are safe to clean up: worktrees with a clean working tree whose branch is merged to main or whose PR is merged/closed, plus merged branch-only rows. The root repository and detached worktrees never match. Search and filters compose. `Esc` clears the current search while searching; otherwise it clears the active filter. Bare `Esc` does not quit.
+- **Filter:** `Tab` opens a filter picker with all, modified, branches, merged, prunable, locked, and detached rows. Each filter shows its matching row count, and empty filters are disabled. In the picker, `↑`/`↓` moves selection, `Tab` jumps to the next enabled filter and wraps from the end to the first, `Enter` applies the selected filter, and `Esc` closes the picker. The branches filter shows branch-only rows even when the general branch-row toggle is off. The merged filter surfaces rows that are safe to clean up: worktrees with a clean working tree whose branch is merged to main or whose PR is merged/closed, plus merged branch-only rows. The root repository and detached worktrees never match. Search and filters compose. `Esc` clears the current search while searching; otherwise it clears the active filter. Bare `Esc` does not quit.
 
 ### 3.10 Command palette
 
@@ -182,7 +182,7 @@ Below the table:
 | `a` | Jump to the active worktree |
 | `s` | Fuzzy branch search |
 | `b` | Toggle branch-only rows and persist the setting |
-| `Tab` | Cycle filter: all → modified → branches → merged → prunable → locked → detached |
+| `Tab` | Open filter picker |
 | `Ctrl+P` | Open command palette (§3.10) |
 | `Ctrl+O` | Open the config file in the editor (also a palette command) |
 | `Esc` | Contextual cancel or clear: close topmost dialog, clear current search, or clear active filter. Does not quit. |
