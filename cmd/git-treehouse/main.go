@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -58,6 +60,8 @@ func run(args []string) error {
 			return runList(remaining[1:], globalOptions.repoPath)
 		case "doctor":
 			return runDoctor(remaining[1:], globalOptions.repoPath)
+		case "allow":
+			return runAllow(remaining[1:], globalOptions.repoPath)
 		default:
 			return fmt.Errorf("unknown command %q", remaining[0])
 		}
@@ -105,7 +109,7 @@ func runHelp(args []string) error {
 		return nil
 	}
 	if len(args) != 1 {
-		return fmt.Errorf("usage: %s help [list|init|doctor]", commandName)
+		return fmt.Errorf("usage: %s help [list|init|doctor|allow]", commandName)
 	}
 	switch args[0] {
 	case "list":
@@ -117,8 +121,11 @@ func runHelp(args []string) error {
 	case "doctor":
 		fmt.Print(doctorHelpText())
 		return nil
+	case "allow":
+		fmt.Print(allowHelpText())
+		return nil
 	default:
-		return fmt.Errorf("usage: %s help [list|init|doctor]", commandName)
+		return fmt.Errorf("usage: %s help [list|init|doctor|allow]", commandName)
 	}
 }
 
@@ -131,7 +138,8 @@ Usage:
   %[1]s list [--repo <path>] [--no-github] [--json]
   %[1]s init [%[2]s]
   %[1]s doctor [--repo <path>]
-  %[1]s help [list|init|doctor]
+  %[1]s allow [--repo <path>]
+  %[1]s help [list|init|doctor|allow]
 
 What it can do:
   Browse worktrees with branch, dirty state, sync state, commit age, PR/CI, and size signals.
@@ -142,6 +150,7 @@ Commands:
   list     Print worktrees without launching the TUI.
   init     Print shell integration that defines gth.
   doctor   Check Git, config, GitHub CLI, shell, editor, and clipboard setup.
+  allow    Approve executable hooks from the repo .worktree file.
   help     Print this help.
 
 Options:
@@ -591,6 +600,71 @@ Options:
 `, commandName)
 }
 
+func runAllow(args []string, repoPath string) error {
+	flags := flag.NewFlagSet(commandName+" allow", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	selectedRepoPath := flags.String("repo", repoPath, "load repository from path")
+	shortHelp := flags.Bool("h", false, "print help")
+	longHelp := flags.Bool("help", false, "print help")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *shortHelp || *longHelp {
+		fmt.Print(allowHelpText())
+		return nil
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("usage: %s allow [--repo <path>]", commandName)
+	}
+	loadedConfig, err := config.LoadDefault()
+	if err != nil {
+		return err
+	}
+	return allowRepoHooks(context.Background(), gitdata.ExecRunner{}, normalizeRepoPath(*selectedRepoPath), loadedConfig, os.Stdout)
+}
+
+func allowHelpText() string {
+	return fmt.Sprintf(`git-treehouse allow approves executable hooks from the repo .worktree file.
+
+Usage:
+  %[1]s allow [--repo <path>]
+
+Options:
+  --repo <path>  Load a repository or worktree path. Default: current directory.
+  -h, --help     Print this help.
+`, commandName)
+}
+
+func allowRepoHooks(ctx context.Context, runner gitdata.Runner, repoPath string, loadedConfig config.Config, output io.Writer) error {
+	repo, err := gitdata.ResolveRepository(ctx, repoPath, loadedConfig, runner)
+	if err != nil {
+		return err
+	}
+	repoConfig, err := config.LoadRepoConfig(repo.Root)
+	if err != nil {
+		return err
+	}
+	if !repoConfig.HasHooks() {
+		_, err := fmt.Fprintln(output, "no hooks defined in .worktree; nothing to approve")
+		return err
+	}
+	if repoConfig.PostCreate != "" {
+		if _, err := fmt.Fprintln(output, "post_create: "+repoConfig.PostCreate); err != nil {
+			return err
+		}
+	}
+	if repoConfig.BeforeDelete != "" {
+		if _, err := fmt.Fprintln(output, "before_delete: "+repoConfig.BeforeDelete); err != nil {
+			return err
+		}
+	}
+	if err := gitdata.WriteApprovedHash(ctx, repo.Root, config.HookHash(repoConfig), runner); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(output, "approved hooks for "+repo.Root)
+	return err
+}
+
 func doctorChecks(ctx context.Context, runner gitdata.Runner, repoPath string) []doctorCheck {
 	checks := []doctorCheck{
 		doctorGit(ctx, runner),
@@ -599,6 +673,12 @@ func doctorChecks(ctx context.Context, runner gitdata.Runner, repoPath string) [
 	checks = append(checks, configCheck)
 	repoCheck, repo := doctorRepository(ctx, repoPath, loadedConfig, runner)
 	checks = append(checks, repoCheck)
+	if repo.Root != "" {
+		checks = append(checks,
+			doctorWorktreeFile(repo.Root),
+			doctorWorktreeApproval(ctx, repo.Root, runner),
+		)
+	}
 	checks = append(checks,
 		doctorGitHub(ctx, repo.Root, runner),
 		doctorShellIntegration(),
@@ -645,6 +725,60 @@ func doctorRepository(ctx context.Context, repoPath string, loadedConfig config.
 		return doctorCheck{Name: "repository", Status: doctorWarning, Message: "not inside a git repository"}, gitdata.Repository{}
 	}
 	return doctorCheck{Name: "repository", Status: doctorOK, Message: repo.Root + " (main: " + repo.MainBranch + ")"}, repo
+}
+
+func doctorWorktreeFile(repoRoot string) doctorCheck {
+	path := filepath.Join(repoRoot, ".worktree")
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return doctorCheck{Name: ".worktree", Status: doctorOK, Message: "no .worktree file"}
+		}
+		return doctorCheck{Name: ".worktree", Status: doctorWarning, Message: err.Error()}
+	}
+	repoConfig, err := config.LoadRepoConfig(repoRoot)
+	if err != nil {
+		return doctorCheck{Name: ".worktree", Status: doctorError, Message: err.Error()}
+	}
+	keys := make([]string, 0, 4)
+	if repoConfig.PathTemplate != "" {
+		keys = append(keys, "path_template override")
+	}
+	if len(repoConfig.CopyUntracked) != 0 {
+		keys = append(keys, fmt.Sprintf("%d copy_untracked entries", len(repoConfig.CopyUntracked)))
+	}
+	if repoConfig.PostCreate != "" {
+		keys = append(keys, "post_create hook")
+	}
+	if repoConfig.BeforeDelete != "" {
+		keys = append(keys, "before_delete hook")
+	}
+	if len(keys) == 0 {
+		keys = append(keys, "no recognized keys")
+	}
+	return doctorCheck{Name: ".worktree", Status: doctorOK, Message: strings.Join(keys, ", ")}
+}
+
+func doctorWorktreeApproval(ctx context.Context, repoRoot string, runner gitdata.Runner) doctorCheck {
+	repoConfig, err := config.LoadRepoConfig(repoRoot)
+	if err != nil {
+		return doctorCheck{Name: "hook approval", Status: doctorError, Message: err.Error()}
+	}
+	if !repoConfig.HasHooks() {
+		return doctorCheck{Name: "hook approval", Status: doctorOK, Message: "no hooks"}
+	}
+	approvedHash, err := gitdata.ReadApprovedHash(ctx, repoRoot, runner)
+	if err != nil {
+		return doctorCheck{Name: "hook approval", Status: doctorWarning, Message: err.Error()}
+	}
+	currentHash := config.HookHash(repoConfig)
+	switch approvedHash {
+	case currentHash:
+		return doctorCheck{Name: "hook approval", Status: doctorOK, Message: "approved"}
+	case "":
+		return doctorCheck{Name: "hook approval", Status: doctorWarning, Message: "not approved, run git-treehouse allow"}
+	default:
+		return doctorCheck{Name: "hook approval", Status: doctorWarning, Message: "changed since approval, re-run git-treehouse allow"}
+	}
 }
 
 func doctorGitHub(ctx context.Context, repoRoot string, runner gitdata.Runner) doctorCheck {

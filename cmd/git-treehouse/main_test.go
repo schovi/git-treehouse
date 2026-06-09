@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -143,13 +147,15 @@ func TestHelpTextDescribesAppCommandsAndOptions(t *testing.T) {
 		"git-treehouse list [--repo <path>] [--no-github] [--json]",
 		"git-treehouse init [",
 		"git-treehouse doctor [--repo <path>]",
-		"git-treehouse help [list|init|doctor]",
+		"git-treehouse allow [--repo <path>]",
+		"git-treehouse help [list|init|doctor|allow]",
 		"Browse worktrees",
 		"Switch directories through gth shell integration",
 		"Print plain tables or JSON",
 		"list     Print worktrees",
 		"init     Print shell integration",
 		"doctor   Check Git",
+		"allow    Approve executable hooks",
 		"-h, --help",
 	} {
 		if !strings.Contains(output, want) {
@@ -195,6 +201,16 @@ func TestSubcommandHelpTextDescribesOptions(t *testing.T) {
 				"-h, --help",
 			},
 		},
+		{
+			name:   "allow",
+			output: allowHelpText(),
+			want: []string{
+				"git-treehouse allow approves executable hooks",
+				"git-treehouse allow [--repo <path>]",
+				"--repo <path>",
+				"-h, --help",
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -220,9 +236,11 @@ func TestRunHelpFlagsAndCommandsReturnNil(t *testing.T) {
 		{name: "help list", args: []string{"help", "list"}, want: "git-treehouse list prints worktrees"},
 		{name: "help init", args: []string{"help", "init"}, want: "git-treehouse init prints shell integration"},
 		{name: "help doctor", args: []string{"help", "doctor"}, want: "git-treehouse doctor checks Git"},
+		{name: "help allow", args: []string{"help", "allow"}, want: "git-treehouse allow approves executable hooks"},
 		{name: "list help", args: []string{"list", "-h"}, want: "git-treehouse list prints worktrees"},
 		{name: "init help", args: []string{"init", "-h"}, want: "git-treehouse init prints shell integration"},
 		{name: "doctor help", args: []string{"doctor", "-h"}, want: "git-treehouse doctor checks Git"},
+		{name: "allow help", args: []string{"allow", "-h"}, want: "git-treehouse allow approves executable hooks"},
 	}
 
 	for _, test := range tests {
@@ -265,6 +283,93 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 		t.Fatalf("stdout pipe read close error = %v", err)
 	}
 	return string(output), fnErr
+}
+
+type commandRunner struct {
+	commands []string
+	results  map[string]commandResult
+}
+
+type commandResult struct {
+	output string
+	err    error
+}
+
+func (runner *commandRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+	key := dir + "|" + name + " " + strings.Join(args, " ")
+	runner.commands = append(runner.commands, key)
+	if result, ok := runner.results[key]; ok {
+		return []byte(result.output), result.err
+	}
+	return nil, errors.New("unexpected command: " + key)
+}
+
+func (runner *commandRunner) RunWithEnv(ctx context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
+	return runner.Run(ctx, dir, name, args...)
+}
+
+func repositoryRunner(repoRoot string) *commandRunner {
+	return &commandRunner{results: map[string]commandResult{
+		repoRoot + "|git rev-parse --show-toplevel":                         {output: repoRoot + "\n"},
+		repoRoot + "|git rev-parse --git-common-dir":                        {output: ".git\n"},
+		repoRoot + "|git rev-parse --path-format=absolute --git-common-dir": {output: filepath.Join(repoRoot, ".git") + "\n"},
+		repoRoot + "|git worktree list --porcelain":                         {output: "worktree " + repoRoot + "\nHEAD abc123\nbranch refs/heads/main\n"},
+		repoRoot + "|git symbolic-ref --short refs/remotes/origin/HEAD":     {err: errors.New("no origin")},
+		repoRoot + "|git show-ref --verify --quiet refs/heads/main":         {},
+		repoRoot + "|git remote":                                            {},
+	}}
+}
+
+func TestAllowRepoHooksWritesHookHash(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repoRoot, ".worktree"), []byte(`
+post_create = "npm install"
+before_delete = "docker compose down"
+`), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runner := repositoryRunner(repoRoot)
+	repoConfig, err := config.LoadRepoConfig(repoRoot)
+	if err != nil {
+		t.Fatalf("LoadRepoConfig() error = %v", err)
+	}
+	writeCommand := repoRoot + "|git config --local treehouse.approvedHash " + config.HookHash(repoConfig)
+	runner.results[writeCommand] = commandResult{}
+	var output strings.Builder
+
+	err = allowRepoHooks(context.Background(), runner, repoRoot, config.Default(), &output)
+
+	if err != nil {
+		t.Fatalf("allowRepoHooks() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "post_create: npm install") ||
+		!strings.Contains(output.String(), "before_delete: docker compose down") ||
+		!strings.Contains(output.String(), "approved hooks for "+repoRoot) {
+		t.Fatalf("allow output missing hook approval details:\n%s", output.String())
+	}
+	if !slices.Contains(runner.commands, writeCommand) {
+		t.Fatalf("commands = %v, want %q", runner.commands, writeCommand)
+	}
+}
+
+func TestAllowRepoHooksNoHooks(t *testing.T) {
+	repoRoot := t.TempDir()
+	runner := repositoryRunner(repoRoot)
+	var output strings.Builder
+
+	err := allowRepoHooks(context.Background(), runner, repoRoot, config.Default(), &output)
+
+	if err != nil {
+		t.Fatalf("allowRepoHooks() error = %v", err)
+	}
+	if strings.TrimSpace(output.String()) != "no hooks defined in .worktree; nothing to approve" {
+		t.Fatalf("allow output = %q, want no-hooks message", output.String())
+	}
+	for _, command := range runner.commands {
+		if strings.Contains(command, "git config --local treehouse.approvedHash") {
+			t.Fatalf("allow without hooks should not write approval: %v", runner.commands)
+		}
+	}
 }
 
 func TestParseListOptionsInheritsGlobalRepo(t *testing.T) {
@@ -428,6 +533,71 @@ func TestFormatDoctorChecks(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("formatDoctorChecks() missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestDoctorWorktreeFileReportsConfiguredKeys(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repoRoot, ".worktree"), []byte(`
+path_template = "{repo_parent}/trees/{branch}"
+copy_untracked = [".env", ".env.local"]
+post_create = "npm install"
+before_delete = "docker compose down"
+`), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	check := doctorWorktreeFile(repoRoot)
+
+	if check.Status != doctorOK {
+		t.Fatalf("doctorWorktreeFile().Status = %q, want ok", check.Status)
+	}
+	for _, want := range []string{"path_template override", "2 copy_untracked entries", "post_create hook", "before_delete hook"} {
+		if !strings.Contains(check.Message, want) {
+			t.Fatalf("doctorWorktreeFile() missing %q: %+v", want, check)
+		}
+	}
+}
+
+func TestDoctorWorktreeApprovalStates(t *testing.T) {
+	tests := []struct {
+		name         string
+		approvedHash string
+		wantStatus   doctorStatus
+		wantMessage  string
+	}{
+		{name: "approved", approvedHash: "current", wantStatus: doctorOK, wantMessage: "approved"},
+		{name: "not approved", approvedHash: "", wantStatus: doctorWarning, wantMessage: "not approved, run git-treehouse allow"},
+		{name: "changed", approvedHash: "old", wantStatus: doctorWarning, wantMessage: "changed since approval, re-run git-treehouse allow"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			if err := os.WriteFile(filepath.Join(repoRoot, ".worktree"), []byte(`post_create = "npm install"`), 0600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			repoConfig, err := config.LoadRepoConfig(repoRoot)
+			if err != nil {
+				t.Fatalf("LoadRepoConfig() error = %v", err)
+			}
+			hash := test.approvedHash
+			if hash == "current" {
+				hash = config.HookHash(repoConfig)
+			}
+			runner := &commandRunner{results: map[string]commandResult{
+				repoRoot + "|git config --local --get treehouse.approvedHash": {output: hash + "\n"},
+			}}
+			if test.approvedHash == "" {
+				runner.results[repoRoot+"|git config --local --get treehouse.approvedHash"] = commandResult{err: gitdata.CommandError{Name: "git", Args: []string{"config", "--local", "--get", "treehouse.approvedHash"}, Err: errors.New("exit status 1")}}
+			}
+
+			check := doctorWorktreeApproval(context.Background(), repoRoot, runner)
+
+			if check.Status != test.wantStatus || check.Message != test.wantMessage {
+				t.Fatalf("doctorWorktreeApproval() = %+v, want %s %q", check, test.wantStatus, test.wantMessage)
+			}
+		})
 	}
 }
 

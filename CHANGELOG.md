@@ -4,6 +4,14 @@ Release notes for Git Treehouse.
 
 Dates use the GitHub release publication date for published releases. Entries without a GitHub release use the annotated tag date.
 
+## Next
+
+### New Features
+
+#### Repo-Scoped `.worktree` Configuration
+
+Added a committed repo-level `.worktree` TOML schema for path template overrides, named-file copy behavior, and approved lifecycle hooks. Declarative settings apply immediately, while `post_create` and `before_delete` hooks run only after `git-treehouse allow` records the current hook hash in repo-local Git config. `doctor` now reports `.worktree` keys and hook approval state.
+
 ## v0.8.0 - 2026-06-09
 
 ### New Features

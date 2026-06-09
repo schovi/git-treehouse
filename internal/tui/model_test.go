@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,10 +29,15 @@ func (runner testRunner) Run(_ context.Context, _, _ string, _ ...string) ([]byt
 	return nil, errors.New("unexpected command")
 }
 
+func (runner testRunner) RunWithEnv(_ context.Context, _ string, _ []string, _ string, _ ...string) ([]byte, error) {
+	return nil, errors.New("unexpected command")
+}
+
 type recordingRunner struct {
-	mutex    sync.Mutex
-	commands []string
-	results  map[string]recordingResult
+	mutex       sync.Mutex
+	commands    []string
+	envCommands []recordedEnvCommand
+	results     map[string]recordingResult
 }
 
 type recordingResult struct {
@@ -39,10 +45,26 @@ type recordingResult struct {
 	err    error
 }
 
+type recordedEnvCommand struct {
+	command string
+	env     []string
+}
+
 func (runner *recordingRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+	return runner.run(dir, nil, name, args...)
+}
+
+func (runner *recordingRunner) RunWithEnv(_ context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	return runner.run(dir, env, name, args...)
+}
+
+func (runner *recordingRunner) run(dir string, env []string, name string, args ...string) ([]byte, error) {
 	key := dir + "|" + name + " " + strings.Join(args, " ")
 	runner.mutex.Lock()
 	runner.commands = append(runner.commands, key)
+	if env != nil {
+		runner.envCommands = append(runner.envCommands, recordedEnvCommand{command: key, env: append([]string(nil), env...)})
+	}
 	result, ok := runner.results[key]
 	runner.mutex.Unlock()
 	if ok {
@@ -962,6 +984,159 @@ func TestBranchWorktreeDialogAddsExistingBranchWorktree(t *testing.T) {
 	}
 	if len(runner.commands) != 1 || runner.commands[0] != "/repo/main|git worktree add /repo/.worktrees/main/feature-branch feature/branch" {
 		t.Fatalf("commands = %v, want git worktree add existing branch", runner.commands)
+	}
+}
+
+func TestCreateWorktreeCopiesFilesAndRunsApprovedPostCreate(t *testing.T) {
+	repoRoot := filepath.Join(t.TempDir(), "main")
+	if err := os.MkdirAll(repoRoot, 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".env"), []byte("TOKEN=1\n"), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runner := &recordingRunner{}
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.runner = runner
+	model.state.Repo.Root = repoRoot
+	model.state.Repo.MainBranch = "main"
+	model.repoConfig = appconfig.RepoConfig{
+		CopyUntracked: []string{".env"},
+		PostCreate:    "npm install",
+	}
+	model.hooksApproved = true
+	model.createDialog.input.SetValue("feature/hook")
+	path := model.createPathPreview()
+
+	model, cmd := model.updateCreate(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd == nil {
+		t.Fatal("create returned nil command")
+	}
+	message := cmd().(createMsg)
+	if message.err != nil {
+		t.Fatalf("create command error = %v", message.err)
+	}
+	if !message.created {
+		t.Fatal("create command should mark worktree created")
+	}
+	addCommand := repoRoot + "|git worktree add -b feature/hook " + path + " main"
+	hookCommand := path + "|sh -c npm install"
+	addIndex := slices.Index(runner.commands, addCommand)
+	hookIndex := slices.Index(runner.commands, hookCommand)
+	if addIndex == -1 || hookIndex == -1 || hookIndex <= addIndex {
+		t.Fatalf("commands = %v, want hook after worktree add", runner.commands)
+	}
+	copied, err := os.ReadFile(filepath.Join(path, ".env"))
+	if err != nil {
+		t.Fatalf("ReadFile(copied .env) error = %v", err)
+	}
+	if string(copied) != "TOKEN=1\n" {
+		t.Fatalf("copied .env = %q, want TOKEN", string(copied))
+	}
+	if len(runner.envCommands) != 1 || runner.envCommands[0].command != hookCommand {
+		t.Fatalf("env commands = %+v, want post_create hook", runner.envCommands)
+	}
+	for _, wantEnv := range []string{
+		"GTH_EVENT=post_create",
+		"GTH_WORKTREE_PATH=" + path,
+		"GTH_WORKTREE_BRANCH=feature/hook",
+		"GTH_REPO_ROOT=" + repoRoot,
+		"GTH_MAIN_BRANCH=main",
+	} {
+		if !slices.Contains(runner.envCommands[0].env, wantEnv) {
+			t.Fatalf("hook env missing %q: %#v", wantEnv, runner.envCommands[0].env)
+		}
+	}
+}
+
+func TestCreateWorktreeSkipsUnapprovedPostCreateWithWarning(t *testing.T) {
+	runner := &recordingRunner{}
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.runner = runner
+	model.repoConfig = appconfig.RepoConfig{PostCreate: "npm install"}
+	model.hooksApproved = false
+	model.createDialog.input.SetValue("feature/hook")
+	path := model.createPathPreview()
+
+	model, cmd := model.updateCreate(tea.KeyMsg{Type: tea.KeyEnter})
+
+	message := cmd().(createMsg)
+	if message.err != nil {
+		t.Fatalf("create command error = %v", message.err)
+	}
+	if !message.created {
+		t.Fatal("create command should mark worktree created")
+	}
+	addCommand := "/repo/main|git worktree add -b feature/hook " + path + " main"
+	if !slices.Contains(runner.commands, addCommand) {
+		t.Fatalf("commands = %v, want git worktree add", runner.commands)
+	}
+	if len(runner.envCommands) != 0 {
+		t.Fatalf("env commands = %+v, want hook skipped", runner.envCommands)
+	}
+	if len(message.warnings) != 1 || message.warnings[0] != "post_create hook not approved; run git-treehouse allow" {
+		t.Fatalf("warnings = %#v, want unapproved hook warning", message.warnings)
+	}
+	updated, _ := updateModel(t, model, message)
+	if updated.selectedPath != path {
+		t.Fatalf("selectedPath = %q, want created path", updated.selectedPath)
+	}
+	if !strings.Contains(updated.flash, "post_create hook not approved") {
+		t.Fatalf("flash = %q, want warning", updated.flash)
+	}
+}
+
+func TestCreateWorktreeHookFailureDoesNotSelectCreatedPath(t *testing.T) {
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/.worktrees/main/feature-hook|sh -c npm install": {err: errors.New("install failed")},
+	}}
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.runner = runner
+	model.repoConfig = appconfig.RepoConfig{PostCreate: "npm install"}
+	model.hooksApproved = true
+	model.createDialog.input.SetValue("feature/hook")
+	path := model.createPathPreview()
+
+	model, cmd := model.updateCreate(tea.KeyMsg{Type: tea.KeyEnter})
+	message := cmd().(createMsg)
+
+	if message.err == nil || !message.created {
+		t.Fatalf("message = %+v, want created hook failure", message)
+	}
+	updated, _ := updateModel(t, model, message)
+	if updated.selectedPath != "" {
+		t.Fatalf("selectedPath = %q, want empty after hook failure", updated.selectedPath)
+	}
+	if updated.createDialog == nil || !strings.Contains(updated.createDialog.error, "worktree created at "+path+", but post_create failed") {
+		t.Fatalf("create dialog error = %q, want created hook failure", updated.createDialog.error)
+	}
+}
+
+func TestBranchWorktreeDialogRunsApprovedPostCreate(t *testing.T) {
+	runner := &recordingRunner{}
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+	model.runner = runner
+	model.state.Repo.MainBranch = "main"
+	model.repoConfig = appconfig.RepoConfig{PostCreate: "npm install"}
+	model.hooksApproved = true
+	model.branchWorktreeDialog = &branchWorktreeDialog{
+		branch: gitdata.Branch{Name: "feature/branch"},
+		path:   "/repo/.worktrees/main/feature-branch",
+	}
+
+	model, cmd := model.updateBranchWorktree(tea.KeyMsg{Type: tea.KeyEnter})
+
+	message := cmd().(checkoutMsg)
+	if message.err != nil {
+		t.Fatalf("checkout command error = %v", message.err)
+	}
+	want := []string{
+		"/repo/main|git worktree add /repo/.worktrees/main/feature-branch feature/branch",
+		"/repo/.worktrees/main/feature-branch|sh -c npm install",
+	}
+	if got := strings.Join(runner.commands, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("commands = %v, want %v", runner.commands, want)
 	}
 }
 
@@ -2114,7 +2289,7 @@ func TestLockedDeleteShowsBlockingModal(t *testing.T) {
 func TestDeleteRowPrunableOnlyPrunes(t *testing.T) {
 	runner := &recordingRunner{}
 	row := gitdata.Worktree{Path: "/repo/missing", Branch: "stale", Prunable: true}
-	dialog := deleteDialog{stage: deleteStagePrune, deleteBranch: true}
+	dialog := deleteDialog{stage: deleteStagePrune, deleteBranch: true, runBeforeDelete: true, beforeDeleteHook: "docker compose down"}
 
 	err := deleteRow(context.Background(), gitdata.Repository{Root: "/repo/main"}, row, dialog, runner)
 
@@ -2173,6 +2348,133 @@ func TestDeleteRowUsesSafeBranchDeleteForMergedBranch(t *testing.T) {
 	}
 	if got := strings.Join(runner.commands, "\n"); got != strings.Join(want, "\n") {
 		t.Fatalf("commands = %v, want %v", runner.commands, want)
+	}
+}
+
+func TestOpenDeleteShowsBeforeDeleteHookToggle(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.selected = 1
+	model.repoConfig = appconfig.RepoConfig{BeforeDelete: "docker compose down"}
+	model.hooksApproved = true
+
+	model, _ = model.openDelete()
+
+	if model.deleteDialog == nil || !model.deleteDialog.runBeforeDelete {
+		t.Fatalf("delete dialog = %+v, want enabled before_delete hook", model.deleteDialog)
+	}
+	output := ansi.Strip(model.renderDeleteAtWidth(100))
+	for _, want := range []string{"Cleanup hook", "h toggle", "run before_delete cleanup hook", `sh -c "docker compose down"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("delete dialog missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDeleteHookToggleDisablesBeforeDelete(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.selected = 1
+	model.repoConfig = appconfig.RepoConfig{BeforeDelete: "docker compose down"}
+	model.hooksApproved = true
+	model, _ = model.openDelete()
+
+	model, cmd := model.updateDelete(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+
+	if cmd != nil {
+		t.Fatalf("hook toggle returned command, want nil")
+	}
+	if model.deleteDialog == nil || model.deleteDialog.runBeforeDelete {
+		t.Fatalf("delete dialog = %+v, want hook disabled", model.deleteDialog)
+	}
+	output := ansi.Strip(model.renderDeleteAtWidth(100))
+	if !strings.Contains(output, "No cleanup hook will run.") {
+		t.Fatalf("delete dialog should explain skipped hook:\n%s", output)
+	}
+}
+
+func TestDeleteRowRunsBeforeDeleteBeforeWorktreeRemoval(t *testing.T) {
+	runner := &recordingRunner{}
+	row := gitdata.Worktree{Path: "/repo/feature", Branch: "feature"}
+	dialog := deleteDialog{
+		stage:            deleteStageOptions,
+		deleteWorktree:   true,
+		runBeforeDelete:  true,
+		beforeDeleteHook: "docker compose down",
+	}
+
+	err := deleteRow(context.Background(), gitdata.Repository{Root: "/repo/main", MainBranch: "main"}, row, dialog, runner)
+
+	if err != nil {
+		t.Fatalf("deleteRow() error = %v", err)
+	}
+	want := []string{
+		"/repo/feature|sh -c docker compose down",
+		"/repo/main|git worktree remove /repo/feature",
+	}
+	if got := strings.Join(runner.commands, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("commands = %v, want %v", runner.commands, want)
+	}
+	if len(runner.envCommands) != 1 {
+		t.Fatalf("env commands = %+v, want before_delete hook", runner.envCommands)
+	}
+	for _, wantEnv := range []string{
+		"GTH_EVENT=before_delete",
+		"GTH_WORKTREE_PATH=/repo/feature",
+		"GTH_WORKTREE_BRANCH=feature",
+		"GTH_REPO_ROOT=/repo/main",
+		"GTH_MAIN_BRANCH=main",
+	} {
+		if !slices.Contains(runner.envCommands[0].env, wantEnv) {
+			t.Fatalf("hook env missing %q: %#v", wantEnv, runner.envCommands[0].env)
+		}
+	}
+}
+
+func TestDeleteRowStopsWhenBeforeDeleteFails(t *testing.T) {
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/feature|sh -c docker compose down": {err: errors.New("cleanup failed")},
+	}}
+	row := gitdata.Worktree{Path: "/repo/feature", Branch: "feature"}
+	dialog := deleteDialog{
+		stage:            deleteStageOptions,
+		deleteWorktree:   true,
+		runBeforeDelete:  true,
+		beforeDeleteHook: "docker compose down",
+	}
+
+	err := deleteRow(context.Background(), gitdata.Repository{Root: "/repo/main"}, row, dialog, runner)
+
+	if err == nil {
+		t.Fatal("deleteRow() error = nil, want hook failure")
+	}
+	want := []string{"/repo/feature|sh -c docker compose down"}
+	if got := strings.Join(runner.commands, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("commands = %v, want only hook command", runner.commands)
+	}
+}
+
+func TestDeleteRowSkipsBeforeDeleteWhenToggleOff(t *testing.T) {
+	runner := &recordingRunner{}
+	row := gitdata.Worktree{Path: "/repo/feature", Branch: "feature"}
+	dialog := deleteDialog{
+		stage:            deleteStageOptions,
+		deleteWorktree:   true,
+		beforeDeleteHook: "docker compose down",
+	}
+
+	err := deleteRow(context.Background(), gitdata.Repository{Root: "/repo/main"}, row, dialog, runner)
+
+	if err != nil {
+		t.Fatalf("deleteRow() error = %v", err)
+	}
+	want := []string{"/repo/main|git worktree remove /repo/feature"}
+	if got := strings.Join(runner.commands, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("commands = %v, want hook skipped", runner.commands)
 	}
 }
 
@@ -2672,6 +2974,7 @@ func modelWithCreateDialog(bases []gitdata.BaseOption) Model {
 	return Model{
 		width:  100,
 		height: 24,
+		config: appconfig.Default(),
 		runner: testRunner{},
 		state: gitdata.State{
 			Repo: gitdata.Repository{Root: "/repo/main"},

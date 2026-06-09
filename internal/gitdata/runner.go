@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
 
 type Runner interface {
 	Run(ctx context.Context, dir, name string, args ...string) ([]byte, error)
+	RunWithEnv(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error)
 }
 
 type ExecRunner struct{}
@@ -34,8 +36,13 @@ func (error CommandError) Unwrap() error {
 }
 
 func (runner ExecRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	return runner.RunWithEnv(ctx, dir, nil, name, args...)
+}
+
+func (runner ExecRunner) RunWithEnv(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = dir
+	command.Env = append(os.Environ(), env...)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()

@@ -27,6 +27,8 @@ import (
 type Model struct {
 	state                  gitdata.State
 	config                 config.Config
+	repoConfig             config.RepoConfig
+	hooksApproved          bool
 	runner                 gitdata.Runner
 	width                  int
 	height                 int
@@ -129,11 +131,13 @@ type branchWorktreeDialog struct {
 }
 
 type deleteDialog struct {
-	stage          deleteStage
-	deleteWorktree bool
-	deleteBranch   bool
-	forceWorktree  bool
-	error          string
+	stage            deleteStage
+	deleteWorktree   bool
+	deleteBranch     bool
+	forceWorktree    bool
+	runBeforeDelete  bool
+	beforeDeleteHook string
+	error            string
 }
 
 type deleteStage int
@@ -172,29 +176,37 @@ type localMetadataLoadedMsg struct {
 }
 
 type reloadMsg struct {
-	state       gitdata.State
-	err         error
-	id          int
-	automatic   bool
-	completedAt time.Time
+	state         gitdata.State
+	repoConfig    config.RepoConfig
+	hooksApproved bool
+	err           error
+	id            int
+	automatic     bool
+	completedAt   time.Time
 }
 
 type createMsg struct {
-	path string
-	err  error
+	path     string
+	created  bool
+	err      error
+	warnings []string
 }
 
 type checkoutMsg struct {
-	path string
-	err  error
+	path     string
+	created  bool
+	err      error
+	warnings []string
 }
 
 type deleteMsg struct {
-	state       gitdata.State
-	err         error
-	text        string
-	id          int
-	completedAt time.Time
+	state         gitdata.State
+	repoConfig    config.RepoConfig
+	hooksApproved bool
+	err           error
+	text          string
+	id            int
+	completedAt   time.Time
 }
 
 type settingsSavedMsg struct {
@@ -387,9 +399,12 @@ func New(state gitdata.State, config config.Config, runner gitdata.Runner) Model
 	search.CharLimit = 200
 	search.Width = 40
 	enrichmentContext, enrichmentCancel := context.WithCancel(context.Background())
+	repoConfig, hooksApproved, _ := loadRepoRuntimeConfig(context.Background(), state.Repo.Root, runner)
 	return Model{
 		state:             state,
 		config:            config,
+		repoConfig:        repoConfig,
+		hooksApproved:     hooksApproved,
 		runner:            runner,
 		width:             100,
 		height:            30,
@@ -414,6 +429,22 @@ func (model Model) Init() tea.Cmd {
 
 func (model Model) SelectedPath() string {
 	return model.selectedPath
+}
+
+func (model Model) effectivePathTemplate() string {
+	return config.EffectivePathTemplate(model.config, model.repoConfig)
+}
+
+func (model Model) withCreateWarnings(warnings []string, command tea.Cmd) (Model, tea.Cmd) {
+	if len(warnings) == 0 {
+		return model, command
+	}
+	model, flashCmd := model.setFlash(strings.Join(warnings, "\n"))
+	return model, tea.Batch(flashCmd, command)
+}
+
+func createdHookError(hook, path string, err error) string {
+	return "worktree created at " + path + ", but " + hook + " failed:\n" + err.Error()
 }
 
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -497,6 +528,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model.setFlash(message.err.Error())
 		}
 		model.state = message.state
+		model.repoConfig = message.repoConfig
+		model.hooksApproved = message.hooksApproved || !message.repoConfig.HasHooks()
 		model.showPR = model.state.Repo.RemoteConfigured
 		model.prLoading = false
 		model.applyCachedPullRequests()
@@ -511,16 +544,33 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case createMsg:
 		model.loading = ""
 		if message.err != nil {
+			if message.created {
+				if model.createDialog != nil {
+					model.createDialog.error = createdHookError("post_create", message.path, message.err)
+				}
+				return model, nil
+			}
 			if model.createDialog != nil {
 				model.createDialog.error = message.err.Error()
 			}
 			return model, nil
 		}
 		model.selectedPath = message.path
-		return model, tea.Quit
+		return model.withCreateWarnings(message.warnings, tea.Quit)
 	case checkoutMsg:
 		model.loading = ""
 		if message.err != nil {
+			if message.created {
+				errorText := createdHookError("post_create", message.path, message.err)
+				if model.checkoutDialog != nil {
+					model.checkoutDialog.error = errorText
+				} else if model.branchWorktreeDialog != nil {
+					model.branchWorktreeDialog.error = errorText
+				} else {
+					return model.setFlash(errorText)
+				}
+				return model, nil
+			}
 			if model.checkoutDialog != nil {
 				model.checkoutDialog.error = message.err.Error()
 			} else if model.branchWorktreeDialog != nil {
@@ -531,7 +581,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model, nil
 		}
 		model.selectedPath = message.path
-		return model, tea.Quit
+		return model.withCreateWarnings(message.warnings, tea.Quit)
 	case deleteMsg:
 		if message.id != model.deleteID || !model.deleteInFlight {
 			return model, nil
@@ -548,6 +598,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		model.deleteDialog = nil
 		model.state = message.state
+		model.repoConfig = message.repoConfig
+		model.hooksApproved = message.hooksApproved || !message.repoConfig.HasHooks()
 		model.showPR = model.state.Repo.RemoteConfigured
 		model.prLoading = false
 		model.applyCachedPullRequests()
@@ -995,7 +1047,7 @@ func (model Model) openBranchWorktree(branch gitdata.Branch) (Model, tea.Cmd) {
 	if branch.Name == "" {
 		return model.setFlash("cannot create worktree for this branch")
 	}
-	path := pathutil.ApplyTemplate(model.config.PathTemplate, model.state.Repo.Root, branch.Name)
+	path := pathutil.ApplyTemplate(model.effectivePathTemplate(), model.state.Repo.Root, branch.Name)
 	model.help = false
 	model.paletteDialog = nil
 	model.createDialog = nil
@@ -1016,10 +1068,22 @@ func (model Model) updateBranchWorktree(message tea.KeyMsg) (Model, tea.Cmd) {
 			dialog.error = "target path already exists: " + dialog.path
 			return model, nil
 		}
+		branch := dialog.branch.Name
+		path := dialog.path
+		repoRoot := model.state.Repo.Root
+		mainBranch := model.state.Repo.MainBranch
+		repoConfig := model.repoConfig
+		hooksApproved := model.hooksApproved
+		runner := model.runner
 		model.loading = "creating…"
 		return model, func() tea.Msg {
-			err := gitdata.CheckoutBranchWorktree(context.Background(), model.state.Repo.Root, dialog.branch.Name, dialog.path, model.runner)
-			return checkoutMsg{path: dialog.path, err: err}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			if err := gitdata.CheckoutBranchWorktree(ctx, repoRoot, branch, path, runner); err != nil {
+				return checkoutMsg{path: path, err: err}
+			}
+			warnings, err := runPostCreateSteps(ctx, repoRoot, path, branch, mainBranch, repoConfig, hooksApproved, runner)
+			return checkoutMsg{path: path, created: true, err: err, warnings: warnings}
 		}
 	}
 	return model, nil
@@ -1094,6 +1158,32 @@ func checkoutSwitchCommand(branch string) string {
 	return "git switch -- " + branch
 }
 
+func hookEnv(event, worktreePath, branch, repoRoot, mainBranch string) []string {
+	return []string{
+		"GTH_EVENT=" + event,
+		"GTH_WORKTREE_PATH=" + worktreePath,
+		"GTH_WORKTREE_BRANCH=" + branch,
+		"GTH_REPO_ROOT=" + repoRoot,
+		"GTH_MAIN_BRANCH=" + mainBranch,
+	}
+}
+
+func runPostCreateSteps(ctx context.Context, repoRoot, path, branch, mainBranch string, repoConfig config.RepoConfig, hooksApproved bool, runner gitdata.Runner) ([]string, error) {
+	var warnings []string
+	for _, err := range gitdata.CopyWorktreeFiles(repoRoot, path, repoConfig.CopyUntracked) {
+		warnings = append(warnings, err.Error())
+	}
+	if repoConfig.PostCreate == "" {
+		return warnings, nil
+	}
+	if !hooksApproved {
+		warnings = append(warnings, "post_create hook not approved; run git-treehouse allow")
+		return warnings, nil
+	}
+	err := gitdata.RunHook(ctx, path, repoConfig.PostCreate, hookEnv("post_create", path, branch, repoRoot, mainBranch), runner)
+	return warnings, err
+}
+
 func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
 	dialog := model.createDialog
 	switch message.String() {
@@ -1114,16 +1204,26 @@ func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
 			return model, nil
 		}
 		branch := strings.TrimSpace(dialog.input.Value())
-		path := pathutil.ApplyTemplate(model.config.PathTemplate, model.state.Repo.Root, branch)
+		path := pathutil.ApplyTemplate(model.effectivePathTemplate(), model.state.Repo.Root, branch)
 		if _, err := os.Stat(path); err == nil {
 			dialog.error = "target path already exists: " + path
 			return model, nil
 		}
 		base := dialog.bases[dialog.baseIndex].Rev
+		repoRoot := model.state.Repo.Root
+		mainBranch := model.state.Repo.MainBranch
+		repoConfig := model.repoConfig
+		hooksApproved := model.hooksApproved
+		runner := model.runner
 		model.loading = "creating…"
 		return model, func() tea.Msg {
-			err := gitdata.CreateWorktree(context.Background(), model.state.Repo.Root, branch, path, base, model.runner)
-			return createMsg{path: path, err: err}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			if err := gitdata.CreateWorktree(ctx, repoRoot, branch, path, base, runner); err != nil {
+				return createMsg{path: path, err: err}
+			}
+			warnings, err := runPostCreateSteps(ctx, repoRoot, path, branch, mainBranch, repoConfig, hooksApproved, runner)
+			return createMsg{path: path, created: true, err: err, warnings: warnings}
 		}
 	default:
 		var cmd tea.Cmd
@@ -1184,6 +1284,10 @@ func (model Model) openDelete() (Model, tea.Cmd) {
 		deleteBranch:   deleteBranchDefault(row),
 		forceWorktree:  !row.Status.Clean(),
 	}
+	if model.hooksApproved && model.repoConfig.BeforeDelete != "" && !row.Prunable {
+		dialog.runBeforeDelete = true
+		dialog.beforeDeleteHook = model.repoConfig.BeforeDelete
+	}
 	switch {
 	case row.Locked:
 		dialog.stage = deleteStageLocked
@@ -1200,6 +1304,9 @@ func (model Model) openDelete() (Model, tea.Cmd) {
 	model.checkoutDialog = nil
 	model.branchWorktreeDialog = nil
 	model.deleteDialog = &dialog
+	if model.repoConfig.BeforeDelete != "" && !model.hooksApproved && !row.Prunable {
+		return model.setFlash("before_delete hook not approved; run git-treehouse allow")
+	}
 	return model, nil
 }
 
@@ -1239,6 +1346,17 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 			return model, nil
 		}
 		dialog.deleteBranch = !dialog.deleteBranch
+		dialog.error = ""
+		return model, nil
+	case "h":
+		if dialog.stage != deleteStageOptions || dialog.beforeDeleteHook == "" {
+			return model, nil
+		}
+		if !dialog.deleteWorktree {
+			dialog.error = "enable worktree removal before running the cleanup hook"
+			return model, nil
+		}
+		dialog.runBeforeDelete = !dialog.runBeforeDelete
 		dialog.error = ""
 		return model, nil
 	case "enter":
@@ -1319,7 +1437,11 @@ func deleteAndLoadCmd(cwd string, config config.Config, runner gitdata.Runner, i
 		if err != nil {
 			return deleteMsg{id: id, err: fmt.Errorf("%s, but reload failed: %w", text, err)}
 		}
-		return deleteMsg{id: id, state: state, text: text, completedAt: time.Now()}
+		repoConfig, hooksApproved, err := loadRepoRuntimeConfig(ctx, state.Repo.Root, runner)
+		if err != nil {
+			return deleteMsg{id: id, err: fmt.Errorf("%s, but reload failed: %w", text, err)}
+		}
+		return deleteMsg{id: id, state: state, repoConfig: repoConfig, hooksApproved: hooksApproved, text: text, completedAt: time.Now()}
 	}
 }
 
@@ -1335,6 +1457,11 @@ func deleteRow(ctx context.Context, repo gitdata.Repository, row gitdata.Worktre
 		return nil
 	}
 	if dialog.deleteWorktree {
+		if dialog.runBeforeDelete && dialog.beforeDeleteHook != "" && !row.Prunable {
+			if err := gitdata.RunHook(ctx, row.Path, dialog.beforeDeleteHook, hookEnv("before_delete", row.Path, row.Branch, repo.Root, repo.MainBranch), runner); err != nil {
+				return err
+			}
+		}
 		if err := gitdata.RemoveWorktree(ctx, repo.Root, row.Path, dialog.forceWorktree, runner); err != nil {
 			return err
 		}
@@ -2943,7 +3070,7 @@ func (model Model) createPathPreview() string {
 	if branch == "" {
 		return "enter branch name"
 	}
-	return pathutil.ApplyTemplate(model.config.PathTemplate, model.state.Repo.Root, branch)
+	return pathutil.ApplyTemplate(model.effectivePathTemplate(), model.state.Repo.Root, branch)
 }
 
 func (model Model) renderCheckoutAtWidth(width int) string {
@@ -3055,6 +3182,27 @@ func (model Model) renderDeleteAtWidth(width int) string {
 			worktreeBlock.details = append(worktreeBlock.details, hintStyle.Render("No worktree command will run."))
 		}
 		lines = append(lines, renderDeleteToggleBlock(worktreeBlock)...)
+		if dialog.beforeDeleteHook != "" {
+			hookEnabled := dialog.deleteWorktree
+			hookBlock := deleteToggleBlock{
+				title:   "Cleanup hook",
+				key:     "h",
+				enabled: hookEnabled,
+				checked: dialog.runBeforeDelete && hookEnabled,
+				label:   "run before_delete cleanup hook",
+				muted:   !hookEnabled,
+			}
+			if !hookEnabled {
+				hookBlock.details = append(hookBlock.details, hintStyle.Render("Enable worktree removal first; the hook runs before removal."))
+			} else if dialog.runBeforeDelete {
+				hookBlock.details = append(hookBlock.details, "Runs in the worktree before removal.")
+				hookBlock.commands = append(hookBlock.commands, deleteCommand{text: "sh -c " + fmt.Sprintf("%q", dialog.beforeDeleteHook)})
+			} else {
+				hookBlock.details = append(hookBlock.details, hintStyle.Render("No cleanup hook will run."))
+			}
+			lines = append(lines, "")
+			lines = append(lines, renderDeleteToggleBlock(hookBlock)...)
+		}
 		if deleteBranchAvailable(row) {
 			branchEnabled := dialog.deleteWorktree
 			branchBlock := deleteToggleBlock{
@@ -3790,7 +3938,11 @@ func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo git
 			}
 		}
 		state, err := loadStableState(ctx, cwd, config, runner)
-		return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), state: state, err: err}
+		if err != nil {
+			return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), err: err}
+		}
+		repoConfig, hooksApproved, err := loadRepoRuntimeConfig(ctx, state.Repo.Root, runner)
+		return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), state: state, repoConfig: repoConfig, hooksApproved: hooksApproved, err: err}
 	}
 }
 
@@ -3800,6 +3952,27 @@ func loadStableState(ctx context.Context, cwd string, config config.Config, runn
 		return gitdata.State{}, err
 	}
 	return gitdata.EnrichLocalMetadata(ctx, state, runner)
+}
+
+func loadRepoRuntimeConfig(ctx context.Context, repoRoot string, runner gitdata.Runner) (config.RepoConfig, bool, error) {
+	if repoRoot == "" {
+		return config.RepoConfig{}, true, nil
+	}
+	repoConfig, err := config.LoadRepoConfig(repoRoot)
+	if err != nil {
+		return config.RepoConfig{}, false, err
+	}
+	if !repoConfig.HasHooks() {
+		return repoConfig, true, nil
+	}
+	if runner == nil {
+		return repoConfig, false, nil
+	}
+	approvedHash, err := gitdata.ReadApprovedHash(ctx, repoRoot, runner)
+	if err != nil {
+		return repoConfig, false, err
+	}
+	return repoConfig, approvedHash == config.HookHash(repoConfig), nil
 }
 
 func openEditorCmd(editor, path string) tea.Cmd {

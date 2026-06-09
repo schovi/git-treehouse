@@ -28,6 +28,10 @@ func (runner fakeRunner) Run(_ context.Context, dir, name string, args ...string
 	return []byte(result.output), result.err
 }
 
+func (runner fakeRunner) RunWithEnv(ctx context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
+	return runner.Run(ctx, dir, name, args...)
+}
+
 type recordingFakeRunner struct {
 	mutex    sync.Mutex
 	commands []string
@@ -67,6 +71,10 @@ func (runner *recordingFakeRunner) Run(_ context.Context, dir, name string, args
 	return nil, errors.New("unexpected command: " + key)
 }
 
+func (runner *recordingFakeRunner) RunWithEnv(ctx context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
+	return runner.Run(ctx, dir, name, args...)
+}
+
 type branchRowFakeRunner struct{}
 
 func (runner branchRowFakeRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
@@ -96,6 +104,10 @@ func (runner branchRowFakeRunner) Run(_ context.Context, dir, name string, args 
 		return []byte("## main...origin/main\n"), nil
 	}
 	return nil, errors.New("unexpected command: " + dir + "|" + name + " " + command)
+}
+
+func (runner branchRowFakeRunner) RunWithEnv(ctx context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
+	return runner.Run(ctx, dir, name, args...)
 }
 
 func TestResolveRepositorySupportsBareInvocation(t *testing.T) {

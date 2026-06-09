@@ -17,6 +17,10 @@ func (runner *fakeRunner) Run(_ context.Context, _ string, name string, args ...
 	return runner.output, runner.err
 }
 
+func (runner *fakeRunner) RunWithEnv(ctx context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
+	return runner.Run(ctx, dir, name, args...)
+}
+
 func TestLoadPullRequestsFromAuthenticatedCLISkipsAuthStatus(t *testing.T) {
 	runner := &fakeRunner{
 		output: []byte(`[{"number":12,"state":"OPEN","isDraft":false,"headRefName":"feature/login","url":"https://github.com/acme/repo/pull/12","statusCheckRollup":[]}]`),

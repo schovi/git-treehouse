@@ -36,7 +36,8 @@ A fast terminal UI for managing git worktrees and local branches: browse, switch
 | `git-treehouse list [--repo <path>]` | Print the table to stdout, no TUI, no ANSI when piped. For scripting. `--json` prints structured repository/worktree data. |
 | `git-treehouse init <shell>` | Print shell integration functions that define `gth` (see §2) |
 | `git-treehouse doctor [--repo <path>]` | Print environment diagnostics for required and optional integrations. |
-| `git-treehouse help [list|init|doctor]` | Print command help. Root and subcommands also accept `-h` and `--help`. |
+| `git-treehouse allow [--repo <path>]` | Approve executable hooks from the repo `.worktree` file. |
+| `git-treehouse help [list|init|doctor|allow]` | Print command help. Root and subcommands also accept `-h` and `--help`. |
 
 ## 2. Shell integration (cd mechanism)
 
@@ -212,11 +213,13 @@ No multi-select / bulk operations in v1; every action applies to the focused row
   3. `origin/<main>` (last fetched; the everyday "fork off main" path)
   - Options that don't exist (no upstream, detached row) are omitted.
 - **On Enter:**
-  1. Compute target path from the path template (§9): default `<repo-parent>/.worktrees/<repo-name>/<sanitized-branch>` (slashes → dashes).
+  1. Compute target path from the effective path template (§9): repo `.worktree` `path_template` if set, otherwise global `config.toml`, otherwise the default `<repo-parent>/.worktrees/<repo-name>/<sanitized-branch>` (slashes → dashes).
   2. Path collision → inline error, dialog stays open.
   3. Run `git worktree add -b <name> <path> <base>`.
-  4. Success → **cd into the new worktree immediately** (write `--cd-file`, exit app).
-  5. Failure → git's stderr shown in the dialog, dialog stays open.
+  4. Copy any repo-scoped `copy_untracked` files (§9.2) from the root repository into the new worktree.
+  5. Run the approved `post_create` hook, if configured (§9.3).
+  6. Success → **cd into the new worktree immediately** (write `--cd-file`, exit app).
+  7. Failure → git's stderr or hook error shown in the dialog, dialog stays open. If the failure happened after `git worktree add`, the created worktree remains on disk.
 
 ### 5.1 Existing branch worktree flow
 
@@ -234,9 +237,10 @@ No multi-select / bulk operations in v1; every action applies to the focused row
 - The target path uses the same path template as the create flow.
 - Path collision → inline error, dialog stays open.
 - On Enter, run `git worktree add <path> <branch>`.
+- Then copy repo-scoped `copy_untracked` files and run the approved `post_create` hook, if configured (§9).
 - Success → cd into the new worktree immediately (write `--cd-file`, exit app).
-- Failure → git's stderr shown in the dialog, dialog stays open.
-- Copying uncommitted changes from another worktree is intentionally not automatic; it needs an explicit safe design before adding mutation beyond `git worktree add`.
+- Failure → git's stderr or hook error shown in the dialog, dialog stays open. If the failure happened after `git worktree add`, the created worktree remains on disk.
+- Copying arbitrary uncommitted changes from another worktree is intentionally not automatic. Only the named `copy_untracked` files are copied.
 
 ### 5.2 Checkout branch in root flow
 
@@ -277,6 +281,7 @@ The delete flow states exactly what will happen:
 - **Worktree toggle:** `t` toggles worktree removal.
   - Clean worktree → checked by default and uses `git worktree remove`.
   - Dirty worktree → unchecked by default; checking it means uncommitted changes will be discarded with `git worktree remove --force`.
+- **Cleanup hook:** when `.worktree` defines an approved `before_delete` hook, the dialog includes an `h` toggle to run it before `git worktree remove`. The hook is enabled by default for real worktree removal and does not run for prunable cleanup or branch-only deletion.
 - **Branch toggle:** `b` (or `Space`) toggles local branch deletion. Branch deletion is disabled while worktree removal is unchecked, because Git will not delete a branch that is checked out in a worktree.
   - Branch merged into main → checked by default and uses safe `git branch -d`.
   - Branch unmerged → unchecked by default; checking it means force delete with `git branch -D`.
@@ -303,13 +308,21 @@ Prints a stdout report for local setup diagnostics:
 - Current repository detection and main branch.
 - `gh` availability/authentication for PR data.
 - Config load/path.
+- Repo `.worktree` file, recognized keys, and hook approval state.
 - Shell integration presence for the detected shell.
 - Editor command.
 - Clipboard command.
 
 ## 9. Configuration
 
-Optional `~/.config/git-treehouse/config.toml`. Everything works with zero config.
+Configuration has two layers. Everything works with zero config.
+
+1. Global user config: `~/.config/git-treehouse/config.toml`.
+2. Repo-scoped config: `.worktree` at the repository root.
+
+Repo-scoped settings apply to that repository and all of its worktrees. A repo `.worktree` `path_template` overrides the global `path_template`; when it is absent, Git Treehouse falls back to global config, then the built-in default.
+
+### 9.1 Global `config.toml`
 
 ```toml
 editor = "cursor"          # default: $EDITOR, else `code`
@@ -324,6 +337,52 @@ skip_shell_integration_welcome = false  # set true by onboarding once the gth wr
 ```
 
 Tokens: `{repo}` is the absolute root repository path, `{repo_name}` its basename, `{repo_parent}` its parent directory, `{branch}` the sanitized branch name (slashes, backslashes, and whitespace runs collapse to single dashes). The legacy default `{repo_parent}/{branch}` is silently upgraded to the current default on load.
+
+### 9.2 Repo `.worktree`
+
+`.worktree` is a TOML file at the repository root:
+
+```toml
+# Overrides global path_template for this repo only.
+path_template = "{repo_parent}/.worktrees/{repo_name}/{branch}"
+
+# Named repo-relative files copied from the root repository into each new worktree.
+copy_untracked = [".env", ".env.local"]
+
+# Lifecycle hooks. See §9.3 for approval and execution rules.
+post_create = "npm install"
+before_delete = "docker compose down"
+```
+
+Recognized keys:
+
+| Key | Type | Behavior |
+|---|---|---|
+| `path_template` | string | Overrides global `path_template` for new worktrees in this repo. Uses the same tokens as global config. |
+| `copy_untracked` | array of strings | Copies named repo-relative regular files from the root repository worktree into the new worktree after `git worktree add` succeeds. Missing files are skipped. Absolute paths, empty paths, paths that escape the repository, and directories are skipped with warnings. This is intentionally a named-file copy, not a copy of arbitrary dirty state. |
+| `post_create` | string | Optional shell command run after a new worktree is created and `copy_untracked` files are copied. |
+| `before_delete` | string | Optional shell command run before a real worktree removal when enabled in the delete dialog. |
+
+### 9.3 Hook approval and execution
+
+Hooks are executable commands, so they require explicit local approval:
+
+- Run `git-treehouse allow [--repo <path>]` to approve the current `post_create` and `before_delete` hook strings in `.worktree`.
+- Approval is stored in the repo-local Git config as `treehouse.approvedHash`. The hash covers only hook fields, so changing `path_template` or `copy_untracked` does not invalidate approval.
+- If hooks are absent, no approval is needed. If hooks are present but not approved, or if they changed since approval, they are skipped gracefully. Worktree creation and deletion continue without running the hook, and the UI reports that approval is needed where applicable.
+- `git-treehouse doctor [--repo <path>]` reports recognized `.worktree` keys and whether hooks are approved, missing approval, or changed since approval.
+
+In v1, hooks always run through POSIX `sh -c <command>` in the target worktree directory. They do not use the user's login shell, and Fish, Nushell, and PowerShell hook execution is out of scope.
+
+Hook environment:
+
+| Variable | Value |
+|---|---|
+| `GTH_EVENT` | `post_create` or `before_delete` |
+| `GTH_WORKTREE_PATH` | New worktree path for `post_create`; selected worktree path for `before_delete` |
+| `GTH_WORKTREE_BRANCH` | Branch name for the worktree |
+| `GTH_REPO_ROOT` | Root repository path |
+| `GTH_MAIN_BRANCH` | Detected or configured main branch |
 
 ## 10. Edge cases & errors
 
