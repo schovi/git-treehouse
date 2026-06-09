@@ -49,6 +49,9 @@ type Model struct {
 	checkoutDialog         *checkoutDialog
 	branchWorktreeDialog   *branchWorktreeDialog
 	deleteDialog           *deleteDialog
+	deleteInFlight         bool
+	deleteID               int
+	deleteSpinnerFrame     int
 	paletteDialog          *paletteDialog
 	lastRefreshAt          time.Time
 	refreshInFlight        bool
@@ -183,9 +186,11 @@ type checkoutMsg struct {
 }
 
 type deleteMsg struct {
-	state gitdata.State
-	err   error
-	text  string
+	state       gitdata.State
+	err         error
+	text        string
+	id          int
+	completedAt time.Time
 }
 
 type settingsSavedMsg struct {
@@ -225,6 +230,10 @@ type autoRefreshMsg struct{}
 type clockTickMsg struct{}
 
 type refreshSpinnerTickMsg struct {
+	id int
+}
+
+type deleteSpinnerTickMsg struct {
 	id int
 }
 
@@ -497,22 +506,33 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.selectedPath = message.path
 		return model, tea.Quit
 	case deleteMsg:
-		anchor := model.selectionAnchor()
-		model.loading = ""
-		model.deleteDialog = nil
-		if message.err != nil {
-			return model.setFlash(message.err.Error())
+		if message.id != model.deleteID || !model.deleteInFlight {
+			return model, nil
 		}
+		anchor := model.selectionAnchor()
+		model.deleteInFlight = false
+		model.deleteSpinnerFrame = 0
+		if message.err != nil {
+			if model.deleteDialog != nil {
+				model.deleteDialog.error = "× " + message.err.Error()
+				return model, nil
+			}
+			return model.setFlash("× " + message.err.Error())
+		}
+		model.deleteDialog = nil
 		model.state = message.state
 		model.showPR = model.state.Repo.RemoteConfigured
 		model.prLoading = false
 		model.applyCachedPullRequests()
+		if !message.completedAt.IsZero() {
+			model.lastRefreshAt = message.completedAt
+		}
 		model.restoreSelection(anchor)
 		text := message.text
 		if text == "" {
 			text = "deleted worktree"
 		}
-		model, flashCmd := model.setFlash(text)
+		model, flashCmd := model.setRefreshFlash("✓ " + text)
 		model, enrichmentCmd := model.startEnrichment(true)
 		return model, tea.Batch(enrichmentCmd, flashCmd)
 	case actionMsg:
@@ -567,6 +587,12 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		model.refreshSpinnerFrame = (model.refreshSpinnerFrame + 1) % len(refreshSpinnerFrames)
 		return model, refreshSpinnerTickCmd(model.refreshID)
+	case deleteSpinnerTickMsg:
+		if message.id != model.deleteID || !model.deleteInFlight {
+			return model, nil
+		}
+		model.deleteSpinnerFrame = (model.deleteSpinnerFrame + 1) % len(refreshSpinnerFrames)
+		return model, deleteSpinnerTickCmd(model.deleteID)
 	case tea.KeyMsg:
 		if model.createDialog != nil {
 			return model.updateCreate(message)
@@ -733,6 +759,7 @@ func (model Model) canAutoRefresh() bool {
 
 func (model Model) canApplyAutoRefresh() bool {
 	return model.loading == "" &&
+		!model.deleteInFlight &&
 		!model.searching &&
 		!model.help &&
 		model.createDialog == nil &&
@@ -1148,6 +1175,9 @@ func (model Model) openDelete() (Model, tea.Cmd) {
 }
 
 func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
+	if model.deleteInFlight {
+		return model, nil
+	}
 	dialog := model.deleteDialog
 	switch message.String() {
 	case "esc":
@@ -1189,15 +1219,12 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 			return model, nil
 		}
 		if selected.IsBranch() {
-			model.loading = "deleting…"
 			branch := selected.Branch
-			return model, func() tea.Msg {
-				if err := deleteBranchRow(context.Background(), model.state.Repo, branch, model.runner); err != nil {
-					return deleteMsg{err: err}
-				}
-				state, err := gitdata.LoadSkeleton(context.Background(), model.state.Repo.ActiveWorktree, model.config, model.runner)
-				return deleteMsg{state: state, err: err, text: "deleted branch"}
-			}
+			repo := model.state.Repo
+			runner := model.runner
+			return model.startDelete("deleted branch", func(ctx context.Context) error {
+				return deleteBranchRow(ctx, repo, branch, runner)
+			})
 		}
 		row := selected.Worktree
 		switch dialog.stage {
@@ -1224,17 +1251,47 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 			}
 			return model, nil
 		}
-		model.loading = "deleting…"
-		return model, func() tea.Msg {
-			err := deleteRow(context.Background(), model.state.Repo, row, *dialog, model.runner)
-			if err != nil {
-				return deleteMsg{err: err}
-			}
-			state, err := gitdata.LoadSkeleton(context.Background(), model.state.Repo.ActiveWorktree, model.config, model.runner)
-			return deleteMsg{state: state, err: err, text: "deleted worktree"}
-		}
+		repo := model.state.Repo
+		runner := model.runner
+		dialogSnapshot := *dialog
+		return model.startDelete("deleted worktree", func(ctx context.Context) error {
+			return deleteRow(ctx, repo, row, dialogSnapshot, runner)
+		})
 	}
 	return model, nil
+}
+
+func (model Model) startDelete(text string, action func(context.Context) error) (Model, tea.Cmd) {
+	model = model.cancelEnrichment()
+	model.enrichmentID++
+	model.deleteID++
+	model.deleteInFlight = true
+	model.deleteSpinnerFrame = 0
+	model.refreshInFlight = false
+	model.refreshID++
+	model.refreshAnchor = selectionAnchor{}
+	model.refreshProgressVisible = false
+	model.refreshFlash = ""
+	model.refreshFlashID++
+	if model.deleteDialog != nil {
+		model.deleteDialog.error = ""
+	}
+	command := deleteAndLoadCmd(model.reloadCwd(), model.config, model.runner, model.deleteID, text, action)
+	return model, tea.Batch(command, deleteSpinnerTickCmd(model.deleteID))
+}
+
+func deleteAndLoadCmd(cwd string, config config.Config, runner gitdata.Runner, id int, text string, action func(context.Context) error) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if err := action(ctx); err != nil {
+			return deleteMsg{id: id, err: err}
+		}
+		state, err := loadStableState(ctx, cwd, config, runner)
+		if err != nil {
+			return deleteMsg{id: id, err: fmt.Errorf("%s, but reload failed: %w", text, err)}
+		}
+		return deleteMsg{id: id, state: state, text: text, completedAt: time.Now()}
+	}
 }
 
 func deleteBranchRow(ctx context.Context, repo gitdata.Repository, branch gitdata.Branch, runner gitdata.Runner) error {
@@ -2329,6 +2386,12 @@ func refreshSpinnerTickCmd(id int) tea.Cmd {
 	})
 }
 
+func deleteSpinnerTickCmd(id int) tea.Cmd {
+	return tea.Tick(refreshTickInterval, func(time.Time) tea.Msg {
+		return deleteSpinnerTickMsg{id: id}
+	})
+}
+
 func nextClockTickDelay(lastRefreshAt, now time.Time) time.Duration {
 	if lastRefreshAt.IsZero() {
 		return time.Minute
@@ -2922,11 +2985,12 @@ func (model Model) renderDeleteAtWidth(width int) string {
 	for index, line := range lines {
 		lines[index] = truncateStyled(line, contentWidth)
 	}
-	return dialogBox("Delete worktree", lines, deleteDialogHintsAtWidth(bottom, width-6), width)
+	return dialogBox("Delete worktree", lines, model.deleteDialogBottomContent(bottom, width-6), width)
 }
 
 func (model Model) renderDeleteBranchAtWidth(branch gitdata.Branch, width int) string {
 	contentWidth := max(1, width-4)
+	dialog := model.deleteDialog
 	command := deleteBranchCommand(branch)
 	lines := []string{
 		dialogFieldLine("Branch", branch.DisplayBranch(), contentWidth),
@@ -2946,10 +3010,26 @@ func (model Model) renderDeleteBranchAtWidth(branch gitdata.Branch, width int) s
 		lines = append(lines, deleteDetailLine("Remote branch already deleted, likely safe."))
 	}
 	lines = append(lines, deleteCommandLine(command.text, command.danger))
+	bottom := "Enter delete · Esc cancel"
+	if dialog != nil && dialog.error != "" {
+		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(dialog.error))
+	}
 	for index, line := range lines {
 		lines[index] = truncateStyled(line, contentWidth)
 	}
-	return dialogBox("Delete branch", lines, deleteDialogHintsAtWidth("Enter delete · Esc cancel", width-6), width)
+	return dialogBox("Delete branch", lines, model.deleteDialogBottomContent(bottom, width-6), width)
+}
+
+func (model Model) deleteProgressText() string {
+	frame := refreshSpinnerFrames[model.deleteSpinnerFrame%len(refreshSpinnerFrames)]
+	return refreshActivityStyle.Render(frame + " deleting")
+}
+
+func (model Model) deleteDialogBottomContent(content string, width int) string {
+	if model.deleteInFlight {
+		return truncateStyled(model.deleteProgressText(), width)
+	}
+	return deleteDialogHintsAtWidth(content, width)
 }
 
 func (model Model) deleteMetadataLines(row gitdata.Worktree, width int) []string {
@@ -3591,12 +3671,17 @@ func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo git
 				return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), err: err}
 			}
 		}
-		state, err := gitdata.LoadSkeleton(ctx, cwd, config, runner)
-		if err == nil {
-			state, err = gitdata.EnrichLocalMetadata(ctx, state, runner)
-		}
+		state, err := loadStableState(ctx, cwd, config, runner)
 		return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), state: state, err: err}
 	}
+}
+
+func loadStableState(ctx context.Context, cwd string, config config.Config, runner gitdata.Runner) (gitdata.State, error) {
+	state, err := gitdata.LoadSkeleton(ctx, cwd, config, runner)
+	if err != nil {
+		return gitdata.State{}, err
+	}
+	return gitdata.EnrichLocalMetadata(ctx, state, runner)
 }
 
 func openEditorCmd(editor, path string) tea.Cmd {

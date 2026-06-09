@@ -2120,6 +2120,145 @@ func TestDeleteRowUsesForceBranchDeleteForUnmergedBranch(t *testing.T) {
 	}
 }
 
+func TestDeleteCommandReloadsStableStateBeforeSuccess(t *testing.T) {
+	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|git worktree remove /repo/feature":                     {},
+		"/repo/main|git rev-parse --show-toplevel":                         {output: "/repo/main\n"},
+		"/repo/main|git rev-parse --git-common-dir":                        {output: ".git\n"},
+		"/repo/main|git rev-parse --path-format=absolute --git-common-dir": {output: "/repo/main/.git\n"},
+		"/repo/main|git worktree list --porcelain":                         {output: worktreeList},
+		"/repo/main|git symbolic-ref --short refs/remotes/origin/HEAD":     {err: errors.New("no origin")},
+		"/repo/main|git show-ref --verify --quiet refs/heads/main":         {},
+		"/repo/main|git remote":                                            {},
+	}}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.runner = runner
+	model.selected = 1
+	model, _ = model.openDelete()
+
+	started, cmd := model.updateDelete(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd == nil {
+		t.Fatal("delete should start a command")
+	}
+	if started.loading != "" {
+		t.Fatalf("delete should not use generic loading, got %q", started.loading)
+	}
+	if !started.deleteInFlight {
+		t.Fatal("delete should mark an in-flight delete")
+	}
+	if strings.Contains(started.statusBar(), "deleting") {
+		t.Fatalf("status bar should not show delete progress:\n%s", started.statusBar())
+	}
+	output := started.renderDeleteAtWidth(80)
+	outputLines := strings.Split(output, "\n")
+	if !strings.Contains(outputLines[len(outputLines)-1], "⠋ deleting") {
+		t.Fatalf("delete modal should show progress in the bottom border:\n%s", output)
+	}
+	if strings.Count(ansi.Strip(output), "deleting") != 1 {
+		t.Fatalf("delete modal should render progress once:\n%s", output)
+	}
+	batchMessage := cmd()
+	batch, ok := batchMessage.(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("delete command returned %T, want BatchMsg with delete command", batchMessage)
+	}
+	firstMessage := batch[0]()
+	message, ok := firstMessage.(deleteMsg)
+	if !ok {
+		t.Fatalf("first delete batch message = %T, want deleteMsg", firstMessage)
+	}
+	if message.err != nil {
+		t.Fatalf("delete command error = %v", message.err)
+	}
+	if len(message.state.Rows) != 1 || message.state.Rows[0].Path != "/repo/main" {
+		t.Fatalf("delete command state rows = %+v, want only main", message.state.Rows)
+	}
+	if !message.state.Rows[0].LocalMetadataLoaded {
+		t.Fatalf("delete command should return stable local metadata: %+v", message.state.Rows)
+	}
+
+	updated, _ := updateModel(t, started, message)
+
+	if updated.deleteDialog != nil {
+		t.Fatal("successful delete should close the delete dialog")
+	}
+	if updated.deleteInFlight {
+		t.Fatal("successful delete should clear in-flight state")
+	}
+	if updated.flash != "" {
+		t.Fatalf("delete success should not use generic flash, got %q", updated.flash)
+	}
+	if updated.refreshFlash != "✓ deleted worktree" {
+		t.Fatalf("delete success badge = %q, want Worktrees title success", updated.refreshFlash)
+	}
+	if !updated.localMetadataReady() {
+		t.Fatalf("updated state should stay locally ready: %+v", updated.state.Rows)
+	}
+	if output := updated.View(); strings.Contains(output, "Loading worktrees") {
+		t.Fatalf("delete success should not render the loading skeleton:\n%s", output)
+	}
+	if got := strings.Join(visibleBranches(updated), ","); got != "main" {
+		t.Fatalf("visible branches = %q, want main", got)
+	}
+}
+
+func TestDeleteBranchProgressRendersInBottomBorder(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.state.Branches = []gitdata.Branch{{Name: "feature"}}
+	model.filter = filterBranches
+	model, _ = model.openDelete()
+	model.deleteInFlight = true
+
+	output := model.renderDeleteAtWidth(80)
+	outputLines := strings.Split(output, "\n")
+
+	if !strings.Contains(outputLines[len(outputLines)-1], "⠋ deleting") {
+		t.Fatalf("branch delete modal should show progress in the bottom border:\n%s", output)
+	}
+	if strings.Count(ansi.Strip(output), "deleting") != 1 {
+		t.Fatalf("branch delete modal should render progress once:\n%s", output)
+	}
+}
+
+func TestDeleteErrorStaysInDeleteModal(t *testing.T) {
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|git worktree remove /repo/feature": {err: errors.New("cannot remove worktree")},
+	}}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.runner = runner
+	model.selected = 1
+	model, _ = model.openDelete()
+	started, cmd := model.updateDelete(tea.KeyMsg{Type: tea.KeyEnter})
+	batch := cmd().(tea.BatchMsg)
+	message := batch[0]().(deleteMsg)
+
+	updated, _ := updateModel(t, started, message)
+
+	if updated.deleteDialog == nil {
+		t.Fatal("delete error should keep the delete dialog open")
+	}
+	if updated.deleteInFlight {
+		t.Fatal("delete error should clear in-flight state")
+	}
+	if updated.flash != "" {
+		t.Fatalf("delete error should not use generic flash, got %q", updated.flash)
+	}
+	output := updated.renderDeleteAtWidth(80)
+	if !strings.Contains(output, "× cannot remove worktree") {
+		t.Fatalf("delete modal should show command error:\n%s", output)
+	}
+}
+
 func TestLoadConfigIfChangedReloadsModifiedConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(`path_template = "{repo_parent}/old/{branch}"`), 0600); err != nil {
@@ -2494,6 +2633,10 @@ func TestAutoRefreshSkipsBlockedStates(t *testing.T) {
 		{
 			name:  "loading",
 			model: Model{refreshID: 7, loading: "creating…"},
+		},
+		{
+			name:  "delete in flight",
+			model: Model{refreshID: 7, deleteInFlight: true},
 		},
 		{
 			name:  "searching",
