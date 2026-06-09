@@ -158,11 +158,11 @@ Below the table:
 - **Order:** root repository pinned first, remaining rows by last-commit date, newest first.
 - **Search:** `s` opens a fuzzy search over branch names.
 - **Branches:** `b` toggles branch-only rows in the list and persists the preference to config.
-- **Filter:** `Tab` cycles filters across all, modified, branches, prunable, locked, and detached rows. The branches filter shows branch-only rows even when the general branch-row toggle is off. Search and filters compose. `Esc` clears the current search while searching; otherwise it clears the active filter. Bare `Esc` does not quit.
+- **Filter:** `Tab` cycles filters across all, modified, branches, merged, prunable, locked, and detached rows. The branches filter shows branch-only rows even when the general branch-row toggle is off. The merged filter surfaces rows that are safe to clean up: worktrees with a clean working tree whose branch is merged to main or whose PR is merged/closed, plus merged branch-only rows. The root repository and detached worktrees never match. Search and filters compose. `Esc` clears the current search while searching; otherwise it clears the active filter. Bare `Esc` does not quit.
 
 ### 3.10 Command palette
 
-`Ctrl+P` opens a fuzzy command palette over named actions, an alternative to memorizing keys. It includes the row actions (go, create, checkout, delete, open editor, open PR, copy), the view toggles, direct jumps to each filter (`filter-all`, `filter-modified`, `filter-branches`, `filter-prunable`, `filter-locked`, `filter-detached`), `toggle-help`, and `open-config` (`Ctrl+O`, opens the config file in the editor). Typing filters the list; `Enter` runs the highlighted command; `Esc` closes the palette. Each entry shows its direct keybinding when one exists.
+`Ctrl+P` opens a fuzzy command palette over named actions, an alternative to memorizing keys. It includes the row actions (go, create, checkout, delete, open editor, open PR, copy), the view toggles, direct jumps to each filter (`filter-all`, `filter-modified`, `filter-branches`, `filter-merged`, `filter-prunable`, `filter-locked`, `filter-detached`), `toggle-help`, and `open-config` (`Ctrl+O`, opens the config file in the editor). Typing filters the list; `Enter` runs the highlighted command; `Esc` closes the palette. Each entry shows its direct keybinding when one exists.
 
 ## 4. Actions & keybindings
 
@@ -181,7 +181,7 @@ Below the table:
 | `a` | Jump to the active worktree |
 | `s` | Fuzzy branch search |
 | `b` | Toggle branch-only rows and persist the setting |
-| `Tab` | Cycle filter: all → modified → branches → prunable → locked → detached |
+| `Tab` | Cycle filter: all → modified → branches → merged → prunable → locked → detached |
 | `Ctrl+P` | Open command palette (§3.10) |
 | `Ctrl+O` | Open the config file in the editor (also a palette command) |
 | `Esc` | Contextual cancel or clear: close topmost dialog, clear current search, or clear active filter. Does not quit. |

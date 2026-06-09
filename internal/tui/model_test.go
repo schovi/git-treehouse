@@ -651,13 +651,14 @@ func TestTabCyclesFiltersInOrder(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main"},
 		{Path: "/repo/modified", Branch: "modified", Status: gitdata.StatusCounts{Modified: 1}},
+		{Path: "/repo/merged", Branch: "merged", BranchMergedToMain: true},
 		{Path: "/repo/prunable", Branch: "prunable", Prunable: true},
 		{Path: "/repo/locked", Branch: "locked", Locked: true},
 		{Path: "/repo/detached", Head: "abc123456", Detached: true},
 	})
 	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
 
-	for _, want := range []worktreeFilter{filterModified, filterBranches, filterPrunable, filterLocked, filterDetached, filterAll} {
+	for _, want := range []worktreeFilter{filterModified, filterBranches, filterMerged, filterPrunable, filterLocked, filterDetached, filterAll} {
 		model = pressTab(model)
 		if model.filter != want {
 			t.Fatalf("filter after Tab = %q, want %q", model.filter.label(), want.label())
@@ -1004,6 +1005,28 @@ func TestModifiedFilterIncludesAnyDirtyState(t *testing.T) {
 	}
 }
 
+func TestMergedFilterIncludesSafeCleanupRows(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, BranchMergedToMain: true},
+		{Path: "/repo/merged-clean", Branch: "merged-clean", BranchMergedToMain: true},
+		{Path: "/repo/merged-dirty", Branch: "merged-dirty", Status: gitdata.StatusCounts{Modified: 1}, BranchMergedToMain: true},
+		{Path: "/repo/unmerged-clean", Branch: "unmerged-clean"},
+		{Path: "/repo/detached", Head: "abc123456", Detached: true, BranchMergedToMain: true},
+		{Path: "/repo/pr-merged", Branch: "pr-merged", PR: &gitdata.PullRequest{Number: 1, State: "⬡"}},
+		{Path: "/repo/pr-closed", Branch: "pr-closed", PR: &gitdata.PullRequest{Number: 2, State: "✕"}},
+		{Path: "/repo/pr-open", Branch: "pr-open", PR: &gitdata.PullRequest{Number: 3, State: "○"}},
+	})
+	model.state.Branches = []gitdata.Branch{
+		{Name: "branch-merged", BranchMergedToMain: true},
+	}
+
+	model.setFilter(filterMerged)
+
+	if got := strings.Join(visibleBranches(model), ","); got != "merged-clean,pr-merged,pr-closed,branch-merged" {
+		t.Fatalf("visible branches = %q, want merged-clean,pr-merged,pr-closed,branch-merged", got)
+	}
+}
+
 func TestFilterCombinesWithBranchSearch(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/alpha-clean", Branch: "alpha-clean"},
@@ -1162,6 +1185,31 @@ func TestCommandPaletteFiltersAndExecutesCommand(t *testing.T) {
 	}
 	if model.filter != filterModified {
 		t.Fatalf("filter = %q, want modified", model.filter.label())
+	}
+}
+
+func TestCommandPaletteFiltersMerged(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/merged", Branch: "merged", BranchMergedToMain: true},
+	})
+	model, _ = model.openPalette()
+	model.paletteDialog.input.SetValue("cleanup")
+
+	commands := model.matchingPaletteCommands()
+	if len(commands) != 1 || commands[0].id != paletteFilterMerged {
+		t.Fatalf("matching palette commands = %+v, want only merged filter", commands)
+	}
+
+	model, cmd := model.updatePalette(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd != nil {
+		t.Fatalf("palette merged filter returned command, want nil")
+	}
+	if model.paletteDialog != nil {
+		t.Fatal("palette should close after command execution")
+	}
+	if model.filter != filterMerged {
+		t.Fatalf("filter = %q, want merged", model.filter.label())
 	}
 }
 

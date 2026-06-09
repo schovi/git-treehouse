@@ -253,6 +253,7 @@ const (
 	filterAll worktreeFilter = iota
 	filterModified
 	filterBranches
+	filterMerged
 	filterPrunable
 	filterLocked
 	filterDetached
@@ -262,6 +263,7 @@ var orderedFilters = []worktreeFilter{
 	filterAll,
 	filterModified,
 	filterBranches,
+	filterMerged,
 	filterPrunable,
 	filterLocked,
 	filterDetached,
@@ -285,6 +287,7 @@ const (
 	paletteCycleFilter     paletteCommandID = "cycle-filter"
 	paletteFilterAll       paletteCommandID = "filter-all"
 	paletteFilterModified  paletteCommandID = "filter-modified"
+	paletteFilterMerged    paletteCommandID = "filter-merged"
 	paletteFilterPrunable  paletteCommandID = "filter-prunable"
 	paletteFilterLocked    paletteCommandID = "filter-locked"
 	paletteFilterDetached  paletteCommandID = "filter-detached"
@@ -313,9 +316,10 @@ var paletteCommands = []paletteCommand{
 	{id: paletteJumpActive, title: "Jump to active worktree", shortcut: "a", keywords: "current"},
 	{id: paletteJumpTop, title: "Jump to top", shortcut: "g", keywords: "first"},
 	{id: paletteJumpBottom, title: "Jump to bottom", shortcut: "G", keywords: "last"},
-	{id: paletteCycleFilter, title: "Cycle filter", shortcut: "Tab", keywords: "all modified prunable locked detached"},
+	{id: paletteCycleFilter, title: "Cycle filter", shortcut: "Tab", keywords: "all modified branches merged prunable locked detached"},
 	{id: paletteFilterAll, title: "Filter: all", keywords: "show everything"},
 	{id: paletteFilterModified, title: "Filter: modified", keywords: "dirty changes"},
+	{id: paletteFilterMerged, title: "Filter: merged", keywords: "done clean safe remove cleanup"},
 	{id: paletteFilterPrunable, title: "Filter: prunable", keywords: "missing stale prune"},
 	{id: paletteFilterLocked, title: "Filter: locked", keywords: "lock"},
 	{id: paletteFilterDetached, title: "Filter: detached", keywords: "head sha"},
@@ -330,6 +334,8 @@ func (filter worktreeFilter) label() string {
 		return "modified"
 	case filterBranches:
 		return "branches"
+	case filterMerged:
+		return "merged"
 	case filterPrunable:
 		return "prunable"
 	case filterLocked:
@@ -347,6 +353,15 @@ func (filter worktreeFilter) matches(row gitdata.Row) bool {
 		return row.IsWorktree() && !row.Worktree.Status.Clean()
 	case filterBranches:
 		return row.IsBranch()
+	case filterMerged:
+		if row.IsBranch() {
+			return row.Branch.BranchMergedToMain || prMergedOrClosed(row)
+		}
+		if !row.IsWorktree() || row.Worktree.IsMain || row.Worktree.Detached {
+			return false
+		}
+		return row.Worktree.Status.Clean() &&
+			(row.Worktree.BranchMergedToMain || prMergedOrClosed(row))
 	case filterPrunable:
 		return row.IsWorktree() && row.Worktree.Prunable
 	case filterLocked:
@@ -356,6 +371,14 @@ func (filter worktreeFilter) matches(row gitdata.Row) bool {
 	default:
 		return true
 	}
+}
+
+func prMergedOrClosed(row gitdata.Row) bool {
+	pr := row.PullRequest()
+	if pr == nil {
+		return false
+	}
+	return strings.EqualFold(pr.State, "⬡") || strings.EqualFold(pr.State, "✕")
 }
 
 func New(state gitdata.State, config config.Config, runner gitdata.Runner) Model {
@@ -905,6 +928,8 @@ func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
 		model.setFilter(filterAll)
 	case paletteFilterModified:
 		model.setFilter(filterModified)
+	case paletteFilterMerged:
+		model.setFilter(filterMerged)
 	case paletteFilterPrunable:
 		model.setFilter(filterPrunable)
 	case paletteFilterLocked:
@@ -3513,7 +3538,7 @@ func (model Model) tableRows() []gitdata.Row {
 }
 
 func (model Model) tableRowsForFilter(filter worktreeFilter) []gitdata.Row {
-	return model.state.TableRows(model.showBranches || filter == filterBranches)
+	return model.state.TableRows(model.showBranches || filter == filterBranches || filter == filterMerged)
 }
 
 func (model Model) selectedTableRow() (gitdata.Row, bool) {
