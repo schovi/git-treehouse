@@ -280,6 +280,19 @@ func TestCreateBranchAtSkipsEmptyBranchOrCommit(t *testing.T) {
 	}
 }
 
+func TestCheckoutPullRequestWorktreeFetchesThenAddsWorktree(t *testing.T) {
+	runner := fakeRunner{
+		"/repo/main|git fetch origin pull/42/head":                                                    {},
+		"/repo/main|git worktree add -b alice/feature /repo/.worktrees/repo/alice-feature FETCH_HEAD": {},
+	}
+
+	err := CheckoutPullRequestWorktree(context.Background(), "/repo/main", 42, "alice/feature", "/repo/.worktrees/repo/alice-feature", runner)
+
+	if err != nil {
+		t.Fatalf("CheckoutPullRequestWorktree() error = %v", err)
+	}
+}
+
 func TestFullDiskUsageCanBeCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

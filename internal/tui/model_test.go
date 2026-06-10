@@ -20,6 +20,7 @@ import (
 
 	appconfig "github.com/schovi/git-treehouse/internal/config"
 	"github.com/schovi/git-treehouse/internal/gitdata"
+	"github.com/schovi/git-treehouse/internal/github"
 	"github.com/schovi/git-treehouse/internal/listview"
 )
 
@@ -1559,6 +1560,316 @@ func TestExecutePaletteCopyPullRequestURLFlashesWithoutPullRequest(t *testing.T)
 	}
 	if cmd == nil {
 		t.Fatal("executePaletteCommand should return flash clear command")
+	}
+}
+
+func TestCommandPaletteIncludesCheckoutPullRequest(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main"}})
+	model, _ = model.openPalette()
+	model.paletteDialog.input.SetValue("checkout pr")
+
+	commands := model.matchingPaletteCommands()
+
+	if len(commands) != 1 || commands[0].id != paletteCheckoutPullRequest || commands[0].title != "Checkout PR" {
+		t.Fatalf("matching palette commands = %+v, want Checkout PR", commands)
+	}
+	if commands[0].shortcut != "" {
+		t.Fatalf("Checkout PR shortcut = %q, want palette-only command", commands[0].shortcut)
+	}
+}
+
+func TestPullRequestCheckoutOpensLoadingModal(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main"}})
+
+	model, cmd := model.openPullRequestCheckout()
+
+	if model.pullRequestDialog == nil {
+		t.Fatal("openPullRequestCheckout() did not open dialog")
+	}
+	if cmd == nil {
+		t.Fatal("openPullRequestCheckout() should focus input and load pull requests")
+	}
+	if !model.pullRequestDialog.input.Focused() {
+		t.Fatal("pull request input should be focused")
+	}
+	output := model.renderPullRequestCheckoutAtWidth(76)
+	if !strings.Contains(output, "Checkout PR") || !strings.Contains(output, "loading pull requests") {
+		t.Fatalf("renderPullRequestCheckoutAtWidth() should show loading state:\n%s", output)
+	}
+}
+
+func TestPullRequestCheckoutLoadingSpinnerAdvances(t *testing.T) {
+	model := modelWithPullRequestDialog(nil)
+	model.pullRequestDialog.loading = true
+
+	updated, cmd := updateModel(t, model, pullRequestSpinnerTickMsg{id: model.pullRequestDialog.id})
+
+	if updated.pullRequestDialog == nil || updated.pullRequestDialog.spinnerFrame != 1 {
+		t.Fatalf("spinner frame = %+v, want next frame", updated.pullRequestDialog)
+	}
+	if cmd == nil {
+		t.Fatal("active pull request spinner should schedule the next tick")
+	}
+	output := updated.renderPullRequestCheckoutAtWidth(76)
+	if !strings.Contains(output, refreshSpinnerFrames[1]+" loading pull requests") {
+		t.Fatalf("renderPullRequestCheckoutAtWidth() should show advanced spinner:\n%s", output)
+	}
+}
+
+func TestPullRequestCheckoutFiltersByNumberTitleURLAndOwner(t *testing.T) {
+	summaries := []github.PullRequestSummary{
+		{
+			Number:              42,
+			Title:               "Auth cleanup",
+			URL:                 "https://github.com/acme/repo/pull/42",
+			HeadRefName:         "auth-cleanup",
+			HeadRepositoryOwner: "alice",
+			BaseRepositoryOwner: "schovi",
+		},
+		{
+			Number:              41,
+			Title:               "Docs",
+			URL:                 "https://github.com/acme/repo/pull/41",
+			HeadRefName:         "docs",
+			HeadRepositoryOwner: "schovi",
+			BaseRepositoryOwner: "schovi",
+		},
+	}
+	model := modelWithPullRequestDialog(summaries)
+
+	for _, query := range []string{"42", "auth cleanup", "pull/42", "alice", "alice/auth-cleanup"} {
+		model.pullRequestDialog.input.SetValue(query)
+		matches := model.matchingPullRequestSummaries()
+		if len(matches) != 1 || matches[0].Number != 42 {
+			t.Fatalf("matches for %q = %+v, want PR 42", query, matches)
+		}
+	}
+}
+
+func TestPullRequestCheckoutSelectedRowUsesFullWidthHighlight(t *testing.T) {
+	summary := github.PullRequestSummary{
+		Number:              42,
+		Title:               "Auth cleanup",
+		State:               "OPEN",
+		HeadRefName:         "auth-cleanup",
+		HeadRepositoryOwner: "schovi",
+		BaseRepositoryOwner: "schovi",
+	}
+	model := modelWithPullRequestDialog([]github.PullRequestSummary{summary})
+	contentWidth := 72
+
+	output := model.renderPullRequestCheckoutAtWidth(contentWidth + 4)
+	line := pullRequestOptionLine("› ", summary, contentWidth)
+	want := paletteSelectedStyle.Render(padStyled(line, contentWidth))
+
+	if !strings.Contains(output, want) {
+		t.Fatalf("selected PR row should use filter-style full-width highlight %q:\n%s", want, output)
+	}
+}
+
+func TestPullRequestCheckoutWrapsLongErrors(t *testing.T) {
+	model := modelWithPullRequestDialog(nil)
+	model.pullRequestDialog.error = "gh pr list --limit 200 --state all --json number,title,state,isDraft,headRefName,headRepositoryOwner,url,reviewDecision,updatedAt failed: HTTP 504: Gateway Timeout"
+
+	output := model.renderPullRequestCheckoutAtWidth(64)
+
+	if !strings.Contains(output, "gh pr list") || !strings.Contains(output, "Gateway Timeout") {
+		t.Fatalf("renderPullRequestCheckoutAtWidth() should show full error details:\n%s", output)
+	}
+}
+
+func TestPullRequestCheckoutOpensSelectedPullRequestInBrowser(t *testing.T) {
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|gh pr view 42 --web": {},
+	}}
+	model := modelWithPullRequestDialog([]github.PullRequestSummary{{
+		Number:      42,
+		Title:       "Auth cleanup",
+		State:       "OPEN",
+		HeadRefName: "auth-cleanup",
+	}})
+	model.runner = runner
+
+	started, cmd := model.updatePullRequestCheckout(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd == nil {
+		t.Fatal("o should open selected pull request")
+	}
+	rawMessage := cmd()
+	message, ok := rawMessage.(pullRequestOpenedMsg)
+	if !ok {
+		t.Fatalf("open command returned %T, want pullRequestOpenedMsg", rawMessage)
+	}
+	updated, _ := updateModel(t, started, message)
+
+	if message.err != nil {
+		t.Fatalf("pullRequestOpenedMsg error = %v", message.err)
+	}
+	if updated.pullRequestDialog == nil || updated.pullRequestDialog.error != "" {
+		t.Fatalf("pull request dialog = %+v, want modal open without error", updated.pullRequestDialog)
+	}
+	if len(runner.commands) != 1 || runner.commands[0] != "/repo/main|gh pr view 42 --web" {
+		t.Fatalf("commands = %+v, want selected PR opened", runner.commands)
+	}
+}
+
+func TestPullRequestCheckoutOpensTypedPullRequestURLInBrowser(t *testing.T) {
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|gh pr view https://github.com/acme/repo/pull/404 --web": {
+			err: errors.New("not found"),
+		},
+	}}
+	model := modelWithPullRequestDialog(nil)
+	model.runner = runner
+	model.pullRequestDialog.input.SetValue("https://github.com/acme/repo/pull/404")
+
+	started, cmd := model.updatePullRequestCheckout(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd == nil {
+		t.Fatal("o should open typed pull request query")
+	}
+	rawMessage := cmd()
+	message, ok := rawMessage.(pullRequestOpenedMsg)
+	if !ok {
+		t.Fatalf("open command returned %T, want pullRequestOpenedMsg", rawMessage)
+	}
+	updated, _ := updateModel(t, started, message)
+
+	if updated.pullRequestDialog == nil || updated.pullRequestDialog.error != "not found" {
+		t.Fatalf("pull request dialog error = %+v, want inline open error", updated.pullRequestDialog)
+	}
+}
+
+func TestPullRequestCheckoutReusesExistingWorktree(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+		{Path: "/repo/pr", Branch: "feature/login"},
+	})
+	model.pullRequestDialog = &pullRequestCheckoutDialog{}
+	summary := github.PullRequestSummary{
+		Number:              42,
+		HeadRefName:         "feature/login",
+		HeadRepositoryOwner: "schovi",
+		BaseRepositoryOwner: "schovi",
+	}
+
+	updated, cmd := model.startPullRequestCheckout(summary)
+
+	if updated.selectedPath != "/repo/pr" {
+		t.Fatalf("selectedPath = %q, want existing PR worktree", updated.selectedPath)
+	}
+	if cmd == nil {
+		t.Fatal("existing PR worktree should quit into that path")
+	}
+}
+
+func TestPullRequestCheckoutCreatesWorktreeForExistingBranch(t *testing.T) {
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|git worktree add /repo/.worktrees/main/feature-login feature/login": {},
+	}}
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+	model.runner = runner
+	model.state.Branches = []gitdata.Branch{{Name: "feature/login"}}
+	model.pullRequestDialog = &pullRequestCheckoutDialog{}
+	summary := github.PullRequestSummary{
+		Number:              42,
+		HeadRefName:         "feature/login",
+		HeadRepositoryOwner: "schovi",
+		BaseRepositoryOwner: "schovi",
+	}
+
+	started, cmd := model.startPullRequestCheckout(summary)
+	if cmd == nil {
+		t.Fatal("existing branch should create a worktree")
+	}
+	rawMessage := cmd()
+	message, ok := rawMessage.(checkoutMsg)
+	if !ok {
+		t.Fatalf("checkout command returned %T, want checkoutMsg", rawMessage)
+	}
+	if message.err != nil || !message.created {
+		t.Fatalf("checkoutMsg = %+v, want created worktree", message)
+	}
+	updated, quitCmd := updateModel(t, started, message)
+
+	if updated.selectedPath != "/repo/.worktrees/main/feature-login" {
+		t.Fatalf("selectedPath = %q, want created branch worktree", updated.selectedPath)
+	}
+	if quitCmd == nil {
+		t.Fatal("successful branch worktree checkout should quit")
+	}
+}
+
+func TestPullRequestCheckoutFetchesNewBranchAndRunsPostCreateHook(t *testing.T) {
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|git fetch origin pull/42/head":                                                    {},
+		"/repo/main|git worktree add -b alice/feature /repo/.worktrees/main/alice-feature FETCH_HEAD": {},
+		"/repo/.worktrees/main/alice-feature|sh -c npm install":                                       {},
+	}}
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+	model.runner = runner
+	model.repoConfig.PostCreate = "npm install"
+	model.hooksApproved = true
+	model.pullRequestDialog = &pullRequestCheckoutDialog{}
+	summary := github.PullRequestSummary{
+		Number:              42,
+		HeadRefName:         "feature",
+		HeadRepositoryOwner: "alice",
+		BaseRepositoryOwner: "schovi",
+	}
+
+	started, cmd := model.startPullRequestCheckout(summary)
+	if cmd == nil {
+		t.Fatal("new PR branch should create a worktree")
+	}
+	rawMessage := cmd()
+	message, ok := rawMessage.(checkoutMsg)
+	if !ok {
+		t.Fatalf("checkout command returned %T, want checkoutMsg", rawMessage)
+	}
+	updated, quitCmd := updateModel(t, started, message)
+
+	if message.err != nil || !message.created {
+		t.Fatalf("checkoutMsg = %+v, want created PR worktree", message)
+	}
+	if updated.selectedPath != "/repo/.worktrees/main/alice-feature" {
+		t.Fatalf("selectedPath = %q, want created PR worktree", updated.selectedPath)
+	}
+	if quitCmd == nil {
+		t.Fatal("successful PR checkout should quit")
+	}
+	if len(runner.envCommands) != 1 || runner.envCommands[0].command != "/repo/.worktrees/main/alice-feature|sh -c npm install" {
+		t.Fatalf("post_create commands = %+v, want hook in new worktree", runner.envCommands)
+	}
+}
+
+func TestPullRequestCheckoutDirectLookupShowsNoMatch(t *testing.T) {
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|gh repo view --json owner": {output: `{"owner":{"login":"schovi"}}`},
+		"/repo/main|gh pr view https://github.com/acme/repo/pull/404 --json number,title,state,isDraft,headRefName,headRepositoryOwner,url,reviewDecision,updatedAt": {
+			err: errors.New("not found"),
+		},
+	}}
+	model := modelWithPullRequestDialog(nil)
+	model.runner = runner
+	model.pullRequestDialog.input.SetValue("https://github.com/acme/repo/pull/404")
+
+	started, cmd := model.updatePullRequestCheckout(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("unmatched PR URL should trigger direct lookup")
+	}
+	batchMessage := cmd()
+	batch, ok := batchMessage.(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("direct lookup returned %T, want batched commands", batchMessage)
+	}
+	rawMessage := batch[0]()
+	message, ok := rawMessage.(pullRequestSummaryLoadedMsg)
+	if !ok {
+		t.Fatalf("direct lookup returned %T, want pullRequestSummaryLoadedMsg", rawMessage)
+	}
+	updated, _ := updateModel(t, started, message)
+
+	if updated.pullRequestDialog == nil || updated.pullRequestDialog.error != "No matching PR" {
+		t.Fatalf("pull request dialog error = %+v, want no match", updated.pullRequestDialog)
 	}
 }
 
@@ -3376,6 +3687,30 @@ func modelWithCreateDialog(bases []gitdata.BaseOption) Model {
 	}
 }
 
+func modelWithPullRequestDialog(summaries []github.PullRequestSummary) Model {
+	input := textinput.New()
+	input.Prompt = "> "
+	input.Cursor.Style = flashStyle
+	input.Focus()
+	return Model{
+		width:  100,
+		height: 24,
+		config: appconfig.Default(),
+		runner: testRunner{},
+		state: gitdata.State{
+			Repo: gitdata.Repository{
+				Root:           "/repo/main",
+				ActiveWorktree: "/repo/main",
+			},
+		},
+		pullRequestDialog: &pullRequestCheckoutDialog{
+			input:     input,
+			summaries: summaries,
+			id:        1,
+		},
+	}
+}
+
 func TestAppTopLineFitsWidth(t *testing.T) {
 	model := Model{
 		state: gitdata.State{
@@ -3452,6 +3787,10 @@ func TestAutoRefreshSkipsBlockedStates(t *testing.T) {
 		{
 			name:  "filter picker",
 			model: Model{refreshID: 7, filterDialog: &filterDialog{}},
+		},
+		{
+			name:  "pull request checkout",
+			model: Model{refreshID: 7, pullRequestDialog: &pullRequestCheckoutDialog{}},
 		},
 	}
 

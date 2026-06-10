@@ -4,20 +4,65 @@ import (
 	"context"
 	"encoding/json"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/schovi/git-treehouse/internal/gitdata"
 )
 
 type rawPullRequest struct {
-	Number            int               `json:"number"`
-	State             string            `json:"state"`
-	IsDraft           bool              `json:"isDraft"`
-	HeadRefName       string            `json:"headRefName"`
-	URL               string            `json:"url"`
-	ReviewDecision    string            `json:"reviewDecision"`
-	StatusCheckRollup []json.RawMessage `json:"statusCheckRollup"`
+	Number              int               `json:"number"`
+	Title               string            `json:"title"`
+	State               string            `json:"state"`
+	IsDraft             bool              `json:"isDraft"`
+	HeadRefName         string            `json:"headRefName"`
+	HeadRepositoryOwner rawOwner          `json:"headRepositoryOwner"`
+	URL                 string            `json:"url"`
+	ReviewDecision      string            `json:"reviewDecision"`
+	StatusCheckRollup   []json.RawMessage `json:"statusCheckRollup"`
+	UpdatedAt           time.Time         `json:"updatedAt"`
+}
+
+type rawOwner struct {
+	Login string `json:"login"`
+}
+
+type rawRepository struct {
+	Owner rawOwner `json:"owner"`
+}
+
+const pullRequestSummaryFields = "number,title,state,isDraft,headRefName,headRepositoryOwner,url,reviewDecision,updatedAt"
+
+type PullRequestSummary struct {
+	Number              int
+	Title               string
+	State               string
+	IsDraft             bool
+	ReviewDecision      string
+	CI                  string
+	URL                 string
+	HeadRefName         string
+	HeadRepositoryOwner string
+	BaseRepositoryOwner string
+	UpdatedAt           time.Time
+}
+
+func (pullRequest PullRequestSummary) StateGlyph() string {
+	return stateGlyph(pullRequest.State, pullRequest.IsDraft, pullRequest.ReviewDecision)
+}
+
+func (pullRequest PullRequestSummary) BranchName() string {
+	if pullRequest.HeadRefName == "" {
+		return ""
+	}
+	if pullRequest.HeadRepositoryOwner != "" &&
+		pullRequest.BaseRepositoryOwner != "" &&
+		!strings.EqualFold(pullRequest.HeadRepositoryOwner, pullRequest.BaseRepositoryOwner) {
+		return pullRequest.HeadRepositoryOwner + "/" + pullRequest.HeadRefName
+	}
+	return pullRequest.HeadRefName
 }
 
 func Available(ctx context.Context, repoRoot string, runner gitdata.Runner) bool {
@@ -57,6 +102,95 @@ func LoadPullRequestsFromAuthenticatedCLI(ctx context.Context, repoRoot string, 
 		}
 	}
 	return pullRequests, true
+}
+
+func LoadPullRequestSummaries(ctx context.Context, repoRoot string, runner gitdata.Runner) ([]PullRequestSummary, error) {
+	baseOwner, err := loadRepositoryOwner(ctx, repoRoot, runner)
+	if err != nil {
+		return nil, err
+	}
+	output, err := runner.Run(ctx, repoRoot, "gh", "pr", "list", "--limit", "200", "--state", "all", "--json", pullRequestSummaryFields)
+	if err != nil {
+		return nil, err
+	}
+	var rawPullRequests []rawPullRequest
+	if err := json.Unmarshal(output, &rawPullRequests); err != nil {
+		return nil, err
+	}
+	pullRequests := make([]PullRequestSummary, 0, len(rawPullRequests))
+	for _, raw := range rawPullRequests {
+		pullRequests = append(pullRequests, summaryFromRaw(raw, baseOwner))
+	}
+	sortPullRequestSummaries(pullRequests)
+	return pullRequests, nil
+}
+
+func LoadPullRequestSummary(ctx context.Context, repoRoot, query string, runner gitdata.Runner) (PullRequestSummary, error) {
+	baseOwner, err := loadRepositoryOwner(ctx, repoRoot, runner)
+	if err != nil {
+		return PullRequestSummary{}, err
+	}
+	output, err := runner.Run(ctx, repoRoot, "gh", "pr", "view", strings.TrimSpace(query), "--json", pullRequestSummaryFields)
+	if err != nil {
+		return PullRequestSummary{}, err
+	}
+	var raw rawPullRequest
+	if err := json.Unmarshal(output, &raw); err != nil {
+		return PullRequestSummary{}, err
+	}
+	if raw.Number == 0 {
+		return PullRequestSummary{}, errPullRequestNotFound{}
+	}
+	return summaryFromRaw(raw, baseOwner), nil
+}
+
+func OpenPullRequest(ctx context.Context, repoRoot, query string, runner gitdata.Runner) error {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return errPullRequestNotFound{}
+	}
+	_, err := runner.Run(ctx, repoRoot, "gh", "pr", "view", query, "--web")
+	return err
+}
+
+type errPullRequestNotFound struct{}
+
+func (errPullRequestNotFound) Error() string {
+	return "pull request not found"
+}
+
+func loadRepositoryOwner(ctx context.Context, repoRoot string, runner gitdata.Runner) (string, error) {
+	output, err := runner.Run(ctx, repoRoot, "gh", "repo", "view", "--json", "owner")
+	if err != nil {
+		return "", err
+	}
+	var repository rawRepository
+	if err := json.Unmarshal(output, &repository); err != nil {
+		return "", err
+	}
+	return repository.Owner.Login, nil
+}
+
+func summaryFromRaw(raw rawPullRequest, baseOwner string) PullRequestSummary {
+	return PullRequestSummary{
+		Number:              raw.Number,
+		Title:               raw.Title,
+		State:               raw.State,
+		IsDraft:             raw.IsDraft,
+		ReviewDecision:      raw.ReviewDecision,
+		CI:                  ciGlyph(raw.StatusCheckRollup),
+		URL:                 raw.URL,
+		HeadRefName:         raw.HeadRefName,
+		HeadRepositoryOwner: raw.HeadRepositoryOwner.Login,
+		BaseRepositoryOwner: baseOwner,
+		UpdatedAt:           raw.UpdatedAt,
+	}
+}
+
+func sortPullRequestSummaries(pullRequests []PullRequestSummary) {
+	sort.SliceStable(pullRequests, func(leftIndex, rightIndex int) bool {
+		return pullRequests[leftIndex].UpdatedAt.After(pullRequests[rightIndex].UpdatedAt)
+	})
 }
 
 func AttachPullRequests(rows []gitdata.Worktree, pullRequests map[string]gitdata.PullRequest) []gitdata.Worktree {

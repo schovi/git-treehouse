@@ -31,6 +31,5 @@ This is the authoritative behavior spec, split by feature under [`features/`](./
 ## Out of scope (v1)
 
 - Multi-select / bulk delete
-- Checking out a PR into a new worktree
 - Multi-repo dashboard
 - Renaming or moving worktrees

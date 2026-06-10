@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +57,8 @@ type Model struct {
 	deleteSpinnerFrame     int
 	paletteDialog          *paletteDialog
 	filterDialog           *filterDialog
+	pullRequestDialog      *pullRequestCheckoutDialog
+	pullRequestDialogID    int
 	lastRefreshAt          time.Time
 	refreshInFlight        bool
 	refreshID              int
@@ -190,6 +193,17 @@ type filterDialog struct {
 	selected int
 }
 
+type pullRequestCheckoutDialog struct {
+	input        textinput.Model
+	selected     int
+	loading      bool
+	error        string
+	summaries    []github.PullRequestSummary
+	id           int
+	directLookup bool
+	spinnerFrame int
+}
+
 type filterOption struct {
 	filter  worktreeFilter
 	count   int
@@ -257,6 +271,23 @@ type settingsSavedMsg struct {
 	err error
 }
 
+type pullRequestSummariesLoadedMsg struct {
+	summaries []github.PullRequestSummary
+	err       error
+	id        int
+}
+
+type pullRequestSummaryLoadedMsg struct {
+	summary github.PullRequestSummary
+	err     error
+	id      int
+}
+
+type pullRequestOpenedMsg struct {
+	err error
+	id  int
+}
+
 type actionMsg struct {
 	text string
 	err  error
@@ -297,6 +328,10 @@ type deleteSpinnerTickMsg struct {
 	id int
 }
 
+type pullRequestSpinnerTickMsg struct {
+	id int
+}
+
 type selectionAnchor struct {
 	path   string
 	branch string
@@ -328,29 +363,30 @@ var orderedFilters = []worktreeFilter{
 type paletteCommandID string
 
 const (
-	paletteGoSelected         paletteCommandID = "go-selected"
-	paletteCreate             paletteCommandID = "create"
-	paletteDelete             paletteCommandID = "delete"
-	paletteOpenEditor         paletteCommandID = "open-editor"
-	paletteOpenPullRequest    paletteCommandID = "open-pull-request"
-	paletteCopyPath           paletteCommandID = "copy-path"
-	paletteCopyPullRequestURL paletteCommandID = "copy-pull-request-url"
-	paletteRefresh            paletteCommandID = "refresh"
-	paletteSearch             paletteCommandID = "search"
-	paletteJumpRoot           paletteCommandID = "jump-root"
-	paletteJumpActive         paletteCommandID = "jump-active"
-	paletteJumpTop            paletteCommandID = "jump-top"
-	paletteJumpBottom         paletteCommandID = "jump-bottom"
-	paletteCycleFilter        paletteCommandID = "cycle-filter"
-	paletteFilterAll          paletteCommandID = "filter-all"
-	paletteFilterModified     paletteCommandID = "filter-modified"
-	paletteFilterMerged       paletteCommandID = "filter-merged"
-	paletteFilterPrunable     paletteCommandID = "filter-prunable"
-	paletteFilterLocked       paletteCommandID = "filter-locked"
-	paletteFilterDetached     paletteCommandID = "filter-detached"
-	paletteOpenConfig         paletteCommandID = "open-config"
-	paletteToggleHelp         paletteCommandID = "toggle-help"
-	paletteQuit               paletteCommandID = "quit"
+	paletteGoSelected          paletteCommandID = "go-selected"
+	paletteCreate              paletteCommandID = "create"
+	paletteDelete              paletteCommandID = "delete"
+	paletteOpenEditor          paletteCommandID = "open-editor"
+	paletteOpenPullRequest     paletteCommandID = "open-pull-request"
+	paletteCheckoutPullRequest paletteCommandID = "checkout-pull-request"
+	paletteCopyPath            paletteCommandID = "copy-path"
+	paletteCopyPullRequestURL  paletteCommandID = "copy-pull-request-url"
+	paletteRefresh             paletteCommandID = "refresh"
+	paletteSearch              paletteCommandID = "search"
+	paletteJumpRoot            paletteCommandID = "jump-root"
+	paletteJumpActive          paletteCommandID = "jump-active"
+	paletteJumpTop             paletteCommandID = "jump-top"
+	paletteJumpBottom          paletteCommandID = "jump-bottom"
+	paletteCycleFilter         paletteCommandID = "cycle-filter"
+	paletteFilterAll           paletteCommandID = "filter-all"
+	paletteFilterModified      paletteCommandID = "filter-modified"
+	paletteFilterMerged        paletteCommandID = "filter-merged"
+	paletteFilterPrunable      paletteCommandID = "filter-prunable"
+	paletteFilterLocked        paletteCommandID = "filter-locked"
+	paletteFilterDetached      paletteCommandID = "filter-detached"
+	paletteOpenConfig          paletteCommandID = "open-config"
+	paletteToggleHelp          paletteCommandID = "toggle-help"
+	paletteQuit                paletteCommandID = "quit"
 )
 
 type paletteCommand struct {
@@ -366,6 +402,7 @@ var paletteCommands = []paletteCommand{
 	{id: paletteDelete, title: "Delete selected row", shortcut: "d", keywords: "remove prune branch"},
 	{id: paletteOpenEditor, title: "Open in editor", shortcut: "o", keywords: "code cursor"},
 	{id: paletteOpenPullRequest, title: "Open PR or branch page", shortcut: "p", keywords: "github browser"},
+	{id: paletteCheckoutPullRequest, title: "Checkout PR", keywords: "github pr worktree branch"},
 	{id: paletteCopyPath, title: "Copy path or branch name", shortcut: "y", keywords: "clipboard branch path"},
 	{id: paletteCopyPullRequestURL, title: "Copy PR URL", keywords: "clipboard pull request link github url"},
 	{id: paletteRefresh, title: "Fetch and reload", shortcut: "r", keywords: "refresh prune"},
@@ -612,6 +649,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					model.checkoutDialog.error = errorText
 				} else if model.branchWorktreeDialog != nil {
 					model.branchWorktreeDialog.error = errorText
+				} else if model.pullRequestDialog != nil {
+					model.pullRequestDialog.error = errorText
 				} else {
 					return model.setFlash(errorText)
 				}
@@ -621,6 +660,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				model.checkoutDialog.error = message.err.Error()
 			} else if model.branchWorktreeDialog != nil {
 				model.branchWorktreeDialog.error = message.err.Error()
+			} else if model.pullRequestDialog != nil {
+				model.pullRequestDialog.error = message.err.Error()
 			} else {
 				return model.setFlash(message.err.Error())
 			}
@@ -690,6 +731,43 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model, tea.Batch(flashCmd, watchConfigChangeCmd(message.path, message.modTime))
 		}
 		return model, flashCmd
+	case pullRequestSummariesLoadedMsg:
+		if model.pullRequestDialog == nil || message.id != model.pullRequestDialog.id {
+			return model, nil
+		}
+		model.pullRequestDialog.loading = false
+		if message.err != nil {
+			model.pullRequestDialog.error = message.err.Error()
+			model.pullRequestDialog.summaries = nil
+			model.pullRequestDialog.selected = 0
+			return model, nil
+		}
+		model.pullRequestDialog.error = ""
+		model.pullRequestDialog.summaries = message.summaries
+		model.pullRequestDialog.selected = clamp(model.pullRequestDialog.selected, 0, max(0, len(model.matchingPullRequestSummaries())-1))
+		return model, nil
+	case pullRequestSummaryLoadedMsg:
+		model.loading = ""
+		if model.pullRequestDialog == nil || message.id != model.pullRequestDialog.id {
+			return model, nil
+		}
+		model.pullRequestDialog.directLookup = false
+		if message.err != nil {
+			model.pullRequestDialog.error = "No matching PR"
+			return model, nil
+		}
+		return model.startPullRequestCheckout(message.summary)
+	case pullRequestOpenedMsg:
+		model.loading = ""
+		if model.pullRequestDialog == nil || message.id != model.pullRequestDialog.id {
+			return model, nil
+		}
+		if message.err != nil {
+			model.pullRequestDialog.error = message.err.Error()
+			return model, nil
+		}
+		model.pullRequestDialog.error = ""
+		return model, nil
 	case settingsSavedMsg:
 		if message.err != nil {
 			return model.setFlash(message.err.Error())
@@ -723,6 +801,14 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		model.deleteSpinnerFrame = (model.deleteSpinnerFrame + 1) % len(refreshSpinnerFrames)
 		return model, deleteSpinnerTickCmd(model.deleteID)
+	case pullRequestSpinnerTickMsg:
+		if model.pullRequestDialog == nil ||
+			message.id != model.pullRequestDialog.id ||
+			(!model.pullRequestDialog.loading && !model.pullRequestDialog.directLookup) {
+			return model, nil
+		}
+		model.pullRequestDialog.spinnerFrame = (model.pullRequestDialog.spinnerFrame + 1) % len(refreshSpinnerFrames)
+		return model, pullRequestSpinnerTickCmd(model.pullRequestDialog.id)
 	case tea.KeyMsg:
 		if model.createDialog != nil {
 			return model.updateCreate(message)
@@ -741,6 +827,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if model.filterDialog != nil {
 			return model.updateFilterDialog(message)
+		}
+		if model.pullRequestDialog != nil {
+			return model.updatePullRequestCheckout(message)
 		}
 		if model.searching {
 			return model.updateSearch(message)
@@ -904,7 +993,8 @@ func (model Model) canApplyAutoRefresh() bool {
 		model.branchWorktreeDialog == nil &&
 		model.deleteDialog == nil &&
 		model.paletteDialog == nil &&
-		model.filterDialog == nil
+		model.filterDialog == nil &&
+		model.pullRequestDialog == nil
 }
 
 func (model Model) reloadCwd() string {
@@ -1013,6 +1103,8 @@ func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
 			err := github.OpenRowPullRequestOrBranch(context.Background(), model.state.Repo.Root, row, model.runner)
 			return actionMsg{text: "opened", err: err}
 		}
+	case paletteCheckoutPullRequest:
+		return model.openPullRequestCheckout()
 	case paletteCopyPath:
 		text, flash, ok := model.selectedCopyText()
 		if !ok {
@@ -1165,6 +1257,241 @@ func selectedFilterOptionIndex(options []filterOption, current worktreeFilter) i
 		}
 	}
 	return 0
+}
+
+func (model Model) openPullRequestCheckout() (Model, tea.Cmd) {
+	input := textinput.New()
+	input.Prompt = "> "
+	input.CharLimit = 200
+	input.Width = 52
+	input.Cursor.Style = flashStyle
+	focusCmd := input.Focus()
+	model.pullRequestDialogID++
+	id := model.pullRequestDialogID
+	model.help = false
+	model.paletteDialog = nil
+	model.filterDialog = nil
+	model.createDialog = nil
+	model.checkoutDialog = nil
+	model.branchWorktreeDialog = nil
+	model.deleteDialog = nil
+	model.pullRequestDialog = &pullRequestCheckoutDialog{input: input, loading: true, id: id}
+	repoRoot := model.state.Repo.Root
+	runner := model.runner
+	loadCmd := func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		summaries, err := github.LoadPullRequestSummaries(ctx, repoRoot, runner)
+		return pullRequestSummariesLoadedMsg{summaries: summaries, err: err, id: id}
+	}
+	return model, tea.Batch(focusCmd, loadCmd, pullRequestSpinnerTickCmd(id))
+}
+
+func (model Model) updatePullRequestCheckout(message tea.KeyMsg) (Model, tea.Cmd) {
+	dialog := model.pullRequestDialog
+	switch message.String() {
+	case "esc":
+		model.pullRequestDialog = nil
+		model.loading = ""
+		return model, nil
+	case "up", "k":
+		model.movePullRequestSelection(-1)
+		return model, nil
+	case "down", "j":
+		model.movePullRequestSelection(1)
+		return model, nil
+	case "o":
+		if dialog.directLookup {
+			return model, nil
+		}
+		matches := model.matchingPullRequestSummaries()
+		if len(matches) > 0 && !dialog.loading {
+			selected := clamp(dialog.selected, 0, len(matches)-1)
+			return model.startPullRequestOpen(strconv.Itoa(matches[selected].Number))
+		}
+		query := strings.TrimSpace(dialog.input.Value())
+		if query == "" {
+			if !dialog.loading {
+				dialog.error = "No matching PR"
+			}
+			return model, nil
+		}
+		return model.startPullRequestOpen(query)
+	case "enter":
+		if dialog.loading || dialog.directLookup {
+			return model, nil
+		}
+		matches := model.matchingPullRequestSummaries()
+		if len(matches) > 0 {
+			selected := clamp(dialog.selected, 0, len(matches)-1)
+			return model.startPullRequestCheckout(matches[selected])
+		}
+		query := strings.TrimSpace(dialog.input.Value())
+		if query == "" {
+			dialog.error = "No matching PR"
+			return model, nil
+		}
+		return model.startPullRequestLookup(query)
+	}
+	previousValue := dialog.input.Value()
+	var cmd tea.Cmd
+	dialog.input, cmd = dialog.input.Update(message)
+	if dialog.input.Value() != previousValue {
+		dialog.selected = 0
+		dialog.error = ""
+	}
+	dialog.selected = clamp(dialog.selected, 0, max(0, len(model.matchingPullRequestSummaries())-1))
+	return model, cmd
+}
+
+func (model *Model) movePullRequestSelection(direction int) {
+	if model.pullRequestDialog == nil || direction == 0 {
+		return
+	}
+	matches := model.matchingPullRequestSummaries()
+	if len(matches) == 0 {
+		model.pullRequestDialog.selected = 0
+		return
+	}
+	model.pullRequestDialog.selected = clamp(model.pullRequestDialog.selected+direction, 0, len(matches)-1)
+}
+
+func (model Model) matchingPullRequestSummaries() []github.PullRequestSummary {
+	if model.pullRequestDialog == nil {
+		return nil
+	}
+	query := strings.TrimSpace(model.pullRequestDialog.input.Value())
+	if query == "" {
+		return model.pullRequestDialog.summaries
+	}
+	matches := make([]github.PullRequestSummary, 0, len(model.pullRequestDialog.summaries))
+	for _, summary := range model.pullRequestDialog.summaries {
+		if pullRequestSummaryMatches(summary, query) {
+			matches = append(matches, summary)
+		}
+	}
+	return matches
+}
+
+func pullRequestSummaryMatches(summary github.PullRequestSummary, query string) bool {
+	haystack := strings.Join([]string{
+		fmt.Sprintf("#%d", summary.Number),
+		strconv.Itoa(summary.Number),
+		summary.Title,
+		summary.URL,
+		summary.HeadRepositoryOwner,
+		summary.HeadRefName,
+		summary.BranchName(),
+	}, " ")
+	return fuzzyMatch(haystack, query)
+}
+
+func (model Model) startPullRequestOpen(query string) (Model, tea.Cmd) {
+	if model.pullRequestDialog == nil {
+		return model, nil
+	}
+	model.pullRequestDialog.error = ""
+	model.loading = "opening…"
+	id := model.pullRequestDialog.id
+	repoRoot := model.state.Repo.Root
+	runner := model.runner
+	return model, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := github.OpenPullRequest(ctx, repoRoot, query, runner)
+		return pullRequestOpenedMsg{err: err, id: id}
+	}
+}
+
+func (model Model) startPullRequestLookup(query string) (Model, tea.Cmd) {
+	if model.pullRequestDialog == nil {
+		return model, nil
+	}
+	model.pullRequestDialog.error = ""
+	model.pullRequestDialog.directLookup = true
+	model.pullRequestDialog.spinnerFrame = 0
+	model.loading = "checking out…"
+	id := model.pullRequestDialog.id
+	repoRoot := model.state.Repo.Root
+	runner := model.runner
+	lookupCmd := func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		summary, err := github.LoadPullRequestSummary(ctx, repoRoot, query, runner)
+		return pullRequestSummaryLoadedMsg{summary: summary, err: err, id: id}
+	}
+	return model, tea.Batch(lookupCmd, pullRequestSpinnerTickCmd(id))
+}
+
+func (model Model) startPullRequestCheckout(summary github.PullRequestSummary) (Model, tea.Cmd) {
+	if model.pullRequestDialog == nil {
+		return model, nil
+	}
+	branch := summary.BranchName()
+	if branch == "" {
+		model.pullRequestDialog.error = "pull request branch is missing"
+		return model, nil
+	}
+	if worktree, ok := model.worktreeForBranch(branch); ok {
+		if worktree.Prunable {
+			model.pullRequestDialog.error = "cannot enter a prunable worktree"
+			return model, nil
+		}
+		if worktree.IsActive {
+			return model, tea.Quit
+		}
+		model.selectedPath = worktree.Path
+		return model, tea.Quit
+	}
+	path := pathutil.ApplyTemplate(model.effectivePathTemplate(), model.state.Repo.Root, branch)
+	if _, err := os.Stat(path); err == nil {
+		model.pullRequestDialog.error = "target path already exists: " + path
+		return model, nil
+	}
+	repoRoot := model.state.Repo.Root
+	mainBranch := model.state.Repo.MainBranch
+	repoConfig := model.repoConfig
+	hooksApproved := model.hooksApproved
+	runner := model.runner
+	model.loading = "creating…"
+	if model.branchExists(branch) {
+		return model, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			if err := gitdata.CheckoutBranchWorktree(ctx, repoRoot, branch, path, runner); err != nil {
+				return checkoutMsg{path: path, err: err}
+			}
+			warnings, err := runPostCreateSteps(ctx, repoRoot, path, branch, mainBranch, repoConfig, hooksApproved, runner)
+			return checkoutMsg{path: path, created: true, err: err, warnings: warnings}
+		}
+	}
+	return model, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		if err := gitdata.CheckoutPullRequestWorktree(ctx, repoRoot, summary.Number, branch, path, runner); err != nil {
+			return checkoutMsg{path: path, err: err}
+		}
+		warnings, err := runPostCreateSteps(ctx, repoRoot, path, branch, mainBranch, repoConfig, hooksApproved, runner)
+		return checkoutMsg{path: path, created: true, err: err, warnings: warnings}
+	}
+}
+
+func (model Model) worktreeForBranch(branch string) (gitdata.Worktree, bool) {
+	for _, row := range model.state.Rows {
+		if !row.Detached && row.Branch == branch {
+			return row, true
+		}
+	}
+	return gitdata.Worktree{}, false
+}
+
+func (model Model) branchExists(branch string) bool {
+	for _, row := range model.state.Branches {
+		if row.Name == branch {
+			return true
+		}
+	}
+	return false
 }
 
 func (model Model) openCreate() (Model, tea.Cmd) {
@@ -1737,6 +2064,9 @@ func (model Model) View() string {
 	}
 	if model.filterDialog != nil {
 		output = centeredOverlay(output, model.renderFilterAtWidth(filterDialogWidth(outerWidth)), outerWidth, overlayHeight)
+	}
+	if model.pullRequestDialog != nil {
+		output = centeredOverlay(output, model.renderPullRequestCheckoutAtWidth(pullRequestDialogWidth(outerWidth)), outerWidth, overlayHeight)
 	}
 	if model.deleteDialog != nil {
 		output = centeredOverlay(output, model.renderDeleteAtWidth(deleteDialogWidth(outerWidth)), outerWidth, overlayHeight)
@@ -2805,6 +3135,12 @@ func deleteSpinnerTickCmd(id int) tea.Cmd {
 	})
 }
 
+func pullRequestSpinnerTickCmd(id int) tea.Cmd {
+	return tea.Tick(refreshTickInterval, func(time.Time) tea.Msg {
+		return pullRequestSpinnerTickMsg{id: id}
+	})
+}
+
 func nextClockTickDelay(lastRefreshAt, now time.Time) time.Duration {
 	if lastRefreshAt.IsZero() {
 		return time.Minute
@@ -3731,6 +4067,131 @@ func (model Model) renderFilterAtWidth(width int) string {
 	return dialogBox("Filters", lines, filterDialogHintsAtWidth(width-6), width)
 }
 
+func (model Model) renderPullRequestCheckoutAtWidth(width int) string {
+	dialog := model.pullRequestDialog
+	contentWidth := max(1, width-4)
+	input := dialog.input
+	input.Width = max(1, contentWidth-runewidth.StringWidth(input.Prompt)-1)
+	lines := []string{input.View(), ""}
+	spinner := refreshSpinnerFrames[dialog.spinnerFrame%len(refreshSpinnerFrames)]
+	switch {
+	case dialog.loading:
+		lines = append(lines, "  "+spinner+" loading pull requests")
+	case dialog.directLookup:
+		lines = append(lines, "  "+spinner+" looking up pull request")
+	default:
+		matches := model.matchingPullRequestSummaries()
+		if len(matches) == 0 {
+			lines = append(lines, hintStyle.Render("  No matching PR"))
+		} else {
+			selected := clamp(dialog.selected, 0, len(matches)-1)
+			start, end := pullRequestWindow(selected, len(matches), 8)
+			for index := start; index < end; index++ {
+				prefix := "  "
+				if index == selected {
+					prefix = "› "
+				}
+				line := pullRequestOptionLine(prefix, matches[index], contentWidth)
+				if index == selected {
+					line = paletteSelectedStyle.Render(padStyled(line, contentWidth))
+				}
+				lines = append(lines, line)
+			}
+		}
+	}
+	if dialog.error != "" {
+		for _, line := range pullRequestErrorLines(dialog.error, contentWidth) {
+			lines = append(lines, deleteDangerStyle.Render(line))
+		}
+	}
+	return dialogBox("Checkout PR", lines, pullRequestCheckoutHintsAtWidth(width-6, dialog.loading || dialog.directLookup), width)
+}
+
+func pullRequestErrorLines(message string, width int) []string {
+	return wrapPlainWithPrefixes(strings.TrimSpace(message), "  × ", "    ", width)
+}
+
+func wrapPlainWithPrefixes(message, firstPrefix, nextPrefix string, width int) []string {
+	if message == "" {
+		return nil
+	}
+	lines := []string{}
+	prefix := firstPrefix
+	for _, paragraph := range strings.Split(message, "\n") {
+		words := strings.Fields(paragraph)
+		if len(words) == 0 {
+			lines = append(lines, truncatePlain(prefix, width))
+			prefix = nextPrefix
+			continue
+		}
+		current := ""
+		for _, word := range words {
+			available := max(1, width-runewidth.StringWidth(prefix))
+			if current == "" {
+				current = truncatePlain(word, available)
+				if current != word {
+					lines = append(lines, truncatePlain(prefix+current, width))
+					current = ""
+					prefix = nextPrefix
+				}
+				continue
+			}
+			candidate := current + " " + word
+			if runewidth.StringWidth(candidate) <= available {
+				current = candidate
+				continue
+			}
+			lines = append(lines, truncatePlain(prefix+current, width))
+			prefix = nextPrefix
+			available = max(1, width-runewidth.StringWidth(prefix))
+			current = truncatePlain(word, available)
+			if current != word {
+				lines = append(lines, truncatePlain(prefix+current, width))
+				current = ""
+			}
+		}
+		if current != "" {
+			lines = append(lines, truncatePlain(prefix+current, width))
+			prefix = nextPrefix
+		}
+	}
+	return lines
+}
+
+func pullRequestWindow(selected, count, limit int) (int, int) {
+	if count <= limit {
+		return 0, count
+	}
+	start := selected - limit/2
+	if start < 0 {
+		start = 0
+	}
+	if start+limit > count {
+		start = count - limit
+	}
+	return start, start + limit
+}
+
+func pullRequestOptionLine(prefix string, summary github.PullRequestSummary, width int) string {
+	number := fmt.Sprintf("#%d", summary.Number)
+	state := summary.StateGlyph()
+	title := summary.Title
+	if title == "" {
+		title = "(untitled)"
+	}
+	branch := summary.BranchName()
+	fixed := prefix + padRight(number, 5) + "  " + state + "  "
+	fixedWidth := runewidth.StringWidth(fixed)
+	branchWidth := min(24, runewidth.StringWidth(branch))
+	titleWidth := width - fixedWidth - branchWidth - 2
+	if branch == "" || titleWidth < 8 {
+		return truncatePlain(fixed+title, width)
+	}
+	titleText := padRight(truncatePlain(title, titleWidth), titleWidth)
+	branchText := truncatePlain(branch, branchWidth)
+	return truncatePlain(fixed+titleText+"  "+branchText, width)
+}
+
 func filterOptionLine(prefix string, option filterOption, width int) string {
 	label := option.filter.label()
 	count := filterCountLabel(option.count)
@@ -3777,6 +4238,10 @@ func paletteDialogWidth(viewWidth int) int {
 
 func filterDialogWidth(viewWidth int) int {
 	return modalWidth(viewWidth, 60)
+}
+
+func pullRequestDialogWidth(viewWidth int) int {
+	return modalWidth(viewWidth, 76)
 }
 
 func modalWidth(viewWidth, maximum int) int {
@@ -3855,6 +4320,26 @@ func filterDialogHintsAtWidth(width int) string {
 		return medium
 	}
 	short := colorKeyHints("Enter · Tab · Esc", false)
+	if lipgloss.Width(short) <= width {
+		return short
+	}
+	return ""
+}
+
+func pullRequestCheckoutHintsAtWidth(width int, loading bool) string {
+	content := "Enter checkout · o open · ↑/↓ move · Esc cancel"
+	if loading {
+		content = "↑/↓ move · Esc cancel"
+	}
+	full := colorKeyHints(content, false)
+	if lipgloss.Width(full) <= width {
+		return full
+	}
+	short := "Enter · o · ↑/↓ · Esc"
+	if loading {
+		short = "↑/↓ · Esc"
+	}
+	short = colorKeyHints(short, false)
 	if lipgloss.Width(short) <= width {
 		return short
 	}

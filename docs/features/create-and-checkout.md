@@ -78,3 +78,35 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 - With stash enabled: Enter runs `git stash push -u -m "git-treehouse: before switching to <branch>"`, then `git switch -- <branch>`.
 - Failure from either git command is shown in the dialog or status bar, and the app stays open.
 - No force checkout, discard, or automatic copying happens.
+
+## Pull request worktree flow
+
+`Checkout PR` is available from the command palette only. It opens a centered picker and immediately loads up to 200 pull requests through `gh pr list --state all`, sorted by most recently updated. The picker includes open, draft, merged, and closed pull requests.
+
+```
+┌ Checkout PR ─────────────────────────────────────────────────────┐
+│ > auth cleanup                                                   │
+│                                                                  │
+│   #128  ○  Fix auth cleanup after token refresh  feature/auth   │
+│ › #127  ⬡  Add PR checkout into worktree         alice/pr-flow  │
+│   #126  ✕  Remove stale worktree copy path       path-fix       │
+│   #125  ◌  Draft: improve status loading         loading        │
+│                                                                  │
+│ Enter checkout · o open · ↑/↓ move · Esc cancel                 │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- Typing filters by PR number, title, URL, owner, head branch, and local branch name.
+- `↑`/`↓` or `k`/`j` moves the highlighted PR. The highlighted row uses the same full-width selection background as the filter picker.
+- `o` opens the highlighted PR in the browser via `gh pr view <number> --web`. If no loaded row matches and the input contains a PR URL or number, `o` opens that query directly. Open failures are shown inline.
+- `Esc` closes the picker. No global keybinding opens this flow.
+- While `gh` is loading, the modal stays open and shows `loading pull requests`. If `gh` fails, the error is shown inline in the modal.
+- Pressing `Enter` on a highlighted PR:
+  1. Computes the local branch name from the PR head. Same-repo PRs use `headRefName`; fork PRs use `<owner>/<headRefName>`.
+  2. Existing non-prunable worktree for that branch → cd into it immediately.
+  3. Existing local branch without a worktree → compute the target path from the normal path template, run `git worktree add <path> <branch>`, then run normal post-create steps.
+  4. New PR branch → run `git fetch origin pull/<number>/head`, then `git worktree add -b <branch> <path> FETCH_HEAD`, then run normal post-create steps.
+  5. Success → cd into the worktree immediately (write `--cd-file`, exit app).
+  6. Failure → show the error inline in the picker, and keep the app open.
+- If the input is a PR URL or number that is not in the loaded list, `Enter` tries `gh pr view <input>` directly. Invalid input shows `No matching PR`.
+- Existing local branch reuse does not force-update the branch from the PR head.

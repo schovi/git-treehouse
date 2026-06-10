@@ -441,6 +441,20 @@ func CheckoutBranchWorktree(ctx context.Context, repoRoot, branch, path string, 
 	return err
 }
 
+func CheckoutPullRequestWorktree(ctx context.Context, repoRoot string, number int, branch, path string, runner Runner) error {
+	if number <= 0 {
+		return fmt.Errorf("pull request number is required")
+	}
+	if branch == "" {
+		return fmt.Errorf("branch name is required")
+	}
+	if _, err := runner.Run(ctx, repoRoot, "git", "fetch", "origin", fmt.Sprintf("pull/%d/head", number)); err != nil {
+		return err
+	}
+	_, err := runner.Run(ctx, repoRoot, "git", "worktree", "add", "-b", branch, path, "FETCH_HEAD")
+	return err
+}
+
 func StashWorktreeChanges(ctx context.Context, path, message string, runner Runner) error {
 	_, err := runner.Run(ctx, path, "git", "stash", "push", "-u", "-m", message)
 	return err

@@ -19,7 +19,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 | `s` | Fuzzy branch search |
 | `b` | Toggle branch-only rows and persist the setting |
 | `Tab` | Open filter picker |
-| `Ctrl+P` | Open command palette ([command-palette.md](./command-palette.md)) |
+| `Ctrl+P` | Open command palette ([command-palette.md](./command-palette.md)), including the palette-only `Checkout PR` flow |
 | `Ctrl+O` | Open the config file in the editor (also a palette command) |
 | `Esc` | Contextual cancel or clear: close topmost dialog, clear current search, or clear active filter. Does not quit. |
 | `q`, `Ctrl+C` | Quit immediately from list view (no cd) |
