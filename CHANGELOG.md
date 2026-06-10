@@ -4,6 +4,14 @@ Release notes for Git Treehouse.
 
 Dates use the GitHub release publication date for published releases. Entries without a GitHub release use the annotated tag date.
 
+## v0.10.0 - 2026-06-10
+
+### New Features
+
+#### Checkout PR Into A Worktree
+
+Added a palette-only `Checkout PR` command. Open the command palette (`Ctrl+P`) and run `Checkout PR` to open a centered picker that loads up to 200 pull requests via `gh pr list --state all`, sorted by most recently updated (open, draft, merged, and closed). Type to filter by PR number, title, URL, owner, head branch, or local branch name; `↑`/`↓` (or `k`/`j`) move the selection. `Enter` checks out the highlighted PR into a worktree: it cd's into an existing non-prunable worktree, runs `git worktree add` for an existing local branch, or fetches `pull/<number>/head` and creates a new worktree branch for a new PR. Same-repo PRs use `headRefName`; fork PRs use `<owner>/<headRefName>`. On success the app cd's into the worktree and exits. `o` opens the highlighted PR in the browser; if the input is a PR URL or number not in the list, `Enter`/`o` act on it directly. `Esc` closes the picker, and there is no global keybinding for this flow.
+
 ## v0.9.0 - 2026-06-10
 
 ### New Features
