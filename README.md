@@ -37,12 +37,14 @@
 | | Feature |
 | --- | --- |
 | ✅ | List every worktree for the repository containing your current directory. |
+| ✅ | Show local branches that have no worktree, and create or checkout from them. |
 | ✅ | Jump your shell into the selected worktree with the `gth` shell wrapper. |
 | ✅ | Create a new branch and worktree from the focused row, with the target path previewed before creation. |
-| ✅ | Delete worktrees with guardrails for active, main, dirty, and unmerged branches. |
-| ✅ | Search branches with `s` and filter worktree states with `Tab`. |
+| ✅ | Delete worktrees with guardrails for active, main, dirty, and unmerged branches, and restore a just-deleted branch with `u`. |
+| ✅ | Search branches with `s`, filter worktree states with `Tab`, and run any action from the `Ctrl+P` command palette. |
 | ✅ | See dirty counts, upstream sync, main comparison, commit age, disk size, PR, and CI state in one table. |
 | ✅ | Auto-refresh local Git state while idle, with `git fetch --prune` only when you ask for it. |
+| ✅ | Per-repo `.worktree` config: path template overrides, copied files, and approved create/delete hooks. |
 | ✅ | Open a worktree in your editor, copy paths, or use `git-treehouse list` for non-interactive output. |
 
 ## Install
@@ -209,7 +211,7 @@ Active and main worktrees cannot be deleted from the TUI. Dirty or unmerged dele
 
 `git-treehouse` refreshes local Git state automatically while idle.
 
-Use `r` or `f` to run:
+Use `r` to run:
 
 ```sh
 git fetch --prune
@@ -223,18 +225,23 @@ Then `git-treehouse` reloads the table.
 | --- | --- |
 | `up` / `down`, `k` / `j` | Move selection |
 | `g` / `G` | Jump to top / bottom |
-| `m` | Jump to main worktree |
+| `h` | Jump to the root repository worktree |
 | `a` | Jump to active worktree |
-| `Tab` | Open filter picker |
-| `Enter` | Go to selected worktree and exit |
-| `n` | Create a new worktree |
-| `d`, `Delete`, `Backspace` | Delete focused worktree |
+| `Enter` | Go to selected worktree and exit; on a branch-only row, create a worktree for that branch and go |
+| `n` | Create a new worktree from the focused row |
+| `c` | On a branch-only row, checkout that branch in the root worktree |
+| `d`, `Delete`, `Backspace` | Delete focused worktree or branch |
+| `u` | Restore the just-deleted branch |
 | `o` | Open selected worktree in editor |
 | `p` | Open selected PR or branch page with `gh` |
-| `y` | Copy selected worktree absolute path |
-| `r`, `f` | Run `git fetch --prune` and reload |
+| `y` | Copy selected worktree absolute path, or a branch-only row's branch name |
+| `r` | Run `git fetch --prune` and reload |
 | `s` | Search branches |
-| `Esc` | Close dialog, clear filter/search, or quit |
+| `b` | Toggle branch-only rows (persists the setting) |
+| `Tab` | Open the filter picker |
+| `Ctrl+P` | Open the command palette |
+| `Ctrl+O` | Open the config file in your editor |
+| `Esc` | Close dialog, clear search, or clear the active filter (does not quit) |
 | `?` | Toggle help |
 | `q`, `Ctrl+C` | Quit |
 
@@ -266,6 +273,7 @@ Example:
 editor = "cursor"
 path_template = "~/.worktrees/{repo_name}/{branch}"
 main_branch = ""
+show_branches = false
 skip_shell_integration_welcome = false
 ```
 
@@ -276,6 +284,7 @@ Options:
 | `editor` | `$EDITOR`, then `code` | Command used by `o` and config editing |
 | `path_template` | `{repo_parent}/.worktrees/{repo_name}/{branch}` | New worktree path template |
 | `main_branch` | auto-detected | Override main branch detection |
+| `show_branches` | `false` | Show branch-only rows on startup (also toggled with `b`) |
 | `skip_shell_integration_welcome` | `false` | Do not show first-run shell setup |
 
 Path template placeholders:
@@ -293,6 +302,37 @@ Notes:
 - Relative templates are resolved from the main worktree path.
 - Branch sanitization replaces path separators and whitespace with `-`.
 - If your config still contains the old exact default `{repo_parent}/{branch}`, `git-treehouse` treats it as the current default.
+
+### Repo-Scoped Configuration
+
+Commit a `.worktree` TOML file at the repository root to apply settings to that repo and all of its worktrees. It is optional and layers on top of the global config.
+
+```toml
+# Overrides the global path_template for this repo only.
+path_template = "{repo_parent}/.worktrees/{repo_name}/{branch}"
+
+# Repo-relative files copied from the root repository into each new worktree.
+copy_untracked = [".env", ".env.local"]
+
+# Lifecycle hooks. These run only after you approve them (see below).
+post_create = "npm install"      # runs after a new worktree is created
+before_delete = "docker compose down"  # runs before a worktree is removed
+```
+
+| Key | Type | Behavior |
+| --- | --- | --- |
+| `path_template` | string | Overrides the global `path_template` for new worktrees in this repo. |
+| `copy_untracked` | array | Repo-relative files copied from the root repository into each new worktree. Missing files, directories, and paths that escape the repo are skipped. |
+| `post_create` | string | Command run after a new worktree is created and `copy_untracked` files are copied. |
+| `before_delete` | string | Command run before a worktree is removed, when enabled in the delete dialog. |
+
+Hooks (`post_create`, `before_delete`) are executable commands, so they require explicit approval:
+
+```sh
+git-treehouse allow
+```
+
+This records the current hook strings in repo-local Git config (`treehouse.approvedHash`). Hooks run only while the approval matches. If they are absent, changed, or unapproved, they are skipped silently and worktree create/delete continue without them. Changing `path_template` or `copy_untracked` does not invalidate approval. Hooks always run through POSIX `sh -c` in the target worktree directory. Run `git-treehouse doctor` to see recognized `.worktree` keys and hook approval state.
 
 ## Commands
 
@@ -319,6 +359,18 @@ Load a specific repo or worktree:
 
 ```sh
 git-treehouse list --json --repo ~/code/project-worktree
+```
+
+Check your environment and repo `.worktree` setup:
+
+```sh
+git-treehouse doctor
+```
+
+Approve the current repo `.worktree` hooks:
+
+```sh
+git-treehouse allow
 ```
 
 Print shell integration:
@@ -412,7 +464,7 @@ git-treehouse list --no-github
 
 - `git-treehouse` does not run `git fetch` on startup.
 - Local Git state auto-refreshes while idle.
-- `r` and `f` run `git fetch --prune`.
+- `r` runs `git fetch --prune`.
 - Bare worktree entries are not navigable rows.
 - The main worktree is pinned first.
 - Remaining worktrees are sorted by last commit time, newest first.
@@ -444,4 +496,4 @@ git-treehouse init fish
 
 ## Status
 
-`git-treehouse` is early software. Version `v0.1.0` is the first usable release and focuses on local, single-repository worktree management.
+`git-treehouse` is young but usable software, focused on local, single-repository worktree management. See [`CHANGELOG.md`](CHANGELOG.md) for what shipped in each release.

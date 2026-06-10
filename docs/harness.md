@@ -28,7 +28,7 @@ Failure: the selected-row highlight visually broke because nested ANSI resets
 from styled cells cleared an outer row background. Existing tests still passed
 because they only checked row width and text presence.
 
-Guardrail: visual contracts in `docs/spec.md` need visual tests. For styled terminal
+Guardrail: visual contracts in `docs/features/*` need visual tests. For styled terminal
 output, assert the actual ANSI/SGR state or exact border geometry. If a test
 expects color output, set the Lip Gloss color profile in the test and restore
 the previous profile afterward.
@@ -61,6 +61,22 @@ data can be lost. Keep action dependencies visible:
 - Branch deletion is disabled unless worktree removal is enabled, because Git
   will not delete a branch that is checked out in a worktree.
 
+## Documentation Drift
+
+Failure: the public `README.md` fell several releases behind the behavior spec.
+Feature work updated the internal spec but never the README, so the README still
+listed a wrong keybinding and was missing whole features (repo-scoped `.worktree`
+config, the `allow` command, the command palette, restore, the merged filter).
+
+Guardrail: split the two audiences and update them at different times.
+
+- Internal docs (`docs/features/*`, `docs/architecture.md`) track `main`. Update
+  the relevant feature doc in the same change that adds or changes the behavior.
+- Public docs (`README.md` and any user-facing doc) track releases. Do not edit
+  them during feature work, because `main` may carry unreleased features and the
+  README must describe the latest published version. Update them only at release
+  time, alongside the `CHANGELOG.md` entry.
+
 ## Session Review
 
 Before committing or releasing substantial work, scan recent user corrections
@@ -68,6 +84,6 @@ in the active session. If a correction repeats or reveals a blind spot, harden
 one of these before reporting done:
 
 - A focused regression test.
-- `docs/spec.md` when behavior changed or was underspecified.
+- The relevant `docs/features/*` file when behavior changed or was underspecified.
 - `CLAUDE.md` when the agent workflow failed.
 - This file when the lesson explains why the harness rule exists.
