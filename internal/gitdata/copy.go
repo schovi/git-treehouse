@@ -45,7 +45,7 @@ func CopyWorktreeFiles(sourceRoot, destRoot string, files []string) []error {
 			continue
 		}
 		mode := info.Mode().Perm()
-		if err := os.WriteFile(destPath, contents, mode); err != nil {
+		if err := os.WriteFile(destPath, contents, mode); err != nil { // #nosec G703 -- relativePath is sanitized by cleanWorktreeFilePath, which rejects absolute paths and ".." escapes, so destPath stays within destRoot.
 			errs = append(errs, fmt.Errorf("%s: %w", file, err))
 			continue
 		}
