@@ -1,0 +1,47 @@
+Narrow variant, 1 column
+Details content width: 72-103 columns
+
++-- Details - Current worktree -----------------------------------------------+
+| Branch  docs/troubleshooting                                                |
+| HEAD    d3c7756 on docs/troubleshooting                                     |
+| Path    ../../../../worktrees/git-worktree-tui-troubleshooting              |
+| State   clean, origin synced, main +1 -24                                   |
+| Work    1 commit, 2 files, +42/-3                                           |
+| PR      #1 open, CI pending, 4 passed, 1 running                            |
+| Next    wait for checks or sync with main                                   |
+| Delete  allowed, branch deletion optional                                   |
+| Commit  d3c7756 docs: add troubleshooting guide, 47h                        |
++-- Enter go . o editor . d delete . y abs path . p PR ----------------------+
+
+Narrow dirty-row example
+
++-- Details ------------------------------------------------------------------+
+| Branch  feature/login                                                       |
+| HEAD    91ac32f on feature/login                                            |
+| Path    ../worktrees/git-treehouse-login                                    |
+| State   dirty, origin +1, main +3 -2                                        |
+| Dirty   staged 1, modified 2, untracked 4                                   |
+| Files   internal/tui/model.go; internal/gitdata/load.go; +5 more            |
+| Work    3 commits, 12 files, +280/-91                                       |
+| Next    review changes before delete                                        |
+| Delete  dirty removal off by default                                        |
+| Commit  91ac32f validate login status, 9m                                   |
++-- Enter go . o editor . d delete . y abs path . p PR ----------------------+
+
+Tiny fallback
+Details content width: below 72 columns
+
++-- Details ----------------------------------------+
+| docs/troubleshooting                              |
+| d3c7756 docs: add troubleshooting guide, 47h      |
+| clean | origin synced | main +1 -24               |
+| PR #1 open, CI pending                            |
+| Delete allowed, branch optional                   |
++-- Enter go . d delete . p PR --------------------+
+
+Why this variant:
+
+- It avoids side-by-side wrapping on narrow terminals.
+- It keeps the row's risk and next action visible.
+- It limits previews to one line so the table still has vertical room.
+

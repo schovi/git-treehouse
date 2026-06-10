@@ -1,0 +1,46 @@
+Medium variant, 2 columns
+Details content width: 104-149 columns
+
++-- Details - Current worktree ----------------------------------------------------------------+
+| Identity                               Context                                                 |
+| Branch  docs/troubleshooting           PR #1 open, CI pending                                  |
+| HEAD    d3c7756 on docs/...            Title   docs: add troubleshooting guide                 |
+| Path    ../../../../worktrees/...       Review  no requested changes                           |
+| Status  clean                          Checks  4 passed, 1 running                             |
+| Dirty   none                                                                                   |
+| Remote  origin/docs/..., synced         Work                                                    |
+| Main    +1 -24 vs local main            main -24 <- branch +1 -> origin                         |
+| Commit  d3c7756 docs: add..., 47h       1 commit, 2 files, +42/-3                               |
+| PR      #1 open, CI pending             d3c7756 docs: add troubleshooting guide                 |
+| Delete  allowed, branch optional                                                                |
+|                                         Safety                                                  |
+|                                         Next    wait for checks or sync with main               |
+|                                         Delete  allowed, branch deletion optional               |
+|                                         Disk    163K loaded                                     |
++-- Enter go . o editor . d delete . y abs path . p PR ----------------------------------------+
+
+Medium dirty-row example
+
++-- Details -----------------------------------------------------------------------------------+
+| Identity                               Context                                                 |
+| Branch  feature/login                  Dirty files                                             |
+| HEAD    91ac32f on feature/login       staged    internal/tui/model.go                         |
+| Path    ../worktrees/login...            modified  internal/gitdata/load.go                    |
+| Status  dirty                          modified  README.md                                     |
+| Dirty   staged 1, modified 2, ...      untracked docs/wireframes/login.txt                     |
+| Remote  origin/feature/login, +1       more      +3 files                                      |
+| Main    +3 -2 vs local main                                                                    |
+| Commit  91ac32f validate..., 9m        Work                                                    |
+| PR      none                           main -2 <- branch +3 -> origin +1                       |
+| Delete  blocked until dirty force      3 commits, 12 files, +280/-91                           |
+|                                         Safety                                                  |
+|                                         Next    review changes before delete                    |
+|                                         Delete  dirty removal off by default                    |
+|                                         Disk    69M loaded                                      |
++-- Enter go . o editor . d delete . y abs path . p PR ----------------------------------------+
+
+Why this variant:
+
+- This is the default target layout for normal terminals.
+- Identity remains scan-stable on the left.
+- The right column stacks whichever contextual sections apply.

@@ -1,0 +1,58 @@
+State-driven context variants
+
+These are right-column or context-column replacements. Only one or two should appear at a
+time, based on row state and available width.
+
+Clean branch with PR
+
+| PR, CI, and review                                |
+| PR      #1 open, CI pending                       |
+| Title   docs: add troubleshooting guide           |
+| Review  no requested changes                      |
+| Checks  4 passed, 1 running                       |
+| Next    wait for checks or sync with main         |
+
+Clean branch without PR
+
+| Work since main                                   |
+| Graph   main -24 <- branch +1 -> no upstream      |
+| Diff    1 commit, 2 files, +42/-3                 |
+| Commit  d3c7756 docs: add troubleshooting guide   |
+| Files   docs/troubleshooting.md; spec.md          |
+| Next    create PR or push upstream                |
+
+Dirty branch
+
+| Local changes                                     |
+| Dirty    1 staged, 2 modified, 4 untracked        |
+| Staged   internal/tui/model.go                    |
+| Modified internal/gitdata/load.go                 |
+| Modified README.md                                |
+| More     +4 files                                 |
+| Next     review or stash before delete            |
+| Delete   dirty removal off by default             |
+
+Prunable worktree
+
+| Cleanup                                           |
+| State   prunable                                  |
+| Reason  git worktree prune can remove this entry  |
+| Delete  allowed, removes stale metadata only      |
+| Branch  no branch delete command will run         |
+| Next    delete to prune the stale worktree record |
+
+Locked worktree
+
+| Cleanup blocker                                   |
+| State   locked                                    |
+| Reason  lock reason from git worktree list        |
+| Delete  blocked while locked                      |
+| Next    unlock outside git-treehouse, then reload |
+
+Large disk usage
+
+| Disk usage                                        |
+| Total   1.4G loaded                               |
+| Heavy   node_modules 980M                         |
+| Heavy   .git/worktrees/cache 220M                 |
+| Note    size is informational, not a delete guard |

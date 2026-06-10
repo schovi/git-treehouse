@@ -1,0 +1,38 @@
+Wide variant, 3 columns
+Details content width: 150+ columns
+
++-- Details - Current worktree -----------------------------------------------------------------------------------------------+
+| Identity                              Work since main                         Review, CI, and safety                         |
+| Branch  docs/troubleshooting          Graph  main -24 <- branch +1 -> origin  PR      #1 open, CI pending                    |
+| HEAD    d3c7756 on docs/...           Diff   1 commit, 2 files, +42/-3        Title   docs: add troubleshooting guide         |
+| Path    ../../../../worktrees/...      Commits                                Review  no requested changes                    |
+| Status  clean                         d3c7756 docs: add troubleshooting guide Checks  4 passed, 1 running                     |
+| Dirty   none                                                                  Next    wait for checks or sync with main       |
+| Remote  origin/docs/..., synced        Files                                  Delete  allowed, branch deletion optional       |
+| Main    +1 -24 vs local main           docs/troubleshooting.md  +39/-0        Disk    163K loaded                             |
+| Commit  d3c7756 docs: add..., 47h      spec.md                 +3/-3                                                          |
+| PR      #1 open, CI pending                                                                                                  |
+| Delete  allowed, branch deletion optional                                                                                   |
++-- Enter go . o editor . d delete . y abs path . p PR ----------------------------------------------------------------------+
+
+Wide dirty-row example
+
++-- Details ------------------------------------------------------------------------------------------------------------------+
+| Identity                              Work in progress                       Local changes and safety                        |
+| Branch  feature/login                 Graph  main -2 <- branch +3 -> origin  Dirty   1 staged, 2 modified, 4 untracked        |
+| HEAD    91ac32f on feature/login      Diff   3 commits, 12 files, +280/-91   Staged  internal/tui/model.go                    |
+| Path    ../worktrees/login...           Commits                             Modified internal/gitdata/load.go                |
+| Status  dirty                         91ac32f validate login status          Modified README.md                               |
+| Dirty   staged 1, modified 2, ...     44aa102 wire auth command              Untracked docs/wireframes/login.txt              |
+| Remote  origin/feature/login, +1      2ba9910 add login branch base          More    +3 files                                 |
+| Main    +3 -2 vs local main                                                   Next    review changes before delete             |
+| Commit  91ac32f validate..., 9m       Files                                  Delete  dirty removal off by default             |
+| PR      none                          internal/tui/model.go     +130/-44     Disk    69M loaded                               |
+| Delete  blocked until dirty force     internal/gitdata/load.go  +80/-30                                                      |
++-- Enter go . o editor . d delete . y abs path . p PR ----------------------------------------------------------------------+
+
+Why this variant:
+
+- It uses the right side for the information with the strongest row-specific payoff.
+- It avoids duplicating global keyboard controls.
+- It gives large terminals a complete inspection view without opening a modal.
