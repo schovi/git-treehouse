@@ -52,9 +52,13 @@ type Model struct {
 	checkoutDialog         *checkoutDialog
 	branchWorktreeDialog   *branchWorktreeDialog
 	deleteDialog           *deleteDialog
+	cleanupMergedDialog    *cleanupMergedDialog
 	deleteInFlight         bool
 	deleteID               int
 	deleteSpinnerFrame     int
+	cleanupMergedInFlight  bool
+	cleanupMergedID        int
+	cleanupMergedSpinner   int
 	paletteDialog          *paletteDialog
 	filterDialog           *filterDialog
 	pullRequestDialog      *pullRequestCheckoutDialog
@@ -68,6 +72,7 @@ type Model struct {
 	feedback               transientFeedback
 	feedbackID             int
 	pendingRestore         *pendingBranchRestore
+	pendingRestoreBatch    []pendingBranchRestore
 	enrichmentID           int
 	enrichmentContext      context.Context
 	enrichmentCancel       context.CancelFunc
@@ -145,6 +150,47 @@ type deleteDialog struct {
 	runBeforeDelete  bool
 	beforeDeleteHook string
 	error            string
+}
+
+type cleanupMergedDialog struct {
+	plan   cleanupMergedPlan
+	result *cleanupMergedResult
+	error  string
+}
+
+type cleanupMergedPlan struct {
+	worktrees []cleanupMergedWorktree
+	branches  []cleanupMergedBranch
+	skips     []cleanupMergedSkip
+}
+
+type cleanupMergedWorktree struct {
+	row              gitdata.Worktree
+	deleteBranch     bool
+	runBeforeDelete  bool
+	beforeDeleteHook string
+}
+
+type cleanupMergedBranch struct {
+	branch gitdata.Branch
+}
+
+type cleanupMergedSkip struct {
+	name   string
+	reason string
+}
+
+type cleanupMergedFailure struct {
+	name   string
+	reason string
+}
+
+type cleanupMergedResult struct {
+	removedWorktrees int
+	deletedBranches  int
+	skipped          int
+	failures         []cleanupMergedFailure
+	restores         []pendingBranchRestore
 }
 
 type pendingBranchRestore struct {
@@ -267,6 +313,16 @@ type deleteMsg struct {
 	completedAt   time.Time
 }
 
+type cleanupMergedMsg struct {
+	state         gitdata.State
+	repoConfig    config.RepoConfig
+	hooksApproved bool
+	result        cleanupMergedResult
+	err           error
+	id            int
+	completedAt   time.Time
+}
+
 type settingsSavedMsg struct {
 	err error
 }
@@ -328,6 +384,10 @@ type deleteSpinnerTickMsg struct {
 	id int
 }
 
+type cleanupMergedSpinnerTickMsg struct {
+	id int
+}
+
 type pullRequestSpinnerTickMsg struct {
 	id int
 }
@@ -369,6 +429,7 @@ const (
 	paletteOpenEditor          paletteCommandID = "open-editor"
 	paletteOpenPullRequest     paletteCommandID = "open-pull-request"
 	paletteCheckoutPullRequest paletteCommandID = "checkout-pull-request"
+	paletteCleanUpMerged       paletteCommandID = "clean-up-merged"
 	paletteCopyPath            paletteCommandID = "copy-path"
 	paletteCopyPullRequestURL  paletteCommandID = "copy-pull-request-url"
 	paletteRefresh             paletteCommandID = "refresh"
@@ -405,6 +466,7 @@ var paletteCommands = []paletteCommand{
 	{id: paletteCheckoutPullRequest, title: "Checkout PR", keywords: "github pr worktree branch"},
 	{id: paletteCopyPath, title: "Copy path or branch name", shortcut: "y", keywords: "clipboard branch path"},
 	{id: paletteCopyPullRequestURL, title: "Copy PR URL", keywords: "clipboard pull request link github url"},
+	{id: paletteCleanUpMerged, title: "Clean up merged", keywords: "done safe remove delete worktree branch cleanup"},
 	{id: paletteRefresh, title: "Fetch and reload", shortcut: "r", keywords: "refresh prune"},
 	{id: paletteSearch, title: "Search branches", shortcut: "s", keywords: "find filter"},
 	{id: paletteJumpRoot, title: "Jump to root repository", shortcut: "h", keywords: "main"},
@@ -706,6 +768,49 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model, flashCmd = model.setSuccessFeedbackFor(feedbackFrameWorktrees, text, successFeedbackTimeout)
 		}
 		return model, tea.Batch(enrichmentCmd, flashCmd)
+	case cleanupMergedMsg:
+		if message.id != model.cleanupMergedID || !model.cleanupMergedInFlight {
+			return model, nil
+		}
+		anchor := model.selectionAnchor()
+		model.cleanupMergedInFlight = false
+		model.cleanupMergedSpinner = 0
+		if message.err != nil {
+			if model.cleanupMergedDialog != nil {
+				model.cleanupMergedDialog.error = "× " + message.err.Error()
+				return model, nil
+			}
+			return model.setFlash("× " + message.err.Error())
+		}
+		model.state = message.state
+		model.repoConfig = message.repoConfig
+		model.hooksApproved = message.hooksApproved || !message.repoConfig.HasHooks()
+		model.showPR = model.state.Repo.RemoteConfigured
+		model.prLoading = false
+		model.applyCachedPullRequests()
+		if !message.completedAt.IsZero() {
+			model.lastRefreshAt = message.completedAt
+		}
+		model.restoreSelection(anchor)
+		model, enrichmentCmd := model.startEnrichment(true)
+		if len(message.result.failures) > 0 {
+			if model.cleanupMergedDialog == nil {
+				model.cleanupMergedDialog = &cleanupMergedDialog{}
+			}
+			model.cleanupMergedDialog.result = &message.result
+			model.cleanupMergedDialog.error = ""
+			model.pendingRestoreBatch = message.result.restores
+			model.pendingRestore = nil
+			return model, enrichmentCmd
+		}
+		model.cleanupMergedDialog = nil
+		var feedbackCmd tea.Cmd
+		if len(message.result.restores) > 0 {
+			model, feedbackCmd = model.setCleanupRestoreOffer(message.result)
+		} else {
+			model, feedbackCmd = model.setSuccessFeedbackFor(feedbackFrameWorktrees, cleanupMergedSummary(message.result), successFeedbackTimeout)
+		}
+		return model, tea.Batch(enrichmentCmd, feedbackCmd)
 	case actionMsg:
 		if message.err != nil {
 			return model.setFlash(message.err.Error())
@@ -801,6 +906,12 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		model.deleteSpinnerFrame = (model.deleteSpinnerFrame + 1) % len(refreshSpinnerFrames)
 		return model, deleteSpinnerTickCmd(model.deleteID)
+	case cleanupMergedSpinnerTickMsg:
+		if message.id != model.cleanupMergedID || !model.cleanupMergedInFlight {
+			return model, nil
+		}
+		model.cleanupMergedSpinner = (model.cleanupMergedSpinner + 1) % len(refreshSpinnerFrames)
+		return model, cleanupMergedSpinnerTickCmd(model.cleanupMergedID)
 	case pullRequestSpinnerTickMsg:
 		if model.pullRequestDialog == nil ||
 			message.id != model.pullRequestDialog.id ||
@@ -821,6 +932,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if model.deleteDialog != nil {
 			return model.updateDelete(message)
+		}
+		if model.cleanupMergedDialog != nil {
+			return model.updateCleanupMerged(message)
 		}
 		if model.paletteDialog != nil {
 			return model.updatePalette(message)
@@ -930,7 +1044,7 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 	case "r":
 		return model.startRefresh(true, false)
 	case "u":
-		if model.pendingRestore == nil || model.deleteInFlight {
+		if !model.hasPendingRestore() || model.deleteInFlight || model.cleanupMergedInFlight {
 			return model, nil
 		}
 		return model.startRestore()
@@ -952,7 +1066,7 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (model Model) startRefresh(fetch, automatic bool) (Model, tea.Cmd) {
-	if model.refreshInFlight {
+	if model.refreshInFlight || model.cleanupMergedInFlight {
 		return model, nil
 	}
 	model = model.cancelEnrichment()
@@ -986,12 +1100,14 @@ func (model Model) canAutoRefresh() bool {
 func (model Model) canApplyAutoRefresh() bool {
 	return model.loading == "" &&
 		!model.deleteInFlight &&
+		!model.cleanupMergedInFlight &&
 		!model.searching &&
 		!model.help &&
 		model.createDialog == nil &&
 		model.checkoutDialog == nil &&
 		model.branchWorktreeDialog == nil &&
 		model.deleteDialog == nil &&
+		model.cleanupMergedDialog == nil &&
 		model.paletteDialog == nil &&
 		model.filterDialog == nil &&
 		model.pullRequestDialog == nil
@@ -1105,6 +1221,8 @@ func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
 		}
 	case paletteCheckoutPullRequest:
 		return model.openPullRequestCheckout()
+	case paletteCleanUpMerged:
+		return model.openCleanupMerged()
 	case paletteCopyPath:
 		text, flash, ok := model.selectedCopyText()
 		if !ok {
@@ -1895,6 +2013,211 @@ func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 	return model, nil
 }
 
+func (model Model) openCleanupMerged() (Model, tea.Cmd) {
+	plan := model.planCleanupMerged()
+	if !plan.hasActions() {
+		return model.setFlash("no merged worktrees or branches to clean up")
+	}
+	model.help = false
+	model.paletteDialog = nil
+	model.filterDialog = nil
+	model.createDialog = nil
+	model.checkoutDialog = nil
+	model.branchWorktreeDialog = nil
+	model.deleteDialog = nil
+	model.pullRequestDialog = nil
+	model.cleanupMergedDialog = &cleanupMergedDialog{plan: plan}
+	return model, nil
+}
+
+func (model Model) updateCleanupMerged(message tea.KeyMsg) (Model, tea.Cmd) {
+	if model.cleanupMergedInFlight {
+		return model, nil
+	}
+	switch message.String() {
+	case "esc":
+		model.cleanupMergedDialog = nil
+		return model, nil
+	case "u":
+		if model.cleanupMergedDialog != nil && model.cleanupMergedDialog.result != nil && model.hasPendingRestore() {
+			model.cleanupMergedDialog = nil
+			return model.startRestore()
+		}
+		return model, nil
+	case "enter":
+		if model.cleanupMergedDialog == nil || model.cleanupMergedDialog.result != nil {
+			return model, nil
+		}
+		return model.startCleanupMerged(model.cleanupMergedDialog.plan)
+	}
+	return model, nil
+}
+
+func (model Model) startCleanupMerged(plan cleanupMergedPlan) (Model, tea.Cmd) {
+	model = model.cancelEnrichment()
+	model.enrichmentID++
+	model.cleanupMergedID++
+	model.cleanupMergedInFlight = true
+	model.cleanupMergedSpinner = 0
+	model.refreshInFlight = false
+	model.refreshID++
+	model.refreshAnchor = selectionAnchor{}
+	model.refreshProgressVisible = false
+	model = model.clearFeedback()
+	if model.cleanupMergedDialog != nil {
+		model.cleanupMergedDialog.error = ""
+	}
+	command := cleanupMergedAndLoadCmd(model.reloadCwd(), model.config, model.state.Repo, model.runner, model.cleanupMergedID, plan)
+	return model, tea.Batch(command, cleanupMergedSpinnerTickCmd(model.cleanupMergedID))
+}
+
+func cleanupMergedAndLoadCmd(cwd string, config config.Config, repo gitdata.Repository, runner gitdata.Runner, id int, plan cleanupMergedPlan) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		result := runCleanupMerged(ctx, repo, plan, runner)
+		state, err := loadStableState(ctx, cwd, config, runner)
+		if err != nil {
+			return cleanupMergedMsg{id: id, result: result, err: fmt.Errorf("cleaned up merged, but reload failed: %w", err)}
+		}
+		repoConfig, hooksApproved, err := loadRepoRuntimeConfig(ctx, state.Repo.Root, runner)
+		if err != nil {
+			return cleanupMergedMsg{id: id, result: result, err: fmt.Errorf("cleaned up merged, but reload failed: %w", err)}
+		}
+		return cleanupMergedMsg{id: id, state: state, repoConfig: repoConfig, hooksApproved: hooksApproved, result: result, completedAt: time.Now()}
+	}
+}
+
+func runCleanupMerged(ctx context.Context, repo gitdata.Repository, plan cleanupMergedPlan, runner gitdata.Runner) cleanupMergedResult {
+	result := cleanupMergedResult{skipped: len(plan.skips)}
+	for _, item := range plan.worktrees {
+		if item.runBeforeDelete && item.beforeDeleteHook != "" {
+			if err := gitdata.RunHook(ctx, item.row.Path, item.beforeDeleteHook, hookEnv("before_delete", item.row.Path, item.row.Branch, repo.Root, repo.MainBranch), runner); err != nil {
+				result.failures = append(result.failures, cleanupMergedFailure{name: cleanupWorktreeName(item.row), reason: err.Error()})
+				continue
+			}
+		}
+		if err := gitdata.RemoveWorktree(ctx, repo.Root, item.row.Path, false, runner); err != nil {
+			result.failures = append(result.failures, cleanupMergedFailure{name: cleanupWorktreeName(item.row), reason: err.Error()})
+			continue
+		}
+		result.removedWorktrees++
+		if !item.deleteBranch {
+			continue
+		}
+		if err := gitdata.DeleteBranch(ctx, repo.Root, item.row.Branch, false, runner); err != nil {
+			result.failures = append(result.failures, cleanupMergedFailure{name: item.row.Branch, reason: err.Error()})
+			continue
+		}
+		result.deletedBranches++
+		if restore, ok := restoreFromWorktree(item.row); ok {
+			result.restores = append(result.restores, restore)
+		}
+	}
+	for _, item := range plan.branches {
+		if err := gitdata.DeleteBranch(ctx, repo.Root, item.branch.Name, false, runner); err != nil {
+			result.failures = append(result.failures, cleanupMergedFailure{name: item.branch.Name, reason: err.Error()})
+			continue
+		}
+		result.deletedBranches++
+		if restore, ok := restoreFromBranch(item.branch); ok {
+			result.restores = append(result.restores, restore)
+		}
+	}
+	return result
+}
+
+func (model Model) planCleanupMerged() cleanupMergedPlan {
+	rows := model.state.TableRows(true)
+	plan := cleanupMergedPlan{}
+	for _, row := range rows {
+		if !cleanupMergedDone(row) {
+			continue
+		}
+		if row.IsBranch() {
+			branch := row.Branch
+			switch {
+			case branch.Name == "":
+				plan.skips = append(plan.skips, cleanupMergedSkip{name: "(unnamed branch)", reason: "branch name is missing"})
+			case model.state.Repo.MainBranch != "" && branch.Name == model.state.Repo.MainBranch:
+				plan.skips = append(plan.skips, cleanupMergedSkip{name: branch.Name, reason: "main branch"})
+			case !branch.BranchMergedToMain:
+				plan.skips = append(plan.skips, cleanupMergedSkip{name: branch.Name, reason: "branch is not merged into " + model.deleteMainBranchName()})
+			default:
+				plan.branches = append(plan.branches, cleanupMergedBranch{branch: branch})
+			}
+			continue
+		}
+		worktree := row.Worktree
+		if reason := model.cleanupMergedWorktreeSkipReason(worktree); reason != "" {
+			plan.skips = append(plan.skips, cleanupMergedSkip{name: cleanupWorktreeName(worktree), reason: reason})
+			continue
+		}
+		plan.worktrees = append(plan.worktrees, cleanupMergedWorktree{
+			row:              worktree,
+			deleteBranch:     worktree.Branch != "" && worktree.BranchMergedToMain,
+			runBeforeDelete:  model.hooksApproved && model.repoConfig.BeforeDelete != "",
+			beforeDeleteHook: model.repoConfig.BeforeDelete,
+		})
+	}
+	return plan
+}
+
+func cleanupMergedDone(row gitdata.Row) bool {
+	if row.IsBranch() {
+		return row.Branch.BranchMergedToMain || prMergedOrClosed(row)
+	}
+	return row.Worktree.BranchMergedToMain || prMergedOrClosed(row)
+}
+
+func (model Model) cleanupMergedWorktreeSkipReason(row gitdata.Worktree) string {
+	switch {
+	case row.IsMain:
+		return "main worktree"
+	case row.IsActive:
+		return "active worktree"
+	case row.Detached:
+		return "detached worktree"
+	case row.Prunable:
+		return "missing worktree metadata"
+	case row.Locked:
+		return "locked worktree"
+	case !row.LocalMetadataLoaded:
+		return "status is still loading"
+	case !row.Status.Clean():
+		return "uncommitted changes"
+	default:
+		return ""
+	}
+}
+
+func (plan cleanupMergedPlan) hasActions() bool {
+	return len(plan.worktrees) > 0 || len(plan.branches) > 0
+}
+
+func restoreFromWorktree(row gitdata.Worktree) (pendingBranchRestore, bool) {
+	if row.Branch == "" || row.Head == "" {
+		return pendingBranchRestore{}, false
+	}
+	return pendingBranchRestore{branch: row.Branch, sha: row.Head, short: row.CommitShort}, true
+}
+
+func restoreFromBranch(branch gitdata.Branch) (pendingBranchRestore, bool) {
+	if branch.Name == "" || branch.Head == "" {
+		return pendingBranchRestore{}, false
+	}
+	return pendingBranchRestore{branch: branch.Name, sha: branch.Head, short: branch.CommitShort}, true
+}
+
+func cleanupWorktreeName(row gitdata.Worktree) string {
+	if row.Branch != "" {
+		return row.Branch
+	}
+	if row.Path != "" {
+		return row.Path
+	}
+	return "(unnamed worktree)"
+}
+
 func (model Model) startDelete(text string, restore *pendingBranchRestore, action func(context.Context) error) (Model, tea.Cmd) {
 	model = model.cancelEnrichment()
 	model.enrichmentID++
@@ -1932,12 +2255,32 @@ func deleteAndLoadCmd(cwd string, config config.Config, runner gitdata.Runner, i
 }
 
 func (model Model) startRestore() (Model, tea.Cmd) {
-	restore := *model.pendingRestore
+	if len(model.pendingRestoreBatch) > 0 {
+		restores := append([]pendingBranchRestore(nil), model.pendingRestoreBatch...)
+		repo := model.state.Repo
+		runner := model.runner
+		return model.startDelete(restoredBranchesText(len(restores)), nil, func(ctx context.Context) error {
+			for _, restore := range restores {
+				if err := gitdata.CreateBranchAt(ctx, repo.Root, restore.branch, restore.sha, runner); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
 	repo := model.state.Repo
 	runner := model.runner
+	restore := *model.pendingRestore
 	return model.startDelete("restored branch "+restore.branch, nil, func(ctx context.Context) error {
 		return gitdata.CreateBranchAt(ctx, repo.Root, restore.branch, restore.sha, runner)
 	})
+}
+
+func restoredBranchesText(count int) string {
+	if count == 1 {
+		return "restored branch"
+	}
+	return fmt.Sprintf("restored %d branches", count)
 }
 
 func deleteBranchRow(ctx context.Context, repo gitdata.Repository, branch gitdata.Branch, runner gitdata.Runner) error {
@@ -2070,6 +2413,9 @@ func (model Model) View() string {
 	}
 	if model.deleteDialog != nil {
 		output = centeredOverlay(output, model.renderDeleteAtWidth(deleteDialogWidth(outerWidth)), outerWidth, overlayHeight)
+	}
+	if model.cleanupMergedDialog != nil {
+		output = centeredOverlay(output, model.renderCleanupMergedAtWidth(deleteDialogWidth(outerWidth)), outerWidth, overlayHeight)
 	}
 	if model.branchWorktreeDialog != nil {
 		output = centeredOverlay(output, model.renderBranchWorktreeAtWidth(checkoutDialogWidth(outerWidth)), outerWidth, overlayHeight)
@@ -3135,6 +3481,12 @@ func deleteSpinnerTickCmd(id int) tea.Cmd {
 	})
 }
 
+func cleanupMergedSpinnerTickCmd(id int) tea.Cmd {
+	return tea.Tick(refreshTickInterval, func(time.Time) tea.Msg {
+		return cleanupMergedSpinnerTickMsg{id: id}
+	})
+}
+
 func pullRequestSpinnerTickCmd(id int) tea.Cmd {
 	return tea.Tick(refreshTickInterval, func(time.Time) tea.Msg {
 		return pullRequestSpinnerTickMsg{id: id}
@@ -3183,6 +3535,7 @@ func (model Model) setSuccessFeedbackFor(frame feedbackFrame, text string, timeo
 
 func (model Model) setFeedbackFor(feedback transientFeedback, timeout time.Duration) (Model, tea.Cmd) {
 	model.pendingRestore = nil
+	model.pendingRestoreBatch = nil
 	model.feedbackID++
 	model.feedback = feedback
 	id := model.feedbackID
@@ -3195,6 +3548,7 @@ func (model Model) clearFeedback() Model {
 	model.feedbackID++
 	model.feedback = transientFeedback{}
 	model.pendingRestore = nil
+	model.pendingRestoreBatch = nil
 	return model
 }
 
@@ -3202,6 +3556,16 @@ func (model Model) setRestoreOffer(restore pendingBranchRestore) (Model, tea.Cmd
 	model, cmd := model.setFeedbackFor(restoreOfferFeedback(restore), restoreOfferTimeout)
 	model.pendingRestore = &restore
 	return model, cmd
+}
+
+func (model Model) setCleanupRestoreOffer(result cleanupMergedResult) (Model, tea.Cmd) {
+	model, cmd := model.setFeedbackFor(cleanupRestoreOfferFeedback(result), restoreOfferTimeout)
+	model.pendingRestoreBatch = append([]pendingBranchRestore(nil), result.restores...)
+	return model, cmd
+}
+
+func (model Model) hasPendingRestore() bool {
+	return model.pendingRestore != nil || len(model.pendingRestoreBatch) > 0
 }
 
 func restoreOfferFeedback(restore pendingBranchRestore) transientFeedback {
@@ -3214,6 +3578,32 @@ func restoreOfferFeedback(restore pendingBranchRestore) transientFeedback {
 
 func restoreOfferPrefix(restore pendingBranchRestore) string {
 	return "deleted " + restore.branch + " (" + restore.short + ") · "
+}
+
+func cleanupRestoreOfferFeedback(result cleanupMergedResult) transientFeedback {
+	return successFeedbackWithSegments(feedbackFrameWorktrees,
+		feedbackSegment{text: cleanupMergedSummary(result) + " · "},
+		feedbackSegment{text: "u", bold: true},
+		feedbackSegment{text: " to restore branches"},
+	)
+}
+
+func cleanupMergedSummary(result cleanupMergedResult) string {
+	parts := []string{
+		fmt.Sprintf("removed %d %s", result.removedWorktrees, pluralize(result.removedWorktrees, "worktree", "worktrees")),
+		fmt.Sprintf("deleted %d %s", result.deletedBranches, pluralize(result.deletedBranches, "branch", "branches")),
+	}
+	if len(result.failures) > 0 {
+		parts = append(parts, fmt.Sprintf("failed %d", len(result.failures)))
+	}
+	return "cleaned up merged: " + strings.Join(parts, ", ")
+}
+
+func pluralize(count int, singular, plural string) string {
+	if count == 1 {
+		return singular
+	}
+	return plural
 }
 
 func successFeedback(frame feedbackFrame, text string) transientFeedback {
@@ -3682,6 +4072,150 @@ func (model Model) renderBranchWorktreeAtWidth(width int) string {
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(truncatePlain(dialog.error, contentWidth)))
 	}
 	return dialogBox("New worktree", lines, colorKeyHints("Enter create + go · Esc cancel", false), width)
+}
+
+func (model Model) renderCleanupMergedAtWidth(width int) string {
+	dialog := model.cleanupMergedDialog
+	if dialog == nil {
+		return dialogBox("Clean up merged", []string{"No cleanup in progress."}, deleteDialogHintsAtWidth("Esc close", width-6), width)
+	}
+	if dialog.result != nil {
+		return model.renderCleanupMergedResultAtWidth(*dialog.result, dialog.error, width)
+	}
+	return model.renderCleanupMergedConfirmAtWidth(dialog.plan, dialog.error, width)
+}
+
+func (model Model) renderCleanupMergedConfirmAtWidth(plan cleanupMergedPlan, errorText string, width int) string {
+	contentWidth := max(1, width-4)
+	lines := []string{
+		dialogFieldLine("Worktrees", fmt.Sprintf("%d remove", len(plan.worktrees)), contentWidth),
+		dialogFieldLine("Branches", fmt.Sprintf("%d delete", plan.branchDeleteCount()), contentWidth),
+		"",
+	}
+	if len(plan.worktrees) > 0 {
+		lines = append(lines, deleteSectionTitle("Worktrees"))
+		for _, item := range limitedCleanupWorktrees(plan.worktrees, 5) {
+			lines = append(lines, deleteDetailLine(cleanupWorktreeLine(item.row, item.deleteBranch)))
+		}
+		if extra := len(plan.worktrees) - min(len(plan.worktrees), 5); extra > 0 {
+			lines = append(lines, deleteDetailLine(hintStyle.Render(fmt.Sprintf("+%d more", extra))))
+		}
+		lines = append(lines, "")
+	}
+	if plan.branchOnlyDeleteCount() > 0 {
+		lines = append(lines, deleteSectionTitle("Branch-only"))
+		for _, item := range limitedCleanupBranches(plan.branches, 5) {
+			lines = append(lines, deleteDetailLine(item.branch.DisplayBranch()))
+		}
+		if extra := len(plan.branches) - min(len(plan.branches), 5); extra > 0 {
+			lines = append(lines, deleteDetailLine(hintStyle.Render(fmt.Sprintf("+%d more", extra))))
+		}
+		lines = append(lines, "")
+	}
+	lines = append(lines, deleteSectionTitle("Commands"))
+	for _, command := range plan.cleanupCommands() {
+		lines = append(lines, deleteCommandLine(command, false))
+	}
+	if errorText != "" {
+		lines = append(lines, "", deleteDangerStyle.Render(errorText))
+	}
+	for index, line := range lines {
+		lines[index] = truncateStyled(line, contentWidth)
+	}
+	return dialogBox("Clean up merged", lines, model.cleanupMergedBottomContent("Enter clean up · Esc cancel", width-6), width)
+}
+
+func (model Model) renderCleanupMergedResultAtWidth(result cleanupMergedResult, errorText string, width int) string {
+	contentWidth := max(1, width-4)
+	lines := []string{
+		deleteDangerStyle.Render("Clean up partially completed."),
+		"",
+		dialogFieldLine("Worktrees", strconv.Itoa(result.removedWorktrees), contentWidth),
+		dialogFieldLine("Branches", strconv.Itoa(result.deletedBranches), contentWidth),
+		dialogFieldLine("Failures", strconv.Itoa(len(result.failures)), contentWidth),
+		"",
+		deleteSectionTitle("Failures"),
+	}
+	for _, failure := range limitedCleanupFailures(result.failures, 6) {
+		lines = append(lines, deleteDetailLine(failure.name+": "+failure.reason))
+	}
+	if extra := len(result.failures) - min(len(result.failures), 6); extra > 0 {
+		lines = append(lines, deleteDetailLine(hintStyle.Render(fmt.Sprintf("+%d more", extra))))
+	}
+	if errorText != "" {
+		lines = append(lines, "", deleteDangerStyle.Render(errorText))
+	}
+	for index, line := range lines {
+		lines[index] = truncateStyled(line, contentWidth)
+	}
+	footer := "Esc close"
+	if len(result.restores) > 0 {
+		footer = "u restore branches · Esc close"
+	}
+	return dialogBox("Clean up merged", lines, deleteDialogHintsAtWidth(footer, width-6), width)
+}
+
+func (model Model) cleanupMergedProgressText() string {
+	frame := refreshSpinnerFrames[model.cleanupMergedSpinner%len(refreshSpinnerFrames)]
+	return refreshActivityStyle.Render(frame + " cleaning")
+}
+
+func (model Model) cleanupMergedBottomContent(content string, width int) string {
+	if model.cleanupMergedInFlight {
+		return truncateStyled(model.cleanupMergedProgressText(), width)
+	}
+	return deleteDialogHintsAtWidth(content, width)
+}
+
+func cleanupWorktreeLine(row gitdata.Worktree, deleteBranch bool) string {
+	action := "remove worktree"
+	if deleteBranch {
+		action += ", delete branch"
+	}
+	return cleanupWorktreeName(row) + " · " + action
+}
+
+func limitedCleanupWorktrees(items []cleanupMergedWorktree, limit int) []cleanupMergedWorktree {
+	return items[:min(len(items), limit)]
+}
+
+func limitedCleanupBranches(items []cleanupMergedBranch, limit int) []cleanupMergedBranch {
+	return items[:min(len(items), limit)]
+}
+
+func limitedCleanupFailures(items []cleanupMergedFailure, limit int) []cleanupMergedFailure {
+	return items[:min(len(items), limit)]
+}
+
+func (plan cleanupMergedPlan) branchDeleteCount() int {
+	count := len(plan.branches)
+	for _, item := range plan.worktrees {
+		if item.deleteBranch {
+			count++
+		}
+	}
+	return count
+}
+
+func (plan cleanupMergedPlan) branchOnlyDeleteCount() int {
+	return len(plan.branches)
+}
+
+func (plan cleanupMergedPlan) cleanupCommands() []string {
+	commands := []string{}
+	for _, item := range plan.worktrees {
+		if item.runBeforeDelete && item.beforeDeleteHook != "" {
+			commands = append(commands, "sh -c "+fmt.Sprintf("%q", item.beforeDeleteHook))
+		}
+		commands = append(commands, "git worktree remove "+item.row.Path)
+		if item.deleteBranch {
+			commands = append(commands, "git branch -d "+item.row.Branch)
+		}
+	}
+	for _, item := range plan.branches {
+		commands = append(commands, "git branch -d "+item.branch.Name)
+	}
+	return commands
 }
 
 func (model Model) renderDeleteAtWidth(width int) string {

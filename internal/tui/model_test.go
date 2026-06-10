@@ -1315,6 +1315,56 @@ func TestMergedFilterIncludesSafeCleanupRows(t *testing.T) {
 	}
 }
 
+func TestPlanCleanupMergedScansDoneRowsAndSkipsUnsafeRows(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, BranchMergedToMain: true},
+		{Path: "/repo/safe", Branch: "safe", Head: "1111111111111111111111111111111111111111", CommitShort: "1111111", BranchMergedToMain: true},
+		{Path: "/repo/pr-closed", Branch: "pr-closed", PR: &gitdata.PullRequest{Number: 2, State: "✕"}},
+		{Path: "/repo/dirty", Branch: "dirty", Status: gitdata.StatusCounts{Modified: 1}, BranchMergedToMain: true},
+		{Path: "/repo/locked", Branch: "locked", Locked: true, BranchMergedToMain: true},
+		{Path: "/repo/active", Branch: "active", IsActive: true, BranchMergedToMain: true},
+		{Path: "/repo/detached", Head: "abc123456", Detached: true, BranchMergedToMain: true},
+		{Path: "/repo/prunable", Branch: "prunable", Prunable: true, BranchMergedToMain: true},
+		{Path: "/repo/loading", Branch: "loading", BranchMergedToMain: true},
+	})
+	model.state.Rows[8].LocalMetadataLoaded = false
+	model.state.Branches = []gitdata.Branch{
+		{Name: "branch-merged", Head: "2222222222222222222222222222222222222222", CommitShort: "2222222", BranchMergedToMain: true},
+		{Name: "branch-closed", PR: &gitdata.PullRequest{Number: 3, State: "✕"}},
+	}
+	model.search.SetValue("does-not-match")
+	model.filter = filterModified
+
+	plan := model.planCleanupMerged()
+
+	if len(plan.worktrees) != 2 {
+		t.Fatalf("worktree actions = %+v, want safe and pr-closed", plan.worktrees)
+	}
+	if plan.worktrees[0].row.Branch != "safe" || !plan.worktrees[0].deleteBranch {
+		t.Fatalf("first worktree action = %+v, want safe branch delete", plan.worktrees[0])
+	}
+	if plan.worktrees[1].row.Branch != "pr-closed" || plan.worktrees[1].deleteBranch {
+		t.Fatalf("second worktree action = %+v, want pr-closed without branch delete", plan.worktrees[1])
+	}
+	if len(plan.branches) != 1 || plan.branches[0].branch.Name != "branch-merged" {
+		t.Fatalf("branch actions = %+v, want branch-merged", plan.branches)
+	}
+	for _, want := range []cleanupMergedSkip{
+		{name: "main", reason: "main worktree"},
+		{name: "dirty", reason: "uncommitted changes"},
+		{name: "locked", reason: "locked worktree"},
+		{name: "active", reason: "active worktree"},
+		{name: "/repo/detached", reason: "detached worktree"},
+		{name: "prunable", reason: "missing worktree metadata"},
+		{name: "loading", reason: "status is still loading"},
+		{name: "branch-closed", reason: "branch is not merged into main"},
+	} {
+		if !hasCleanupSkip(plan.skips, want) {
+			t.Fatalf("skips missing %+v: %+v", want, plan.skips)
+		}
+	}
+}
+
 func TestFilterCombinesWithBranchSearch(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/alpha-clean", Branch: "alpha-clean"},
@@ -1509,24 +1559,40 @@ func TestCommandPaletteFiltersMerged(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/merged", Branch: "merged", BranchMergedToMain: true},
 	})
+	model.paletteDialog = &paletteDialog{}
+
+	model, cmd := model.executePaletteCommand(paletteFilterMerged)
+
+	if cmd != nil {
+		t.Fatalf("palette merged filter returned command, want nil")
+	}
+	if model.filter != filterMerged {
+		t.Fatalf("filter = %q, want merged", model.filter.label())
+	}
+}
+
+func TestCommandPaletteOpensCleanUpMerged(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/merged", Branch: "merged", BranchMergedToMain: true},
+	})
 	model, _ = model.openPalette()
 	model.paletteDialog.input.SetValue("cleanup")
 
 	commands := model.matchingPaletteCommands()
-	if len(commands) != 1 || commands[0].id != paletteFilterMerged {
-		t.Fatalf("matching palette commands = %+v, want only merged filter", commands)
+	if len(commands) == 0 || commands[0].id != paletteCleanUpMerged {
+		t.Fatalf("matching palette commands = %+v, want clean up merged first", commands)
 	}
 
 	model, cmd := model.updatePalette(tea.KeyMsg{Type: tea.KeyEnter})
 
 	if cmd != nil {
-		t.Fatalf("palette merged filter returned command, want nil")
+		t.Fatalf("palette cleanup returned command, want nil")
 	}
 	if model.paletteDialog != nil {
 		t.Fatal("palette should close after command execution")
 	}
-	if model.filter != filterMerged {
-		t.Fatalf("filter = %q, want merged", model.filter.label())
+	if model.cleanupMergedDialog == nil {
+		t.Fatal("cleanup command should open confirmation dialog")
 	}
 }
 
@@ -1539,8 +1605,8 @@ func TestCommandPaletteIncludesCopyPullRequestURL(t *testing.T) {
 	for _, query := range []string{"url", "pull request"} {
 		model.paletteDialog.input.SetValue(query)
 		commands := model.matchingPaletteCommands()
-		if len(commands) != 1 || commands[0].id != paletteCopyPullRequestURL || commands[0].title != "Copy PR URL" {
-			t.Fatalf("matching palette commands for %q = %+v, want Copy PR URL", query, commands)
+		if len(commands) == 0 || commands[0].id != paletteCopyPullRequestURL || commands[0].title != "Copy PR URL" {
+			t.Fatalf("matching palette commands for %q = %+v, want Copy PR URL first", query, commands)
 		}
 		if commands[0].shortcut != "" {
 			t.Fatalf("Copy PR URL shortcut = %q, want palette-only command", commands[0].shortcut)
@@ -2858,6 +2924,214 @@ func TestOpenDeleteShowsBeforeDeleteHookToggle(t *testing.T) {
 	}
 }
 
+func TestOpenCleanupMergedWithoutActionsFlashes(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{Path: "/repo/dirty", Branch: "dirty", Status: gitdata.StatusCounts{Modified: 1}, BranchMergedToMain: true},
+	})
+
+	model, cmd := model.openCleanupMerged()
+
+	if cmd == nil {
+		t.Fatal("no cleanup actions should set a flash clear command")
+	}
+	if model.cleanupMergedDialog != nil {
+		t.Fatal("no cleanup actions should not open dialog")
+	}
+	if model.flash != "no merged worktrees or branches to clean up" {
+		t.Fatalf("flash = %q", model.flash)
+	}
+}
+
+func TestOpenCleanupMergedRendersConfirmation(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, BranchMergedToMain: true},
+		{Path: "/repo/feature", Branch: "feature", BranchMergedToMain: true},
+		{Path: "/repo/closed", Branch: "closed", PR: &gitdata.PullRequest{Number: 2, State: "✕"}},
+		{Path: "/repo/dirty", Branch: "dirty", Status: gitdata.StatusCounts{Modified: 1}, BranchMergedToMain: true},
+	})
+	model.repoConfig = appconfig.RepoConfig{BeforeDelete: "docker compose down"}
+	model.hooksApproved = true
+	model.state.Branches = []gitdata.Branch{{Name: "branch-only", BranchMergedToMain: true}}
+
+	model, _ = model.openCleanupMerged()
+
+	if model.cleanupMergedDialog == nil {
+		t.Fatal("cleanup should open confirmation dialog")
+	}
+	output := ansi.Strip(model.renderCleanupMergedAtWidth(100))
+	for _, want := range []string{
+		"Worktrees:",
+		"2 remove",
+		"Branches:",
+		"2 delete",
+		"feature · remove worktree, delete branch",
+		"closed · remove worktree",
+		"branch-only",
+		"git worktree remove /repo/feature",
+		"git branch -d feature",
+		"git worktree remove /repo/closed",
+		"git branch -d branch-only",
+		`sh -c "docker compose down"`,
+		"Enter clean up",
+		"Esc cancel",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("cleanup confirmation missing %q:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"Skipped:", "dirty: uncommitted changes", "git branch -d <branch>"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("cleanup confirmation should not contain %q:\n%s", unwanted, output)
+		}
+	}
+}
+
+func TestCleanupMergedProgressRendersInBottomBorder(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature", BranchMergedToMain: true},
+	})
+	model, _ = model.openCleanupMerged()
+	model.cleanupMergedInFlight = true
+
+	output := model.renderCleanupMergedAtWidth(80)
+	outputLines := strings.Split(output, "\n")
+
+	if !strings.Contains(outputLines[len(outputLines)-1], "⠋ cleaning") {
+		t.Fatalf("cleanup modal should show progress in bottom border:\n%s", output)
+	}
+	if strings.Count(ansi.Strip(output), "cleaning") != 1 {
+		t.Fatalf("cleanup modal should render progress once:\n%s", output)
+	}
+}
+
+func TestCleanupMergedCommandRunsSafeBatchAndReloads(t *testing.T) {
+	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
+	results := stableLoadResults(worktreeList)
+	results["/repo/feature|sh -c docker compose down"] = recordingResult{}
+	results["/repo/main|git worktree remove /repo/feature"] = recordingResult{}
+	results["/repo/main|git branch -d feature"] = recordingResult{}
+	results["/repo/main|git branch -d branch-only"] = recordingResult{}
+	runner := &recordingRunner{results: results}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{
+			Path:               "/repo/feature",
+			Branch:             "feature",
+			Head:               "1111111111111111111111111111111111111111",
+			CommitShort:        "1111111",
+			BranchMergedToMain: true,
+		},
+	})
+	model.runner = runner
+	model.repoConfig = appconfig.RepoConfig{BeforeDelete: "docker compose down"}
+	model.hooksApproved = true
+	model.state.Branches = []gitdata.Branch{{
+		Name:               "branch-only",
+		Head:               "2222222222222222222222222222222222222222",
+		CommitShort:        "2222222",
+		BranchMergedToMain: true,
+	}}
+	model, _ = model.openCleanupMerged()
+
+	started, cmd := model.updateCleanupMerged(tea.KeyMsg{Type: tea.KeyEnter})
+	message := firstCleanupMergedMessage(t, cmd)
+
+	if message.err != nil {
+		t.Fatalf("cleanup command error = %v", message.err)
+	}
+	if message.result.removedWorktrees != 1 || message.result.deletedBranches != 2 || len(message.result.failures) != 0 {
+		t.Fatalf("cleanup result = %+v, want one worktree and two branches", message.result)
+	}
+	for _, want := range []string{
+		"/repo/feature|sh -c docker compose down",
+		"/repo/main|git worktree remove /repo/feature",
+		"/repo/main|git branch -d feature",
+		"/repo/main|git branch -d branch-only",
+	} {
+		if !hasCommand(runner.commands, want) {
+			t.Fatalf("commands missing %q: %v", want, runner.commands)
+		}
+	}
+	for _, command := range runner.commands {
+		if strings.Contains(command, "--force") || strings.Contains(command, "git branch -D") {
+			t.Fatalf("cleanup should not run force commands: %v", runner.commands)
+		}
+	}
+	if len(runner.envCommands) != 1 {
+		t.Fatalf("env commands = %+v, want one before_delete hook", runner.envCommands)
+	}
+	for _, wantEnv := range []string{
+		"GTH_EVENT=before_delete",
+		"GTH_WORKTREE_PATH=/repo/feature",
+		"GTH_WORKTREE_BRANCH=feature",
+		"GTH_REPO_ROOT=/repo/main",
+	} {
+		if !slices.Contains(runner.envCommands[0].env, wantEnv) {
+			t.Fatalf("hook env missing %q: %#v", wantEnv, runner.envCommands[0].env)
+		}
+	}
+
+	updated, _ := updateModel(t, started, message)
+
+	if updated.cleanupMergedDialog != nil {
+		t.Fatal("successful cleanup should close dialog")
+	}
+	if len(updated.pendingRestoreBatch) != 2 {
+		t.Fatalf("pending restore batch = %+v, want two branches", updated.pendingRestoreBatch)
+	}
+	for _, want := range []string{"cleaned up merged: removed 1 worktree, deleted 2 branches", "u to restore branches"} {
+		if !strings.Contains(updated.feedback.plainText(), want) {
+			t.Fatalf("cleanup feedback missing %q: %q", want, updated.feedback.plainText())
+		}
+	}
+}
+
+func TestCleanupMergedPartialFailureKeepsResultDialog(t *testing.T) {
+	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
+	results := stableLoadResults(worktreeList)
+	results["/repo/feature|sh -c docker compose down"] = recordingResult{err: errors.New("cleanup failed")}
+	results["/repo/main|git branch -d branch-only"] = recordingResult{}
+	runner := &recordingRunner{results: results}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{Path: "/repo/feature", Branch: "feature", BranchMergedToMain: true},
+	})
+	model.runner = runner
+	model.repoConfig = appconfig.RepoConfig{BeforeDelete: "docker compose down"}
+	model.hooksApproved = true
+	model.state.Branches = []gitdata.Branch{{
+		Name:               "branch-only",
+		Head:               "2222222222222222222222222222222222222222",
+		CommitShort:        "2222222",
+		BranchMergedToMain: true,
+	}}
+	model, _ = model.openCleanupMerged()
+
+	started, cmd := model.updateCleanupMerged(tea.KeyMsg{Type: tea.KeyEnter})
+	message := firstCleanupMergedMessage(t, cmd)
+	updated, _ := updateModel(t, started, message)
+
+	if message.result.removedWorktrees != 0 || message.result.deletedBranches != 1 || len(message.result.failures) != 1 {
+		t.Fatalf("cleanup result = %+v, want partial failure", message.result)
+	}
+	if hasCommand(runner.commands, "/repo/main|git worktree remove /repo/feature") {
+		t.Fatalf("hook failure should skip worktree removal: %v", runner.commands)
+	}
+	if updated.cleanupMergedDialog == nil || updated.cleanupMergedDialog.result == nil {
+		t.Fatal("partial cleanup should keep result dialog open")
+	}
+	output := ansi.Strip(updated.renderCleanupMergedAtWidth(100))
+	for _, want := range []string{"partially completed", "feature: cleanup failed", "Failures:", "1", "u restore branches", "Esc close"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("partial cleanup dialog missing %q:\n%s", want, output)
+		}
+	}
+	if len(updated.pendingRestoreBatch) != 1 || updated.pendingRestoreBatch[0].branch != "branch-only" {
+		t.Fatalf("pending restore batch = %+v, want branch-only", updated.pendingRestoreBatch)
+	}
+}
+
 func TestDeleteHookToggleDisablesBeforeDelete(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main", IsMain: true},
@@ -3239,6 +3513,51 @@ func TestRestoreKeyWithoutPendingRestoreIsNoOp(t *testing.T) {
 	}
 	if updated.selected != model.selected || updated.feedback.plainText() != model.feedback.plainText() || updated.pendingRestore != nil {
 		t.Fatalf("model changed on restore no-op: %+v", updated)
+	}
+}
+
+func TestRestoreKeyRestoresPendingBranchBatch(t *testing.T) {
+	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
+	results := stableLoadResults(worktreeList)
+	results["/repo/main|git branch first 1111111111111111111111111111111111111111"] = recordingResult{}
+	results["/repo/main|git branch second 2222222222222222222222222222222222222222"] = recordingResult{}
+	runner := &recordingRunner{results: results}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.runner = runner
+	model.pendingRestoreBatch = []pendingBranchRestore{
+		{branch: "first", sha: "1111111111111111111111111111111111111111", short: "1111111"},
+		{branch: "second", sha: "2222222222222222222222222222222222222222", short: "2222222"},
+	}
+	model.feedback = cleanupRestoreOfferFeedback(cleanupMergedResult{
+		removedWorktrees: 1,
+		deletedBranches:  2,
+		restores:         model.pendingRestoreBatch,
+	})
+
+	started, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	message := firstDeleteMessage(t, cmd)
+
+	if message.err != nil {
+		t.Fatalf("restore batch command error = %v", message.err)
+	}
+	for _, want := range []string{
+		"/repo/main|git branch first 1111111111111111111111111111111111111111",
+		"/repo/main|git branch second 2222222222222222222222222222222222222222",
+	} {
+		if !hasCommand(runner.commands, want) {
+			t.Fatalf("commands missing %q: %v", want, runner.commands)
+		}
+	}
+
+	updated, _ := updateModel(t, started, message)
+
+	if updated.pendingRestoreBatch != nil {
+		t.Fatalf("pending restore batch after success = %+v, want nil", updated.pendingRestoreBatch)
+	}
+	if updated.feedback.plainText() != "✓ restored 2 branches" {
+		t.Fatalf("restore success feedback = %q", updated.feedback.plainText())
 	}
 }
 
@@ -3757,6 +4076,10 @@ func TestAutoRefreshSkipsBlockedStates(t *testing.T) {
 			model: Model{refreshID: 7, deleteInFlight: true},
 		},
 		{
+			name:  "cleanup merged in flight",
+			model: Model{refreshID: 7, cleanupMergedInFlight: true},
+		},
+		{
 			name:  "searching",
 			model: Model{refreshID: 7, searching: true},
 		},
@@ -3779,6 +4102,10 @@ func TestAutoRefreshSkipsBlockedStates(t *testing.T) {
 		{
 			name:  "delete dialog",
 			model: Model{refreshID: 7, deleteDialog: &deleteDialog{}},
+		},
+		{
+			name:  "cleanup merged dialog",
+			model: Model{refreshID: 7, cleanupMergedDialog: &cleanupMergedDialog{}},
 		},
 		{
 			name:  "command palette",
@@ -4057,6 +4384,24 @@ func firstDeleteMessage(t *testing.T, cmd tea.Cmd) deleteMsg {
 	return message
 }
 
+func firstCleanupMergedMessage(t *testing.T, cmd tea.Cmd) cleanupMergedMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("cleanup command is nil")
+	}
+	batchMessage := cmd()
+	batch, ok := batchMessage.(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("cleanup command returned %T, want BatchMsg with cleanup command", batchMessage)
+	}
+	firstMessage := batch[0]()
+	message, ok := firstMessage.(cleanupMergedMsg)
+	if !ok {
+		t.Fatalf("first cleanup batch message = %T, want cleanupMergedMsg", firstMessage)
+	}
+	return message
+}
+
 func testModelWithRows(rows []gitdata.Worktree) Model {
 	for index := range rows {
 		rows[index].LocalMetadataLoaded = true
@@ -4085,6 +4430,15 @@ func stableLoadResults(worktreeList string) map[string]recordingResult {
 func hasCommand(commands []string, want string) bool {
 	for _, command := range commands {
 		if command == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCleanupSkip(skips []cleanupMergedSkip, want cleanupMergedSkip) bool {
+	for _, skip := range skips {
+		if skip.name == want.name && skip.reason == want.reason {
 			return true
 		}
 	}

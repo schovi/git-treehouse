@@ -22,3 +22,16 @@ The delete flow states exactly what will happen:
 After a branch ref is deleted, either from a branch-only row or a worktree plus branch delete, a green Worktrees status offer appears for about 10 seconds: `✓ deleted <name> (<short-sha>) · u to restore`, with `u` styled as a key. Pressing `u` recreates the ref with `git branch <name> <sha>`. This restores only the branch ref, not worktree files or discarded uncommitted changes. The offer is superseded by the next delete or refresh.
 
 **Prunable rows** (directory missing) open a prune-only confirmation. The dialog offers `git worktree prune`-equivalent cleanup and does not show the branch deletion checkbox.
+
+**Clean up merged** is a palette-only batch command. It scans all done rows, regardless of the current filter or search: worktrees or branch-only rows merged into main, plus worktrees whose PR is merged or closed. It opens a confirmation dialog with counts for worktrees to remove and branches to delete, representative affected rows, and the exact commands that will run.
+
+The batch stays conservative:
+
+- Worktree removal uses only `git worktree remove`, never `--force`.
+- Branch deletion uses only `git branch -d`, never `-D`.
+- Clean, unlocked, non-root, non-active worktrees are removed. Dirty, locked, active, root, detached, prunable, and not-yet-loaded rows are ignored.
+- Worktree branches are deleted only when merged into main. PR merged/closed worktrees that are not merged into main are removed, but their local branch is kept.
+- Merged branch-only rows are deleted with `git branch -d`; branch-only rows that are only PR merged/closed are skipped.
+- Approved `before_delete` hooks run once per removed worktree before removal. Hook failure counts as that row's failure and skips its removal; the rest of the batch continues.
+
+Full success closes the dialog and shows a Worktrees success message summarizing removed worktrees and deleted branches. Partial failure keeps a result dialog open with counts and failure reasons. When the batch deletes branch refs with known SHAs, the success message offers `u` to restore all deleted branch refs.

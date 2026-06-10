@@ -25,4 +25,4 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 | `q`, `Ctrl+C` | Quit immediately from list view (no cd) |
 | `?` | Toggle a help overlay with the full key list |
 
-No multi-select / bulk operations in v1; every action applies to the focused row.
+No generic multi-select in v1. Most actions apply to the focused row; `Clean up merged` is a dedicated palette-only batch command over safe merged cleanup candidates.

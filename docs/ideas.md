@@ -46,7 +46,7 @@ Backlog notes for future `git-treehouse` releases. These are intentionally light
 ## Cleanup and Filtering
 
 - Add a "merged" / "done" filter that surfaces live worktrees safe to remove (clean working tree, merged to main, or PR merged/closed). The current `Tab` `prunable` filter only catches worktrees whose directory is already gone, not finished-but-still-present ones.
-- Consider a bulk "clean up merged" action over that filtered set, staying within conservative defaults (clean + merged only). If repo `before_delete` hooks are enabled, each item should run its hook inside the batch; a hook failure counts as that item's failure and skips its removal.
+- Consider generic bulk selection later if there are enough useful actions to justify the extra UI state. Possible actions: copy selected paths or branch names, open selected worktrees in the configured editor, prune selected missing worktree metadata, delete selected safe branches with `git branch -d`, or lock/unlock selected worktrees. Bulk delete remains the risky case because rows can mix dirty worktrees, locked worktrees, active/root rows, detached worktrees, branch-only rows, unmerged branches, and hook failures.
 
 ## Navigation and Opening
 
