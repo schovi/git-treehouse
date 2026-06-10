@@ -198,6 +198,16 @@ Path:   /Users/me/work/.worktrees/api/feature-login
 
 To change where new worktrees go, press `ctrl+o` in the create popup. This opens `~/.config/git-treehouse/config.toml`. Save the file and `git-treehouse` reloads it while the popup is still open.
 
+### Checkout A Pull Request
+
+1. Press `Ctrl+P` to open the command palette.
+2. Run `Checkout PR`.
+3. Type to filter the list (PR number, title, URL, owner, or branch).
+4. Move with `up` / `down` (or `k` / `j`).
+5. Press `Enter` to check the PR out into a worktree, or `o` to open it in the browser.
+
+The picker loads up to 200 pull requests via `gh` (open, draft, merged, and closed). `Enter` reuses an existing worktree or branch when present, otherwise it fetches the PR head and creates a new worktree. On success your shell moves into the worktree. This flow is available from the palette only; there is no dedicated key.
+
 ### Delete A Worktree
 
 1. Focus a worktree row.
@@ -399,6 +409,8 @@ If `gh` is installed and authenticated, `git-treehouse` loads PR data in the bac
 - terminal hyperlinks where supported
 
 If `gh` is missing or unauthenticated, PR columns stay hidden or pending without noisy errors.
+
+The `Checkout PR` palette command also uses `gh` to list pull requests and check one out into a worktree. See [Checkout A Pull Request](#checkout-a-pull-request).
 
 ## Troubleshooting
 
