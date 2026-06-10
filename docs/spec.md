@@ -290,7 +290,7 @@ The delete flow states exactly what will happen:
 - **Branch-only row:** opens a branch-only confirmation with metadata (`Branch`, `HEAD`, `PR`) and the exact branch command. Merged branches use `git branch -d`; unmerged branches are explicit force deletes with `git branch -D`.
 - `Enter` executes, `Esc` cancels. Success flashes in the Worktrees status; git errors stay in the dialog or status bar. The table reloads after successful writes.
 
-After a branch ref is deleted, either from a branch-only row or a worktree plus branch delete, a green Worktrees status offer appears for about 10 seconds: `deleted <name> (<short-sha>) · u to restore`, with `u` styled as a key. Pressing `u` recreates the ref with `git branch <name> <sha>`. This restores only the branch ref, not worktree files or discarded uncommitted changes. The offer is superseded by the next delete or refresh.
+After a branch ref is deleted, either from a branch-only row or a worktree plus branch delete, a green Worktrees status offer appears for about 10 seconds: `✓ deleted <name> (<short-sha>) · u to restore`, with `u` styled as a key. Pressing `u` recreates the ref with `git branch <name> <sha>`. This restores only the branch ref, not worktree files or discarded uncommitted changes. The offer is superseded by the next delete or refresh.
 
 **Prunable rows** (directory missing) open a prune-only confirmation. The dialog offers `git worktree prune`-equivalent cleanup and does not show the branch deletion checkbox.
 

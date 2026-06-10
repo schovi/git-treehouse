@@ -62,8 +62,8 @@ type Model struct {
 	refreshAnchor          selectionAnchor
 	refreshProgressVisible bool
 	refreshSpinnerFrame    int
-	refreshFlash           string
-	refreshFlashID         int
+	feedback               transientFeedback
+	feedbackID             int
 	pendingRestore         *pendingBranchRestore
 	enrichmentID           int
 	enrichmentContext      context.Context
@@ -101,14 +101,15 @@ var (
 )
 
 const (
-	autoRefreshInterval  = 30 * time.Second
-	clockTickInterval    = time.Second
-	refreshTickInterval  = 80 * time.Millisecond
-	refreshFlashTimeout  = 3 * time.Second
-	restoreOfferTimeout  = 10 * time.Second
-	prRefreshTTL         = 5 * time.Minute
-	scrollbarGutterWidth = 2
-	appTitle             = "Git treehouse"
+	autoRefreshInterval    = 30 * time.Second
+	clockTickInterval      = time.Second
+	refreshTickInterval    = 80 * time.Millisecond
+	successFeedbackTimeout = 3 * time.Second
+	restoreOfferTimeout    = 10 * time.Second
+	prRefreshTTL           = 5 * time.Minute
+	scrollbarGutterWidth   = 2
+	appTitle               = "Git treehouse"
+	successGlyph           = "✓"
 )
 
 var refreshSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -147,6 +148,29 @@ type pendingBranchRestore struct {
 	branch string
 	sha    string
 	short  string
+}
+
+type feedbackFrame int
+
+const (
+	feedbackFrameWorktrees feedbackFrame = iota
+)
+
+type feedbackKind int
+
+const (
+	feedbackKindSuccess feedbackKind = iota
+)
+
+type feedbackSegment struct {
+	text string
+	bold bool
+}
+
+type transientFeedback struct {
+	frame    feedbackFrame
+	kind     feedbackKind
+	segments []feedbackSegment
 }
 
 type deleteStage int
@@ -257,7 +281,7 @@ type clearFlashMsg struct {
 	id int
 }
 
-type clearRefreshFlashMsg struct {
+type clearFeedbackMsg struct {
 	id int
 }
 
@@ -561,7 +585,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if message.automatic {
 			return model, enrichmentCmd
 		}
-		model, flashCmd := model.setRefreshFlash("✓ refreshed")
+		model, flashCmd := model.setSuccessFeedbackFor(feedbackFrameWorktrees, "refreshed", successFeedbackTimeout)
 		return model, tea.Batch(enrichmentCmd, flashCmd)
 	case createMsg:
 		model.loading = ""
@@ -638,7 +662,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" {
 				text = "deleted worktree"
 			}
-			model, flashCmd = model.setRefreshFlash("✓ " + text)
+			model, flashCmd = model.setSuccessFeedbackFor(feedbackFrameWorktrees, text, successFeedbackTimeout)
 		}
 		return model, tea.Batch(enrichmentCmd, flashCmd)
 	case actionMsg:
@@ -678,10 +702,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.flash = ""
 		}
 		return model, nil
-	case clearRefreshFlashMsg:
-		if message.id == model.refreshFlashID {
-			model.refreshFlash = ""
-			model.pendingRestore = nil
+	case clearFeedbackMsg:
+		if message.id == model.feedbackID {
+			model = model.clearFeedback()
 		}
 		return model, nil
 	case autoRefreshMsg:
@@ -849,9 +872,7 @@ func (model Model) startRefresh(fetch, automatic bool) (Model, tea.Cmd) {
 	model.refreshAnchor = model.selectionAnchor()
 	model.refreshProgressVisible = !automatic
 	model.refreshSpinnerFrame = 0
-	model.refreshFlash = ""
-	model.refreshFlashID++
-	model.pendingRestore = nil
+	model = model.clearFeedback()
 	commands := []tea.Cmd{reloadCmd(model.reloadCwd(), model.config, model.runner, model.state.Repo, fetch, automatic, model.refreshID)}
 	if model.refreshProgressVisible {
 		commands = append(commands, refreshSpinnerTickCmd(model.refreshID))
@@ -1557,9 +1578,7 @@ func (model Model) startDelete(text string, restore *pendingBranchRestore, actio
 	model.refreshID++
 	model.refreshAnchor = selectionAnchor{}
 	model.refreshProgressVisible = false
-	model.refreshFlash = ""
-	model.refreshFlashID++
-	model.pendingRestore = nil
+	model = model.clearFeedback()
 	if model.deleteDialog != nil {
 		model.deleteDialog.error = ""
 	}
@@ -2593,13 +2612,7 @@ func (model Model) worktreesFeedback() string {
 		frame := refreshSpinnerFrames[model.refreshSpinnerFrame%len(refreshSpinnerFrames)]
 		return refreshActivityStyle.Render(frame + " refreshing")
 	}
-	if model.refreshFlash != "" {
-		if model.pendingRestore != nil {
-			return restoreOfferFeedback(*model.pendingRestore)
-		}
-		return refreshSuccessStyle.Render(model.refreshFlash)
-	}
-	return ""
+	return model.feedbackFor(feedbackFrameWorktrees)
 }
 
 func joinPartsWithin(parts []string, width int) string {
@@ -2828,39 +2841,89 @@ func (model Model) setFlash(text string) (Model, tea.Cmd) {
 	})
 }
 
-func (model Model) setRefreshFlash(text string) (Model, tea.Cmd) {
-	return model.setRefreshFlashFor(text, refreshFlashTimeout)
+func (model Model) setSuccessFeedbackFor(frame feedbackFrame, text string, timeout time.Duration) (Model, tea.Cmd) {
+	return model.setFeedbackFor(successFeedback(frame, text), timeout)
 }
 
-func (model Model) setRefreshFlashFor(text string, timeout time.Duration) (Model, tea.Cmd) {
+func (model Model) setFeedbackFor(feedback transientFeedback, timeout time.Duration) (Model, tea.Cmd) {
 	model.pendingRestore = nil
-	model.refreshFlashID++
-	model.refreshFlash = text
-	id := model.refreshFlashID
+	model.feedbackID++
+	model.feedback = feedback
+	id := model.feedbackID
 	return model, tea.Tick(timeout, func(time.Time) tea.Msg {
-		return clearRefreshFlashMsg{id: id}
+		return clearFeedbackMsg{id: id}
 	})
 }
 
+func (model Model) clearFeedback() Model {
+	model.feedbackID++
+	model.feedback = transientFeedback{}
+	model.pendingRestore = nil
+	return model
+}
+
 func (model Model) setRestoreOffer(restore pendingBranchRestore) (Model, tea.Cmd) {
-	text := restoreOfferText(restore)
-	model, cmd := model.setRefreshFlashFor(text, restoreOfferTimeout)
+	model, cmd := model.setFeedbackFor(restoreOfferFeedback(restore), restoreOfferTimeout)
 	model.pendingRestore = &restore
 	return model, cmd
 }
 
-func restoreOfferText(restore pendingBranchRestore) string {
-	return restoreOfferPrefix(restore) + "u to restore"
-}
-
-func restoreOfferFeedback(restore pendingBranchRestore) string {
-	return refreshSuccessStyle.Render(restoreOfferPrefix(restore)) +
-		refreshSuccessStyle.Bold(true).Render("u") +
-		refreshSuccessStyle.Render(" to restore")
+func restoreOfferFeedback(restore pendingBranchRestore) transientFeedback {
+	return successFeedbackWithSegments(feedbackFrameWorktrees,
+		feedbackSegment{text: restoreOfferPrefix(restore)},
+		feedbackSegment{text: "u", bold: true},
+		feedbackSegment{text: " to restore"},
+	)
 }
 
 func restoreOfferPrefix(restore pendingBranchRestore) string {
 	return "deleted " + restore.branch + " (" + restore.short + ") · "
+}
+
+func successFeedback(frame feedbackFrame, text string) transientFeedback {
+	return successFeedbackWithSegments(frame, feedbackSegment{text: text})
+}
+
+func successFeedbackWithSegments(frame feedbackFrame, segments ...feedbackSegment) transientFeedback {
+	allSegments := make([]feedbackSegment, 0, len(segments)+1)
+	allSegments = append(allSegments, feedbackSegment{text: successGlyph + " "})
+	allSegments = append(allSegments, segments...)
+	return transientFeedback{frame: frame, kind: feedbackKindSuccess, segments: allSegments}
+}
+
+func (model Model) feedbackFor(frame feedbackFrame) string {
+	if model.feedback.frame != frame || len(model.feedback.segments) == 0 {
+		return ""
+	}
+	return model.feedback.render()
+}
+
+func (feedback transientFeedback) render() string {
+	style := feedback.style()
+	var builder strings.Builder
+	for _, segment := range feedback.segments {
+		segmentStyle := style
+		if segment.bold {
+			segmentStyle = segmentStyle.Bold(true)
+		}
+		builder.WriteString(segmentStyle.Render(segment.text))
+	}
+	return builder.String()
+}
+
+func (feedback transientFeedback) plainText() string {
+	var builder strings.Builder
+	for _, segment := range feedback.segments {
+		builder.WriteString(segment.text)
+	}
+	return builder.String()
+}
+
+func (feedback transientFeedback) style() lipgloss.Style {
+	switch feedback.kind {
+	default:
+		return refreshSuccessStyle
+	}
 }
 
 func (model Model) selectionAnchor() selectionAnchor {

@@ -462,8 +462,8 @@ func TestRefreshSpinnerPattern(t *testing.T) {
 	if got := strings.Join(refreshSpinnerFrames, ""); got != "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" {
 		t.Fatalf("refresh spinner frames = %q", got)
 	}
-	if refreshFlashTimeout != 3*time.Second {
-		t.Fatalf("refresh flash timeout = %s, want 3s", refreshFlashTimeout)
+	if successFeedbackTimeout != 3*time.Second {
+		t.Fatalf("success feedback timeout = %s, want 3s", successFeedbackTimeout)
 	}
 	if restoreOfferTimeout != 10*time.Second {
 		t.Fatalf("restore offer timeout = %s, want 10s", restoreOfferTimeout)
@@ -576,7 +576,7 @@ func TestViewRendersRefreshSuccessInWorktreesTitle(t *testing.T) {
 	})
 	model.width = 120
 	model.height = 16
-	model.refreshFlash = "✓ refreshed"
+	model.feedback = successFeedback(feedbackFrameWorktrees, "refreshed")
 
 	output := model.View()
 
@@ -2759,8 +2759,8 @@ func TestDeleteCommandReloadsStableStateBeforeSuccess(t *testing.T) {
 	if updated.flash != "" {
 		t.Fatalf("delete success should not use generic flash, got %q", updated.flash)
 	}
-	if updated.refreshFlash != "✓ deleted worktree" {
-		t.Fatalf("delete success badge = %q, want Worktrees title success", updated.refreshFlash)
+	if updated.feedback.plainText() != "✓ deleted worktree" {
+		t.Fatalf("delete success badge = %q, want Worktrees title success", updated.feedback.plainText())
 	}
 	if !updated.localMetadataReady() {
 		t.Fatalf("updated state should stay locally ready: %+v", updated.state.Rows)
@@ -2810,9 +2810,9 @@ func TestDeleteBranchSuccessOffersRestore(t *testing.T) {
 	if *updated.pendingRestore != *message.restore {
 		t.Fatalf("pending restore = %+v, want %+v", *updated.pendingRestore, *message.restore)
 	}
-	for _, want := range []string{"deleted feature", "0123456", "u to restore"} {
-		if !strings.Contains(updated.refreshFlash, want) {
-			t.Fatalf("restore offer missing %q: %q", want, updated.refreshFlash)
+	for _, want := range []string{"✓ deleted feature", "0123456", "u to restore"} {
+		if !strings.Contains(updated.feedback.plainText(), want) {
+			t.Fatalf("restore offer missing %q: %q", want, updated.feedback.plainText())
 		}
 	}
 }
@@ -2886,7 +2886,7 @@ func TestRestoreKeyCreatesBranchAtPendingSHA(t *testing.T) {
 	})
 	model.runner = runner
 	model.pendingRestore = &pendingBranchRestore{branch: "feature", sha: sha, short: "0123456"}
-	model.refreshFlash = "deleted feature (0123456) · u to restore"
+	model.feedback = restoreOfferFeedback(*model.pendingRestore)
 
 	started, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
 
@@ -2906,8 +2906,8 @@ func TestRestoreKeyCreatesBranchAtPendingSHA(t *testing.T) {
 
 	updated, _ := updateModel(t, started, message)
 
-	if updated.refreshFlash != "✓ restored branch feature" {
-		t.Fatalf("restore success flash = %q, want restored branch", updated.refreshFlash)
+	if updated.feedback.plainText() != "✓ restored branch feature" {
+		t.Fatalf("restore success flash = %q, want restored branch", updated.feedback.plainText())
 	}
 	if updated.pendingRestore != nil {
 		t.Fatalf("pending restore after success = %+v, want nil", updated.pendingRestore)
@@ -2916,7 +2916,7 @@ func TestRestoreKeyCreatesBranchAtPendingSHA(t *testing.T) {
 
 func TestRestoreKeyWithoutPendingRestoreIsNoOp(t *testing.T) {
 	runner := &recordingRunner{}
-	model := Model{runner: runner, selected: 2, refreshFlash: "kept"}
+	model := Model{runner: runner, selected: 2, feedback: successFeedback(feedbackFrameWorktrees, "kept")}
 
 	updated, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
 
@@ -2926,7 +2926,7 @@ func TestRestoreKeyWithoutPendingRestoreIsNoOp(t *testing.T) {
 	if len(runner.commands) != 0 {
 		t.Fatalf("commands = %v, want none", runner.commands)
 	}
-	if updated.selected != model.selected || updated.refreshFlash != model.refreshFlash || updated.pendingRestore != nil {
+	if updated.selected != model.selected || updated.feedback.plainText() != model.feedback.plainText() || updated.pendingRestore != nil {
 		t.Fatalf("model changed on restore no-op: %+v", updated)
 	}
 }
@@ -2934,33 +2934,33 @@ func TestRestoreKeyWithoutPendingRestoreIsNoOp(t *testing.T) {
 func TestRestoreOfferClearsWithRefreshFlashLifecycle(t *testing.T) {
 	restore := &pendingBranchRestore{branch: "feature", sha: "0123456789abcdef0123456789abcdef01234567", short: "0123456"}
 	model := Model{
-		refreshFlash:   "deleted feature (0123456) · u to restore",
-		refreshFlashID: 5,
+		feedback:       restoreOfferFeedback(*restore),
+		feedbackID:     5,
 		pendingRestore: restore,
 	}
 
-	stale, _ := updateModel(t, model, clearRefreshFlashMsg{id: 4})
-	if stale.pendingRestore == nil || stale.refreshFlash == "" {
-		t.Fatalf("stale clear should keep offer, got flash %q restore %+v", stale.refreshFlash, stale.pendingRestore)
+	stale, _ := updateModel(t, model, clearFeedbackMsg{id: 4})
+	if stale.pendingRestore == nil || stale.feedback.plainText() == "" {
+		t.Fatalf("stale clear should keep offer, got flash %q restore %+v", stale.feedback.plainText(), stale.pendingRestore)
 	}
 
-	cleared, _ := updateModel(t, model, clearRefreshFlashMsg{id: 5})
-	if cleared.pendingRestore != nil || cleared.refreshFlash != "" {
-		t.Fatalf("matching clear should remove offer, got flash %q restore %+v", cleared.refreshFlash, cleared.pendingRestore)
+	cleared, _ := updateModel(t, model, clearFeedbackMsg{id: 5})
+	if cleared.pendingRestore != nil || cleared.feedback.plainText() != "" {
+		t.Fatalf("matching clear should remove offer, got flash %q restore %+v", cleared.feedback.plainText(), cleared.pendingRestore)
 	}
 
 	model.pendingRestore = restore
-	model.refreshFlash = "deleted feature (0123456) · u to restore"
+	model.feedback = restoreOfferFeedback(*restore)
 	refreshed, _ := model.startRefresh(false, false)
-	if refreshed.pendingRestore != nil || refreshed.refreshFlash != "" {
-		t.Fatalf("startRefresh should clear offer, got flash %q restore %+v", refreshed.refreshFlash, refreshed.pendingRestore)
+	if refreshed.pendingRestore != nil || refreshed.feedback.plainText() != "" {
+		t.Fatalf("startRefresh should clear offer, got flash %q restore %+v", refreshed.feedback.plainText(), refreshed.pendingRestore)
 	}
 
 	model.pendingRestore = restore
-	model.refreshFlash = "deleted feature (0123456) · u to restore"
+	model.feedback = restoreOfferFeedback(*restore)
 	deleting, _ := model.startDelete("deleted worktree", nil, func(context.Context) error { return nil })
-	if deleting.pendingRestore != nil || deleting.refreshFlash != "" {
-		t.Fatalf("startDelete should clear offer, got flash %q restore %+v", deleting.refreshFlash, deleting.pendingRestore)
+	if deleting.pendingRestore != nil || deleting.feedback.plainText() != "" {
+		t.Fatalf("startDelete should clear offer, got flash %q restore %+v", deleting.feedback.plainText(), deleting.pendingRestore)
 	}
 }
 
@@ -2974,11 +2974,12 @@ func TestRestoreOfferRendersAsRefreshSuccessFeedback(t *testing.T) {
 	model, _ := Model{}.setRestoreOffer(pendingBranchRestore{branch: "feature", sha: "0123456789abcdef0123456789abcdef01234567", short: "0123456"})
 
 	output := model.worktreesFeedback()
-	want := refreshSuccessStyle.Render("deleted feature (0123456) · ") +
-		refreshSuccessStyle.Bold(true).Render("u") +
-		refreshSuccessStyle.Render(" to restore")
+	want := restoreOfferFeedback(pendingBranchRestore{branch: "feature", sha: "0123456789abcdef0123456789abcdef01234567", short: "0123456"}).render()
 	if output != want {
 		t.Fatalf("worktreesFeedback() = %q, want %q", output, want)
+	}
+	if got := ansi.Strip(output); got != "✓ deleted feature (0123456) · u to restore" {
+		t.Fatalf("restore offer text = %q, want success glyph and restore copy", got)
 	}
 	if !strings.Contains(output, "\x1b[38;5;42m") {
 		t.Fatalf("restore offer should use green SGR, got %q", output)
@@ -3552,8 +3553,8 @@ func TestManualRefreshRestoresSelectedWorktreeAfterReorder(t *testing.T) {
 	if !ok || row.Path != "/repo/docs" {
 		t.Fatalf("selected row = %+v, want docs worktree", row)
 	}
-	if updated.refreshFlash != "✓ refreshed" {
-		t.Fatalf("refresh flash = %q, want refreshed badge", updated.refreshFlash)
+	if updated.feedback.plainText() != "✓ refreshed" {
+		t.Fatalf("success feedback = %q, want refreshed badge", updated.feedback.plainText())
 	}
 	if updated.flash != "" {
 		t.Fatalf("manual refresh should not use generic flash, got %q", updated.flash)
@@ -3619,8 +3620,8 @@ func TestManualReloadSuccessShowsRefreshBadge(t *testing.T) {
 		},
 	})
 
-	if updated.refreshFlash != "✓ refreshed" {
-		t.Fatalf("manual reload refresh flash = %q, want refreshed", updated.refreshFlash)
+	if updated.feedback.plainText() != "✓ refreshed" {
+		t.Fatalf("manual reload success feedback = %q, want refreshed", updated.feedback.plainText())
 	}
 	if updated.flash != "" {
 		t.Fatalf("manual reload should not use generic flash, got %q", updated.flash)
