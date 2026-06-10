@@ -4,13 +4,33 @@ Release notes for Git Treehouse.
 
 Dates use the GitHub release publication date for published releases. Entries without a GitHub release use the annotated tag date.
 
-## Next
+## v0.9.0 - 2026-06-10
 
 ### New Features
 
 #### Repo-Scoped `.worktree` Configuration
 
 Added a committed repo-level `.worktree` TOML schema for path template overrides, named-file copy behavior, and approved lifecycle hooks. Declarative settings apply immediately, while `post_create` and `before_delete` hooks run only after `git-treehouse allow` records the current hook hash in repo-local Git config. `doctor` now reports `.worktree` keys and hook approval state.
+
+#### Filter Picker Modal
+
+`Tab` now opens a filter picker modal instead of cycling filters in place (the palette entry is renamed from "Cycle filter" to "Open filter picker"). The modal lists every filter with its matching row count; empty filters are disabled (`all` is always available). Inside the picker, `↑`/`↓` (or `k`/`j`) move the selection, `Tab` jumps to the next enabled filter and `Shift+Tab` to the previous, `Enter` applies, and `Esc` closes.
+
+#### Merged Worktree Filter
+
+Added a `merged` filter to the cycle (`all → modified → branches → merged → prunable → locked → detached`) and a `filter-merged` palette command. It surfaces rows that are safe to clean up: clean worktrees whose branch is merged to main or whose PR is merged/closed, plus merged branch-only rows. The root repository and detached worktrees never match.
+
+#### Restore Deleted Branches
+
+After deleting a branch ref (from a branch-only row, or a combined worktree + branch delete), a green success offer appears for about 10 seconds: `✓ deleted <name> (<short-sha>) · u to restore`. Pressing `u` recreates the ref with `git branch <name> <sha>`. Only the branch ref is restored, not worktree files or uncommitted changes. The offer is superseded by the next delete or refresh.
+
+#### Copy PR URL Command
+
+Added a palette-only command, "Copy PR URL" (`copy-pull-request-url`), that copies the selected row's pull request URL to the clipboard with a `copied PR URL: <url>` confirmation. Rows without a PR flash `no pull request URL for this row`.
+
+### Improvements
+
+- Responsive list columns now drop and shrink more gracefully on narrow terminals (in both the TUI and the `list` subcommand): size drops first, then commit truncates to the short SHA, then PR and age drop, while name, status, and remote always survive. The PR and size columns size dynamically to their content.
 
 ## v0.8.0 - 2026-06-09
 
