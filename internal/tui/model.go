@@ -47,6 +47,7 @@ type Model struct {
 	prCache                map[string]gitdata.PullRequest
 	prCacheRepoRoot        string
 	prLastCheckedAt        time.Time
+	prCIChecked            map[int]bool
 	selectedPath           string
 	createDialog           *createDialog
 	checkoutDialog         *checkoutDialog
@@ -262,6 +263,12 @@ type prLoadedMsg struct {
 	repoRoot     string
 	id           int
 	checkedAt    time.Time
+}
+
+type prCILoadedMsg struct {
+	ci       map[int]string
+	repoRoot string
+	id       int
 }
 
 type sizesLoadedMsg struct {
@@ -617,6 +624,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.showPR = true
 			model.prCache = message.pullRequests
 			model.prCacheRepoRoot = model.state.Repo.Root
+			model.prCIChecked = map[int]bool{}
 			model.state.Rows = github.AttachPullRequests(model.state.Rows, message.pullRequests)
 			model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, message.pullRequests)
 		} else if len(model.prCache) > 0 && model.prCacheRepoRoot == model.state.Repo.Root {
@@ -624,6 +632,22 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache)
 			model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, model.prCache)
 		}
+		return model, model.pullRequestCICommand(message.id)
+	case prCILoadedMsg:
+		if message.id != model.enrichmentID || message.repoRoot != model.state.Repo.Root {
+			return model, nil
+		}
+		if len(message.ci) == 0 {
+			return model, nil
+		}
+		for branch, pullRequest := range model.prCache {
+			if glyph, ok := message.ci[pullRequest.Number]; ok {
+				pullRequest.CI = glyph
+				model.prCache[branch] = pullRequest
+			}
+		}
+		model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache)
+		model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, model.prCache)
 		return model, nil
 	case sizesLoadedMsg:
 		if message.id != model.enrichmentID || message.repoRoot != model.state.Repo.Root {
@@ -5128,6 +5152,83 @@ func (model Model) shouldLoadPullRequests(force bool, now time.Time) bool {
 
 func (model Model) pullRequestsPending() bool {
 	return model.showPR && model.prLoading
+}
+
+// pullRequestCICommand fetches CI status for open PRs attached to local rows or
+// branches. Scoping to attached PRs keeps the count bounded by local branches
+// rather than the full repo, so the per-PR statusCheckRollup queries stay cheap.
+func (model *Model) pullRequestCICommand(id int) tea.Cmd {
+	if !model.showPR || model.enrichmentContext == nil {
+		return nil
+	}
+	if model.prCIChecked == nil {
+		model.prCIChecked = map[int]bool{}
+	}
+	numbers := []int{}
+	add := func(pullRequest *gitdata.PullRequest) {
+		if pullRequest == nil || pullRequest.Number == 0 {
+			return
+		}
+		if !pullRequest.IsOpen() || model.prCIChecked[pullRequest.Number] {
+			return
+		}
+		model.prCIChecked[pullRequest.Number] = true
+		numbers = append(numbers, pullRequest.Number)
+	}
+	for index := range model.state.Rows {
+		add(model.state.Rows[index].PR)
+	}
+	for index := range model.state.Branches {
+		add(model.state.Branches[index].PR)
+	}
+	if len(numbers) == 0 {
+		return nil
+	}
+	ctx := model.enrichmentContext
+	runner := model.runner
+	repoRoot := model.state.Repo.Root
+	return func() tea.Msg {
+		return loadPullRequestCIMsg(ctx, runner, repoRoot, id, numbers)
+	}
+}
+
+func loadPullRequestCIMsg(ctx context.Context, runner gitdata.Runner, repoRoot string, id int, numbers []int) tea.Msg {
+	ci := map[int]string{}
+	if len(numbers) == 0 {
+		return prCILoadedMsg{ci: ci, repoRoot: repoRoot, id: id}
+	}
+	jobChannel := make(chan int)
+	var mutex sync.Mutex
+	var waitGroup sync.WaitGroup
+	workerCount := min(4, len(numbers))
+	for range workerCount {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for number := range jobChannel {
+				callContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+				glyph, ok := github.LoadPullRequestCI(callContext, repoRoot, runner, number)
+				cancel()
+				if ok {
+					mutex.Lock()
+					ci[number] = glyph
+					mutex.Unlock()
+				}
+			}
+		}()
+	}
+	for _, number := range numbers {
+		select {
+		case jobChannel <- number:
+		case <-ctx.Done():
+			close(jobChannel)
+			waitGroup.Wait()
+			return prCILoadedMsg{ci: ci, repoRoot: repoRoot, id: id}
+		}
+	}
+	close(jobChannel)
+	waitGroup.Wait()
+	return prCILoadedMsg{ci: ci, repoRoot: repoRoot, id: id}
 }
 
 func (model Model) diskUsageCommand(ctx context.Context, now time.Time, id int) tea.Cmd {

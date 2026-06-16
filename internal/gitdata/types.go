@@ -302,6 +302,18 @@ type PullRequest struct {
 	URL    string
 }
 
+// IsOpen reports whether the PR is still open, based on the state glyph set by
+// stateGlyph: open (○), approved (◆), or draft (◌). Merged (⬡) and closed (✕)
+// PRs have settled CI, so they are skipped by the lazy CI fetch.
+func (pr PullRequest) IsOpen() bool {
+	switch pr.State {
+	case "○", "◆", "◌":
+		return true
+	default:
+		return false
+	}
+}
+
 func (pr PullRequest) Text() string {
 	if pr.Number == 0 {
 		return ""

@@ -80,8 +80,12 @@ func LoadPullRequests(ctx context.Context, repoRoot string, runner gitdata.Runne
 	return LoadPullRequestsFromAuthenticatedCLI(ctx, repoRoot, runner)
 }
 
+// LoadPullRequestsFromAuthenticatedCLI fetches the branch->PR mapping without
+// statusCheckRollup. That field forces GitHub's GraphQL API to resolve CI state
+// for every PR in the list, which times out (HTTP 504) on large repositories.
+// CI status is fetched separately per attached PR via LoadPullRequestCI.
 func LoadPullRequestsFromAuthenticatedCLI(ctx context.Context, repoRoot string, runner gitdata.Runner) (map[string]gitdata.PullRequest, bool) {
-	output, err := runner.Run(ctx, repoRoot, "gh", "pr", "list", "--limit", "200", "--state", "all", "--json", "number,state,isDraft,headRefName,url,reviewDecision,statusCheckRollup")
+	output, err := runner.Run(ctx, repoRoot, "gh", "pr", "list", "--limit", "200", "--state", "all", "--json", "number,state,isDraft,headRefName,url,reviewDecision")
 	if err != nil {
 		return nil, false
 	}
@@ -97,11 +101,26 @@ func LoadPullRequestsFromAuthenticatedCLI(ctx context.Context, repoRoot string, 
 		pullRequests[raw.HeadRefName] = gitdata.PullRequest{
 			Number: raw.Number,
 			State:  stateGlyph(raw.State, raw.IsDraft, raw.ReviewDecision),
-			CI:     ciGlyph(raw.StatusCheckRollup),
 			URL:    raw.URL,
 		}
 	}
 	return pullRequests, true
+}
+
+// LoadPullRequestCI fetches the CI status glyph for a single PR. It is scoped to
+// one PR so the statusCheckRollup query stays cheap, unlike a list-wide rollup.
+func LoadPullRequestCI(ctx context.Context, repoRoot string, runner gitdata.Runner, number int) (string, bool) {
+	output, err := runner.Run(ctx, repoRoot, "gh", "pr", "view", strconv.Itoa(number), "--json", "statusCheckRollup")
+	if err != nil {
+		return "", false
+	}
+	var raw struct {
+		StatusCheckRollup []json.RawMessage `json:"statusCheckRollup"`
+	}
+	if err := json.Unmarshal(output, &raw); err != nil {
+		return "", false
+	}
+	return ciGlyph(raw.StatusCheckRollup), true
 }
 
 func LoadPullRequestSummaries(ctx context.Context, repoRoot string, runner gitdata.Runner) ([]PullRequestSummary, error) {

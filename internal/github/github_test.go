@@ -33,7 +33,7 @@ func (runner *fakeRunner) RunWithEnv(ctx context.Context, dir string, _ []string
 
 func TestLoadPullRequestsFromAuthenticatedCLISkipsAuthStatus(t *testing.T) {
 	runner := &fakeRunner{
-		output: []byte(`[{"number":12,"state":"OPEN","isDraft":false,"headRefName":"feature/login","url":"https://github.com/acme/repo/pull/12","statusCheckRollup":[]}]`),
+		output: []byte(`[{"number":12,"state":"OPEN","isDraft":false,"headRefName":"feature/login","url":"https://github.com/acme/repo/pull/12"}]`),
 	}
 
 	pullRequests, enabled := LoadPullRequestsFromAuthenticatedCLI(context.Background(), "/repo", runner)
@@ -52,6 +52,9 @@ func TestLoadPullRequestsFromAuthenticatedCLISkipsAuthStatus(t *testing.T) {
 	}
 	if !strings.Contains(runner.commands[0], "reviewDecision") {
 		t.Fatalf("command = %q, want reviewDecision JSON field", runner.commands[0])
+	}
+	if strings.Contains(runner.commands[0], "statusCheckRollup") {
+		t.Fatalf("command = %q, must not request statusCheckRollup (times out on large repos)", runner.commands[0])
 	}
 	pullRequest, ok := pullRequests["feature/login"]
 	if !ok {
@@ -78,6 +81,27 @@ func TestLoadPullRequestsFromAuthenticatedCLIShowsApprovedPullRequest(t *testing
 	}
 	if pullRequest.State != "◆" {
 		t.Fatalf("pull request state = %q, want approved glyph", pullRequest.State)
+	}
+}
+
+func TestLoadPullRequestCIFetchesSinglePullRequestRollup(t *testing.T) {
+	runner := &fakeRunner{
+		output: []byte(`{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}`),
+	}
+
+	glyph, ok := LoadPullRequestCI(context.Background(), "/repo", runner, 42)
+
+	if !ok {
+		t.Fatal("LoadPullRequestCI() ok = false, want true")
+	}
+	if glyph != "✓" {
+		t.Fatalf("LoadPullRequestCI() glyph = %q, want success glyph", glyph)
+	}
+	if len(runner.commands) != 1 || !strings.HasPrefix(runner.commands[0], "gh pr view 42 ") {
+		t.Fatalf("command = %v, want gh pr view 42", runner.commands)
+	}
+	if !strings.Contains(runner.commands[0], "statusCheckRollup") {
+		t.Fatalf("command = %q, want statusCheckRollup JSON field", runner.commands[0])
 	}
 }
 

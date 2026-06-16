@@ -27,7 +27,10 @@ Lifecycle and Git state words do not appear in this column. `locked` and `prunab
 
 ## GitHub data (PR column)
 
-Loaded via the `gh` CLI (one `gh pr list`-style call for all branches), only if `gh` exists and is authed.
+Loaded via the `gh` CLI, only if `gh` exists and is authed. The fetch is split in two:
+
+- **Branch→PR mapping:** one `gh pr list` call for all branches (number, state, URL). It deliberately omits `statusCheckRollup`; that field forces GitHub's GraphQL API to resolve CI for every PR in the list and times out (HTTP 504) on large repositories, which would silently drop the whole PR column.
+- **CI status:** fetched lazily per PR via `gh pr view <n> --json statusCheckRollup`, only for *open* PRs attached to a local row or branch (bounded by local branches, not the whole repo), in a small parallel worker pool. So PR association appears first and CI glyphs fill in shortly after.
 
 - Shows: `#123` + state glyph (open/ready `○`, draft `◌`, approved `◆`, merged `⬡`, closed `✕`) + CI status (`✓` passing, `✗` failing, `●` running).
 - PR number is an OSC 8 hyperlink to the PR page (clickable in supporting terminals).
@@ -39,7 +42,7 @@ Loaded via the `gh` CLI (one `gh pr list`-style call for all branches), only if 
 Instant app frame, async enrichment:
 
 1. **Synchronous (must be <50ms):** repository resolution plus one `git worktree list --porcelain`. The app frame renders immediately. Worktree rows may stay in a loading skeleton until local metadata is ready enough to sort consistently.
-2. **Async, streamed in as each resolves:** local metadata (dirty status, branch-only rows from local refs, remote/main ahead-behind from already-fetched refs, commit + age), PR + CI data via `gh`, and size data. Pending cells and detail fields show a subtle `⋯`.
+2. **Async, streamed in as each resolves:** local metadata (dirty status, branch-only rows from local refs, remote/main ahead-behind from already-fetched refs, commit + age), the PR mapping via `gh pr list` then per-PR CI via `gh pr view`, and size data. Pending cells and detail fields show a subtle `⋯`.
 3. **Size data:** the table uses a fast Git-aware size from `git ls-files --cached --others --exclude-standard`. The selected-row detail panel may additionally load full filesystem size with a cancellable `du`-equivalent walk.
 4. **No `git fetch` on startup.** Ahead/behind reflects the last fetch. The TUI reloads local state every 30 seconds while idle; `r` triggers `git fetch --prune`, then loads local metadata before swapping the table so the existing rows stay visible during refresh.
 
