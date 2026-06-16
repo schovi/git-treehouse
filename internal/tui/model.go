@@ -116,6 +116,7 @@ const (
 	successFeedbackTimeout = 3 * time.Second
 	restoreOfferTimeout    = 10 * time.Second
 	prRefreshTTL           = 5 * time.Minute
+	prFetchTimeout         = 15 * time.Second
 	scrollbarGutterWidth   = 2
 	appTitle               = "Git treehouse"
 	successGlyph           = "✓"
@@ -5113,7 +5114,7 @@ func (model Model) enrichmentCommands(ctx context.Context, id int, forcePullRequ
 	if model.shouldLoadPullRequests(forcePullRequests, now) {
 		runner := model.runner
 		commands = append(commands, func() tea.Msg {
-			prContext, cancel := context.WithTimeout(ctx, 2*time.Second)
+			prContext, cancel := context.WithTimeout(ctx, prFetchTimeout)
 			defer cancel()
 			pullRequests, enabled := github.LoadPullRequests(prContext, repoRoot, runner)
 			return prLoadedMsg{
