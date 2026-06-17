@@ -4378,8 +4378,10 @@ func (model Model) renderDeleteAtWidth(width int) string {
 		}
 	}
 	if dialog.error != "" && dialog.stage != deleteStageLocked {
-		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(dialog.error))
+		lines = append(lines, "")
+		lines = append(lines, deleteErrorLines(dialog.error, contentWidth)...)
 	}
+	lines = model.clipDialogBody(lines)
 	for index, line := range lines {
 		lines[index] = truncateStyled(line, contentWidth)
 	}
@@ -4410,8 +4412,10 @@ func (model Model) renderDeleteBranchAtWidth(branch gitdata.Branch, width int) s
 	lines = append(lines, deleteCommandLine(command.text, command.danger))
 	bottom := "Enter delete · Esc cancel"
 	if dialog != nil && dialog.error != "" {
-		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(dialog.error))
+		lines = append(lines, "")
+		lines = append(lines, deleteErrorLines(dialog.error, contentWidth)...)
 	}
+	lines = model.clipDialogBody(lines)
 	for index, line := range lines {
 		lines[index] = truncateStyled(line, contentWidth)
 	}
@@ -4682,6 +4686,60 @@ func (model Model) renderPullRequestCheckoutAtWidth(width int) string {
 
 func pullRequestErrorLines(message string, width int) []string {
 	return wrapPlainWithPrefixes(strings.TrimSpace(message), "  × ", "    ", width)
+}
+
+// clipDialogBody caps the dialog body so the bordered box (body plus the two
+// border lines) never grows taller than the terminal. The error block is the
+// last and most variable section, so trimming the tail drops error overflow
+// first; a marker line signals the cut.
+func (model Model) clipDialogBody(lines []string) []string {
+	if model.height <= 0 {
+		return lines
+	}
+	maxBody := model.height - 2
+	if maxBody < 1 || len(lines) <= maxBody {
+		return lines
+	}
+	clipped := make([]string, maxBody)
+	copy(clipped, lines[:maxBody])
+	clipped[maxBody-1] = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("  … (resize for full message)")
+	return clipped
+}
+
+// maxDeleteErrorLines keeps a verbose git failure from dominating the dialog.
+// Git prints the actionable warning/error first and trailing advisory hints
+// after, so the first lines carry the signal.
+const maxDeleteErrorLines = 6
+
+func deleteErrorLines(message string, width int) []string {
+	message = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(message), "×"))
+	message = dropGitHintLines(message)
+	lines := wrapPlainWithPrefixes(message, "× ", "  ", width)
+	truncated := false
+	if len(lines) > maxDeleteErrorLines {
+		lines = lines[:maxDeleteErrorLines]
+		truncated = true
+	}
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	styled := make([]string, len(lines))
+	for index, line := range lines {
+		styled[index] = style.Render(line)
+	}
+	if truncated {
+		styled[len(styled)-1] = style.Render("  … (run the command for full output)")
+	}
+	return styled
+}
+
+func dropGitHintLines(message string) string {
+	kept := make([]string, 0)
+	for _, line := range strings.Split(message, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "hint:") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 func wrapPlainWithPrefixes(message, firstPrefix, nextPrefix string, width int) []string {

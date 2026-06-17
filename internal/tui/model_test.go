@@ -3671,6 +3671,85 @@ func TestDeleteErrorStaysInDeleteModal(t *testing.T) {
 	}
 }
 
+func TestDeleteErrorWrapsWithinModal(t *testing.T) {
+	longError := "warning: not deleting branch 'codex/fix-scan-hot-path-regressions' that is not yet merged to 'refs/remotes/origin/codex/fix-scan-hot-path-regressions', even though it is merged to HEAD"
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|git worktree remove /repo/feature": {err: errors.New(longError)},
+	}}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.runner = runner
+	model.width = 100
+	model.height = 30
+	model.selected = 1
+	model, _ = model.openDelete()
+	started, cmd := model.updateDelete(tea.KeyMsg{Type: tea.KeyEnter})
+	batch := cmd().(tea.BatchMsg)
+	message := batch[0]().(deleteMsg)
+
+	updated, _ := updateModel(t, started, message)
+
+	width := 80
+	output := updated.renderDeleteAtWidth(width)
+	for _, line := range strings.Split(output, "\n") {
+		if lipgloss.Width(line) > width {
+			t.Fatalf("delete modal line exceeds width %d: %q", width, line)
+		}
+	}
+	if !strings.Contains(output, "not deleting branch") {
+		t.Fatalf("delete modal should show wrapped error:\n%s", output)
+	}
+}
+
+func TestDeleteErrorDropsGitHints(t *testing.T) {
+	gitError := "warning: not deleting branch 'feature' that is not yet merged to 'origin/feature'\n" +
+		"error: the branch 'feature' is not fully merged\n" +
+		"hint: If you are sure you want to delete it, run 'git branch -D feature'\n" +
+		"hint: Disable this message with \"git config set advice.forceDeleteBranch false\""
+	lines := deleteErrorLines(gitError, 80)
+	joined := strings.Join(lines, "\n")
+	if strings.Contains(joined, "hint:") {
+		t.Fatalf("delete error should drop git hint lines:\n%s", joined)
+	}
+	if !strings.Contains(joined, "not fully merged") {
+		t.Fatalf("delete error should keep the actionable error:\n%s", joined)
+	}
+	if len(lines) > maxDeleteErrorLines {
+		t.Fatalf("delete error block = %d lines, want <= %d", len(lines), maxDeleteErrorLines)
+	}
+}
+
+func TestDeleteErrorClipsToTerminalHeight(t *testing.T) {
+	longError := strings.Repeat("warning: branch is not yet merged and cannot be deleted safely. ", 12)
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|git worktree remove /repo/feature": {err: errors.New(longError)},
+	}}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.runner = runner
+	model.width = 100
+	model.height = 16
+	model.selected = 1
+	model, _ = model.openDelete()
+	started, cmd := model.updateDelete(tea.KeyMsg{Type: tea.KeyEnter})
+	batch := cmd().(tea.BatchMsg)
+	message := batch[0]().(deleteMsg)
+
+	updated, _ := updateModel(t, started, message)
+
+	output := updated.renderDeleteAtWidth(60)
+	if got := lineCount(output); got > updated.height {
+		t.Fatalf("delete modal height %d exceeds terminal height %d:\n%s", got, updated.height, output)
+	}
+	if !strings.Contains(output, "resize for full message") {
+		t.Fatalf("clipped delete modal should mark truncation:\n%s", output)
+	}
+}
+
 func TestLoadConfigIfChangedReloadsModifiedConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(`path_template = "{repo_parent}/old/{branch}"`), 0600); err != nil {
