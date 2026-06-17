@@ -123,6 +123,39 @@ func LoadPullRequestCI(ctx context.Context, repoRoot string, runner gitdata.Runn
 	return ciGlyph(raw.StatusCheckRollup), true
 }
 
+// LoadPullRequestForBranch fetches the PR mapping plus CI for a single branch
+// via gh pr list --head. Filtering to one branch keeps statusCheckRollup cheap,
+// so this returns both the number/state and CI glyph in one call. When a branch
+// has multiple PRs (e.g. a closed and a reopened one), the open PR is preferred,
+// otherwise the most recent (gh lists newest first). ok is false on error or
+// when the branch has no PR.
+func LoadPullRequestForBranch(ctx context.Context, repoRoot string, runner gitdata.Runner, branch string) (gitdata.PullRequest, bool) {
+	output, err := runner.Run(ctx, repoRoot, "gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,state,isDraft,headRefName,url,reviewDecision,statusCheckRollup")
+	if err != nil {
+		return gitdata.PullRequest{}, false
+	}
+	var rawPullRequests []rawPullRequest
+	if err := json.Unmarshal(output, &rawPullRequests); err != nil {
+		return gitdata.PullRequest{}, false
+	}
+	if len(rawPullRequests) == 0 {
+		return gitdata.PullRequest{}, false
+	}
+	chosen := rawPullRequests[0]
+	for _, raw := range rawPullRequests {
+		if strings.EqualFold(raw.State, "OPEN") {
+			chosen = raw
+			break
+		}
+	}
+	return gitdata.PullRequest{
+		Number: chosen.Number,
+		State:  stateGlyph(chosen.State, chosen.IsDraft, chosen.ReviewDecision),
+		CI:     ciGlyph(chosen.StatusCheckRollup),
+		URL:    chosen.URL,
+	}, true
+}
+
 func LoadPullRequestSummaries(ctx context.Context, repoRoot string, runner gitdata.Runner) ([]PullRequestSummary, error) {
 	baseOwner, err := loadRepositoryOwner(ctx, repoRoot, runner)
 	if err != nil {

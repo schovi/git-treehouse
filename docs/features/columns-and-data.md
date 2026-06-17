@@ -27,10 +27,14 @@ Lifecycle and Git state words do not appear in this column. `locked` and `prunab
 
 ## GitHub data (PR column)
 
-Loaded via the `gh` CLI, only if `gh` exists and is authed. The fetch is split in two:
+Loaded via the `gh` CLI, only if `gh` exists and is authed. The fetch never asks GitHub for `statusCheckRollup` across a whole PR list: that field makes the GraphQL API resolve CI for every PR and times out (HTTP 504) on large repositories, which would silently drop the whole PR column. CI is always scoped to a single PR, where the rollup is cheap.
 
-- **Branch→PR mapping:** one `gh pr list` call for all branches (number, state, URL). It deliberately omits `statusCheckRollup`; that field forces GitHub's GraphQL API to resolve CI for every PR in the list and times out (HTTP 504) on large repositories, which would silently drop the whole PR column.
-- **CI status:** fetched lazily per PR via `gh pr view <n> --json statusCheckRollup`, only for *open* PRs attached to a local row or branch (bounded by local branches, not the whole repo), in a small parallel worker pool. So PR association appears first and CI glyphs fill in shortly after.
+The strategy is chosen by local branch count (threshold ~40):
+
+- **Few branches (per-branch, the common case):** one `gh pr list --head <branch>` call per local branch, run in a parallel worker pool. Each single-branch query is cheap enough to include `statusCheckRollup`, so the number, state, *and* CI all arrive together in roughly one wave. On a large repo this is far faster than the list-wide query (≈1s vs ≈5s) because it never scans the repo's full PR set.
+- **Many branches (fallback):** one `gh pr list` call for all branches (number, state, URL, no rollup), then CI fetched lazily per *open* attached PR via `gh pr view <n> --json statusCheckRollup` in a worker pool. Above the threshold the per-branch fan-out would issue too many requests, so the single list call wins. Here PR association appears first and CI glyphs fill in shortly after.
+
+The PR fetch waits for local branch metadata before running, since the branch list drives the strategy choice.
 
 - Shows: `#123` + state glyph (open/ready `○`, draft `◌`, approved `◆`, merged `⬡`, closed `✕`) + CI status (`✓` passing, `✗` failing, `●` running).
 - PR number is an OSC 8 hyperlink to the PR page (clickable in supporting terminals).

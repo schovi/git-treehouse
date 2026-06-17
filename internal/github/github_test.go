@@ -105,6 +105,41 @@ func TestLoadPullRequestCIFetchesSinglePullRequestRollup(t *testing.T) {
 	}
 }
 
+func TestLoadPullRequestForBranchPrefersOpenAndIncludesCI(t *testing.T) {
+	runner := &fakeRunner{
+		output: []byte(`[
+			{"number":7,"state":"CLOSED","isDraft":false,"headRefName":"feature/x","url":"https://github.com/acme/repo/pull/7","statusCheckRollup":[]},
+			{"number":9,"state":"OPEN","isDraft":false,"headRefName":"feature/x","url":"https://github.com/acme/repo/pull/9","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}
+		]`),
+	}
+
+	pullRequest, ok := LoadPullRequestForBranch(context.Background(), "/repo", runner, "feature/x")
+
+	if !ok {
+		t.Fatal("LoadPullRequestForBranch() ok = false, want true")
+	}
+	if pullRequest.Number != 9 {
+		t.Fatalf("Number = %d, want 9 (the open PR)", pullRequest.Number)
+	}
+	if pullRequest.State != "○" || pullRequest.CI != "✓" {
+		t.Fatalf("pull request = %#v, want open state and passing CI", pullRequest)
+	}
+	if len(runner.commands) != 1 || !strings.Contains(runner.commands[0], "--head feature/x") {
+		t.Fatalf("command = %v, want gh pr list --head feature/x", runner.commands)
+	}
+	if !strings.Contains(runner.commands[0], "statusCheckRollup") {
+		t.Fatalf("command = %q, want statusCheckRollup (cheap for a single branch)", runner.commands[0])
+	}
+}
+
+func TestLoadPullRequestForBranchReturnsFalseWhenNoPR(t *testing.T) {
+	runner := &fakeRunner{output: []byte(`[]`)}
+
+	if _, ok := LoadPullRequestForBranch(context.Background(), "/repo", runner, "feature/none"); ok {
+		t.Fatal("LoadPullRequestForBranch() ok = true, want false for a branch with no PR")
+	}
+}
+
 func TestLoadPullRequestSummariesSortsRecentFirstAndParsesBranchNames(t *testing.T) {
 	runner := &fakeRunner{results: map[string]fakeResult{
 		"gh repo view --json owner": {

@@ -117,6 +117,7 @@ const (
 	restoreOfferTimeout    = 10 * time.Second
 	prRefreshTTL           = 5 * time.Minute
 	prFetchTimeout         = 15 * time.Second
+	prPerBranchThreshold   = 40
 	scrollbarGutterWidth   = 2
 	appTitle               = "Git treehouse"
 	successGlyph           = "✓"
@@ -261,6 +262,7 @@ type filterOption struct {
 type prLoadedMsg struct {
 	pullRequests map[string]gitdata.PullRequest
 	enabled      bool
+	ciIncluded   bool
 	repoRoot     string
 	id           int
 	checkedAt    time.Time
@@ -614,7 +616,14 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.state = message.state
 		model.applyCachedPullRequests()
 		model.restoreSelection(anchor)
-		return model, model.diskUsageCommand(context.Background(), time.Now(), model.enrichmentID)
+		commands := []tea.Cmd{model.diskUsageCommand(context.Background(), time.Now(), model.enrichmentID)}
+		// PR fetch was deferred until the branch list became available.
+		if model.prLoading && model.enrichmentContext != nil {
+			if prCommand := model.pullRequestFetchCommand(model.enrichmentContext, model.enrichmentID); prCommand != nil {
+				commands = append(commands, prCommand)
+			}
+		}
+		return model, tea.Batch(commands...)
 	case prLoadedMsg:
 		if message.id != model.enrichmentID || message.repoRoot != model.state.Repo.Root {
 			return model, nil
@@ -626,6 +635,11 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.prCache = message.pullRequests
 			model.prCacheRepoRoot = model.state.Repo.Root
 			model.prCIChecked = map[int]bool{}
+			if message.ciIncluded {
+				for _, pullRequest := range message.pullRequests {
+					model.prCIChecked[pullRequest.Number] = true
+				}
+			}
 			model.state.Rows = github.AttachPullRequests(model.state.Rows, message.pullRequests)
 			model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, message.pullRequests)
 		} else if len(model.prCache) > 0 && model.prCacheRepoRoot == model.state.Repo.Root {
@@ -5111,20 +5125,13 @@ func (model Model) enrichmentCommands(ctx context.Context, id int, forcePullRequ
 		})
 	}
 	now := time.Now()
-	if model.shouldLoadPullRequests(forcePullRequests, now) {
-		runner := model.runner
-		commands = append(commands, func() tea.Msg {
-			prContext, cancel := context.WithTimeout(ctx, prFetchTimeout)
-			defer cancel()
-			pullRequests, enabled := github.LoadPullRequests(prContext, repoRoot, runner)
-			return prLoadedMsg{
-				pullRequests: pullRequests,
-				enabled:      enabled,
-				repoRoot:     repoRoot,
-				id:           id,
-				checkedAt:    time.Now(),
-			}
-		})
+	// The PR fetch needs the local branch list to decide between per-branch and
+	// list-wide queries, so defer it to localMetadataLoadedMsg when metadata is
+	// still loading (branch rows are not populated yet).
+	if model.shouldLoadPullRequests(forcePullRequests, now) && model.localMetadataReady() {
+		if prCommand := model.pullRequestFetchCommand(ctx, id); prCommand != nil {
+			commands = append(commands, prCommand)
+		}
 	}
 	if diskCommand := model.diskUsageCommand(ctx, now, id); diskCommand != nil {
 		commands = append(commands, diskCommand)
@@ -5153,6 +5160,97 @@ func (model Model) shouldLoadPullRequests(force bool, now time.Time) bool {
 
 func (model Model) pullRequestsPending() bool {
 	return model.showPR && model.prLoading
+}
+
+// pullRequestFetchCommand picks the PR loading strategy by local branch count.
+// For a manageable number of branches it queries each branch directly (mapping
+// plus CI in one fast call), which is far quicker than the list-wide query on
+// large repos. Above the threshold the per-branch fan-out would issue too many
+// requests, so it falls back to the single list call with lazy CI.
+func (model Model) pullRequestFetchCommand(ctx context.Context, id int) tea.Cmd {
+	repoRoot := model.state.Repo.Root
+	runner := model.runner
+	branches := model.localBranchNames()
+	if len(branches) > 0 && len(branches) <= prPerBranchThreshold {
+		return func() tea.Msg {
+			return loadPullRequestsByBranchMsg(ctx, runner, repoRoot, id, branches)
+		}
+	}
+	return func() tea.Msg {
+		prContext, cancel := context.WithTimeout(ctx, prFetchTimeout)
+		defer cancel()
+		pullRequests, enabled := github.LoadPullRequests(prContext, repoRoot, runner)
+		return prLoadedMsg{
+			pullRequests: pullRequests,
+			enabled:      enabled,
+			repoRoot:     repoRoot,
+			id:           id,
+			checkedAt:    time.Now(),
+		}
+	}
+}
+
+func (model Model) localBranchNames() []string {
+	seen := map[string]bool{}
+	names := []string{}
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	for _, row := range model.state.Rows {
+		if !row.Detached {
+			add(row.Branch)
+		}
+	}
+	for _, branch := range model.state.Branches {
+		add(branch.Name)
+	}
+	return names
+}
+
+func loadPullRequestsByBranchMsg(ctx context.Context, runner gitdata.Runner, repoRoot string, id int, branches []string) tea.Msg {
+	if !github.Available(ctx, repoRoot, runner) {
+		return prLoadedMsg{repoRoot: repoRoot, id: id, checkedAt: time.Now()}
+	}
+	pullRequests := map[string]gitdata.PullRequest{}
+	result := func() tea.Msg {
+		return prLoadedMsg{pullRequests: pullRequests, enabled: true, ciIncluded: true, repoRoot: repoRoot, id: id, checkedAt: time.Now()}
+	}
+	jobChannel := make(chan string)
+	var mutex sync.Mutex
+	var waitGroup sync.WaitGroup
+	workerCount := min(8, len(branches))
+	for range workerCount {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for branch := range jobChannel {
+				callContext, cancel := context.WithTimeout(ctx, prFetchTimeout)
+				pullRequest, ok := github.LoadPullRequestForBranch(callContext, repoRoot, runner, branch)
+				cancel()
+				if ok {
+					mutex.Lock()
+					pullRequests[branch] = pullRequest
+					mutex.Unlock()
+				}
+			}
+		}()
+	}
+	for _, branch := range branches {
+		select {
+		case jobChannel <- branch:
+		case <-ctx.Done():
+			close(jobChannel)
+			waitGroup.Wait()
+			return result()
+		}
+	}
+	close(jobChannel)
+	waitGroup.Wait()
+	return result()
 }
 
 // pullRequestCICommand fetches CI status for open PRs attached to local rows or

@@ -3745,6 +3745,48 @@ func TestConfigReloadedMessageUpdatesBranchVisibility(t *testing.T) {
 	}
 }
 
+func TestLocalBranchNamesDedupesWorktreeAndBranchRows(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main"},
+		{Path: "/repo/feature", Branch: "feature"},
+		{Path: "/repo/detached", Branch: "feature", Detached: true},
+	})
+	model.state.Branches = []gitdata.Branch{{Name: "feature"}, {Name: "topic"}}
+
+	names := model.localBranchNames()
+
+	want := []string{"main", "feature", "topic"}
+	if len(names) != len(want) {
+		t.Fatalf("localBranchNames() = %v, want %v", names, want)
+	}
+	for index, branch := range want {
+		if names[index] != branch {
+			t.Fatalf("localBranchNames() = %v, want %v", names, want)
+		}
+	}
+}
+
+func TestPullRequestLoadWithIncludedCIMarksChecked(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	updated, _ := updateModel(t, model, prLoadedMsg{
+		pullRequests: map[string]gitdata.PullRequest{"feature": {Number: 42, State: "○", CI: "✓"}},
+		enabled:      true,
+		ciIncluded:   true,
+		repoRoot:     model.state.Repo.Root,
+		id:           model.enrichmentID,
+		checkedAt:    time.Now(),
+	})
+
+	if !updated.prCIChecked[42] {
+		t.Fatalf("prCIChecked = %v, want PR 42 marked so lazy CI is skipped", updated.prCIChecked)
+	}
+	if updated.state.Rows[0].PR == nil || updated.state.Rows[0].PR.CI != "✓" {
+		t.Fatalf("row PR = %+v, want CI already attached", updated.state.Rows[0].PR)
+	}
+}
+
 func TestPullRequestLoadStoresSessionCache(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/feature", Branch: "feature"},
