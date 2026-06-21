@@ -4,6 +4,26 @@ Release notes for Git Treehouse.
 
 Dates use the GitHub release publication date for published releases. Entries without a GitHub release use the annotated tag date.
 
+## v0.11.0 - 2026-06-21
+
+### New Features
+
+#### Clean Up Merged Command
+
+Added a palette-only batch command, `Clean up merged`. It scans all done rows regardless of the current filter or search: worktrees or branch-only rows merged into main, plus worktrees whose PR is merged or closed. It opens a confirmation dialog with counts for worktrees to remove and branches to delete, representative affected rows, and the exact commands that will run.
+
+The batch stays conservative: worktree removal uses only `git worktree remove` (never `--force`), branch deletion uses only `git branch -d` (never `-D`). Only clean, unlocked, non-root, non-active worktrees are removed; dirty, locked, active, root, detached, prunable, and not-yet-loaded rows are ignored. Worktree branches are deleted only when merged into main, while PR merged/closed worktrees not merged into main are removed but keep their local branch. Approved `before_delete` hooks run once per removed worktree; a hook failure counts as that row's failure and skips its removal while the rest of the batch continues. Full success shows a summary message; partial failure keeps a result dialog open with counts and reasons. When the batch deletes branch refs with known SHAs, the success message offers `u` to restore all deleted refs.
+
+### Bug Fixes
+
+- Fixed the PR column staying silently empty on large repos. The single `gh pr list` call requesting `statusCheckRollup` forced GitHub's GraphQL API to resolve CI for all 200 PRs, returning HTTP 504. The fetch is now split: a fast branch→PR mapping without `statusCheckRollup`, and CI status fetched lazily per open PR.
+- Fixed the PR fetch being cancelled by a hard 2s timeout on large repos (listing 200 PRs takes ~4-5s). The timeout is now a named 15s constant.
+- Fixed delete dialog errors overflowing the frame. Git delete failures now wrap across lines instead of hard-truncating, advisory git hint lines are dropped, the error block is capped, and the dialog body is clipped to the terminal height.
+
+### Improvements
+
+- Cut initial PR latency on normal repos. When the local branch count is small (≤40), each branch is queried with `gh pr list --head` in a parallel worker pool, so number, state, and CI all arrive together in ~1s instead of ~5s+. Above the threshold, the single list call with lazy CI is used to avoid a large request fan-out.
+
 ## v0.10.0 - 2026-06-10
 
 ### New Features
