@@ -217,6 +217,12 @@ The picker loads up to 200 pull requests via `gh` (open, draft, merged, and clos
 
 Active and main worktrees cannot be deleted from the TUI. Dirty or unmerged deletion requires explicitly arming force.
 
+### Clean Up Merged
+
+The `Clean up merged` palette command removes done worktrees and branches in one batch. Open the palette with `Ctrl+P` and run `Clean up merged`. It scans every row regardless of the current filter or search and proposes removing worktrees (or branch-only rows) merged into main, plus worktrees whose PR is merged or closed.
+
+The confirmation dialog shows counts, representative affected rows, and the exact commands. It stays conservative: worktree removal uses `git worktree remove` (never `--force`) and branch deletion uses `git branch -d` (never `-D`). Dirty, locked, active, root, detached, and prunable rows are skipped, and branches are deleted only when merged into main. When deleted branch refs have known SHAs, the success message offers `u` to restore them.
+
 ### Refresh State
 
 `git-treehouse` refreshes local Git state automatically while idle.
