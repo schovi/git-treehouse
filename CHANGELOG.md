@@ -4,6 +4,25 @@ Release notes for Git Treehouse.
 
 Dates use the GitHub release publication date for published releases. Entries without a GitHub release use the annotated tag date.
 
+## v0.12.0 - 2026-06-24
+
+### New Features
+
+#### Context Frames Below The Details Panel
+
+Added state-driven context frames that drill into the selected row, laid out as two columns below the Worktrees panel: the left column stacks Details, Changes, and PR review; the right column is a Git context graph grown to match the left column's height. The two columns sit side by side at 104 columns or wider and stack otherwise.
+
+- **PR review frame**: a roll-up of PR state, checks, and reviews, plus individual failing or running checks, change-request previews, and inline review threads. Each line is an OSC 8 hyperlink. It loads lazily per selected row via `gh pr view` and a GraphQL `reviewThreads` query, and stays visible with a loading placeholder for open PRs.
+- **Changes frame**: a per-file churn summary for a worktree row, showing "no changes" when the worktree is clean.
+- **Git context frame**: places the row's tip in its local history with colored ahead/behind arrows versus `main` and the remote, a two-rail diverged graph that folds back into the shared fork point, and the upstream woven in as real nodes. It renders for both worktree rows and branch-only rows (the branch tip ref stands in for HEAD; the graph loads lazily for the selected branch).
+
+The Details panel is slimmer: neither worktree nor branch rows repeat Main / Commit / Remote / PR, since the paired frames now cover them.
+
+### Bug Fixes
+
+- Merged PRs now render the purple merged glyph and drop the irrelevant CI glyph, matching the PR review frame.
+- The `main` branch no longer shows a PR. It is skipped when querying and when attaching, so an old or fork PR that shares the main branch's name no longer surfaces on the root row.
+
 ## v0.11.0 - 2026-06-21
 
 ### New Features
