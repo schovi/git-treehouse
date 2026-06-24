@@ -43,6 +43,7 @@
 | ✅ | Delete worktrees with guardrails for active, main, dirty, and unmerged branches, and restore a just-deleted branch with `u`. |
 | ✅ | Search branches with `s`, filter worktree states with `Tab`, and run any action from the `Ctrl+P` command palette. |
 | ✅ | See dirty counts, upstream sync, main comparison, commit age, disk size, PR, and CI state in one table. |
+| ✅ | Drill into the selected row with context frames below the table: a PR review roll-up, a per-file changes summary, and a Git context graph. |
 | ✅ | Auto-refresh local Git state while idle, with `git fetch --prune` only when you ask for it. |
 | ✅ | Per-repo `.worktree` config: path template overrides, copied files, and approved create/delete hooks. |
 | ✅ | Open a worktree in your editor, copy paths, or use `git-treehouse list` for non-interactive output. |
@@ -413,6 +414,8 @@ If `gh` is installed and authenticated, `git-treehouse` loads PR data in the bac
 - PR state
 - CI status
 - terminal hyperlinks where supported
+
+When a row is selected, the PR review frame below the table drills further: a state/checks/reviews roll-up, individual failing or running checks, change-request previews, and inline review threads, each a terminal hyperlink. It loads lazily per selected row and stays visible with a loading placeholder for open PRs.
 
 If `gh` is missing or unauthenticated, PR columns stay hidden or pending without noisy errors.
 
