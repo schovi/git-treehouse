@@ -88,7 +88,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 │ > auth cleanup                                                   │
 │                                                                  │
 │   #128  ○  Fix auth cleanup after token refresh  feature/auth   │
-│ › #127  ⬡  Add PR checkout into worktree         alice/pr-flow  │
+│ › #127  ⎇  Add PR checkout into worktree         alice/pr-flow  │
 │   #126  ✕  Remove stale worktree copy path       path-fix       │
 │   #125  ◌  Draft: improve status loading         loading        │
 │                                                                  │

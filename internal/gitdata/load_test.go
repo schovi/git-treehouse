@@ -328,3 +328,176 @@ func TestGitAwareDiskUsageUsesGitFileList(t *testing.T) {
 		t.Fatalf("GitAwareDiskUsage() = %d, want tracked file size only", size)
 	}
 }
+
+func TestEnrichStatusCountsAttachesChangedFiles(t *testing.T) {
+	const path = "/repo/feature"
+	statusKey := path + "|git status --porcelain=v1 -b --untracked-files=normal"
+	numstatKey := path + "|git diff --numstat HEAD"
+	runner := fakeRunner{
+		statusKey: {output: "## feature\n" +
+			"A  staged.go\n" +
+			" M modified.go\n" +
+			"?? notes.md\n"},
+		numstatKey: {output: "10\t0\tstaged.go\n7\t3\tmodified.go\n"},
+	}
+
+	rows := []Worktree{{Path: path}}
+	enrichStatusCounts(context.Background(), rows, runner)
+
+	files := rows[0].ChangedFiles
+	if len(files) != 3 {
+		t.Fatalf("ChangedFiles len = %d, want 3: %+v", len(files), files)
+	}
+	if rows[0].Status.Staged != 1 || rows[0].Status.Modified != 1 || rows[0].Status.Untracked != 1 {
+		t.Fatalf("Status counts = %+v, want staged 1 modified 1 untracked 1", rows[0].Status)
+	}
+	byPath := map[string]ChangedFile{}
+	for _, file := range files {
+		byPath[file.Path] = file
+	}
+	if got := byPath["staged.go"]; got.Added != 10 || got.Deleted != 0 || !got.HasStats() {
+		t.Fatalf("staged.go stats = %+v, want +10/-0", got)
+	}
+	if got := byPath["modified.go"]; got.Added != 7 || got.Deleted != 3 {
+		t.Fatalf("modified.go stats = %+v, want +7/-3", got)
+	}
+	if got := byPath["notes.md"]; got.HasStats() {
+		t.Fatalf("untracked notes.md should have no stats, got %+v", got)
+	}
+}
+
+func TestEnrichContextGraphs(t *testing.T) {
+	const path = "/repo/feature"
+	branchKey := path + "|git log -n 5 --format=%h%x1f%s refs/heads/main..HEAD"
+	mainKey := path + "|git log -n 5 --format=%h%x1f%s HEAD..refs/heads/main"
+	baseRefKey := path + "|git merge-base HEAD refs/heads/main"
+	baseLogKey := path + "|git log -n 12 --format=%h%x1f%s fff0000"
+	remoteKey := path + "|git log -n 5 --format=%h%x1f%s HEAD..@{u}"
+	runner := fakeRunner{
+		branchKey:  {output: "aaaaaaa\x1fwire handler\n"},
+		mainKey:    {output: "bbbbbbb\x1fbump deps\nccccccc\x1ffix flake\n"},
+		baseRefKey: {output: "fff0000\n"},
+		baseLogKey: {output: "fff0000\x1ffork base\nddddddd\x1fshared ancestor\n"},
+		remoteKey:  {output: "eeeeeee\x1fserver commit\n"},
+	}
+
+	rows := []Worktree{
+		{Path: path, Branch: "feature"},
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	}
+	enrichContextGraphs(context.Background(), Repository{MainBranch: "main"}, rows, runner)
+
+	graph := rows[0].Graph
+	if !graph.Loaded {
+		t.Fatal("feature row graph not loaded")
+	}
+	if len(graph.BranchCommits) != 1 || graph.BranchCommits[0].Short != "aaaaaaa" {
+		t.Fatalf("BranchCommits = %+v, want one wire-handler commit", graph.BranchCommits)
+	}
+	if len(graph.MainCommits) != 2 || graph.MainCommits[0].Subject != "bump deps" {
+		t.Fatalf("MainCommits = %+v, want two main commits", graph.MainCommits)
+	}
+	if graph.ForkPoint.Short != "fff0000" || graph.ForkPoint.Subject != "fork base" {
+		t.Fatalf("ForkPoint = %+v, want the merge-base commit", graph.ForkPoint)
+	}
+	if len(graph.BaseCommits) != 1 || graph.BaseCommits[0].Short != "ddddddd" {
+		t.Fatalf("BaseCommits = %+v, want one shared ancestor below the fork", graph.BaseCommits)
+	}
+	if len(graph.RemoteCommits) != 1 || graph.RemoteCommits[0].Short != "eeeeeee" {
+		t.Fatalf("RemoteCommits = %+v, want one upstream-only commit", graph.RemoteCommits)
+	}
+	if rows[1].Graph.Loaded {
+		t.Fatal("main worktree should not get a context graph")
+	}
+}
+
+func TestLoadBranchContextGraph(t *testing.T) {
+	const root = "/repo"
+	const ref = "refs/heads/feature/login"
+	branchKey := root + "|git log -n 5 --format=%h%x1f%s refs/heads/main.." + ref
+	mainKey := root + "|git log -n 5 --format=%h%x1f%s " + ref + "..refs/heads/main"
+	remoteKey := root + "|git log -n 5 --format=%h%x1f%s " + ref + "..feature/login@{u}"
+	baseRefKey := root + "|git merge-base " + ref + " refs/heads/main"
+	baseLogKey := root + "|git log -n 12 --format=%h%x1f%s fff0000"
+	runner := fakeRunner{
+		branchKey:  {output: "aaaaaaa\x1fwire handler\n"},
+		mainKey:    {output: "bbbbbbb\x1fbump deps\n"},
+		remoteKey:  {output: "eeeeeee\x1fserver commit\n"},
+		baseRefKey: {output: "fff0000\n"},
+		baseLogKey: {output: "fff0000\x1ffork base\nddddddd\x1fshared ancestor\n"},
+	}
+	repo := Repository{Root: root, MainBranch: "main"}
+
+	graph := LoadBranchContextGraph(context.Background(), repo, "feature/login", runner)
+
+	if !graph.Loaded {
+		t.Fatal("branch graph not loaded")
+	}
+	if len(graph.BranchCommits) != 1 || graph.BranchCommits[0].Short != "aaaaaaa" {
+		t.Fatalf("BranchCommits = %+v, want one wire-handler commit", graph.BranchCommits)
+	}
+	if graph.ForkPoint.Short != "fff0000" {
+		t.Fatalf("ForkPoint = %+v, want the merge-base commit", graph.ForkPoint)
+	}
+	if len(graph.RemoteCommits) != 1 || graph.RemoteCommits[0].Short != "eeeeeee" {
+		t.Fatalf("RemoteCommits = %+v, want one upstream-only commit", graph.RemoteCommits)
+	}
+
+	// The main branch never gets a graph (nothing to compare against).
+	if LoadBranchContextGraph(context.Background(), repo, "main", runner).Loaded {
+		t.Fatal("main branch should not get a context graph")
+	}
+}
+
+func TestBucketedDiskUsage(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		filepath.Join("src", "main.go"):                  "package main",        // source
+		filepath.Join("node_modules", "dep", "index.js"): "module.exports = {}", // dependencies
+		filepath.Join("dist", "bundle.js"):               "minified",            // build output
+		filepath.Join(".git", "objects", "pack", "data"): "gitpack",             // git data
+	}
+	for relative, content := range files {
+		full := filepath.Join(root, relative)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	breakdown, err := BucketedDiskUsage(context.Background(), root)
+	if err != nil {
+		t.Fatalf("BucketedDiskUsage() error = %v", err)
+	}
+	if !breakdown.Loaded {
+		t.Fatal("breakdown not marked loaded")
+	}
+
+	byLabel := map[string]int64{}
+	for _, bucket := range breakdown.Buckets {
+		byLabel[bucket.Label] = bucket.Bytes
+	}
+	for _, label := range []string{"dependencies", "build output", "git data", "source"} {
+		if byLabel[label] == 0 {
+			t.Fatalf("expected non-zero %q bucket, got buckets %+v", label, breakdown.Buckets)
+		}
+	}
+	wantReclaimable := byLabel["dependencies"] + byLabel["build output"]
+	if breakdown.ReclaimableBytes != wantReclaimable {
+		t.Fatalf("ReclaimableBytes = %d, want %d (deps + build)", breakdown.ReclaimableBytes, wantReclaimable)
+	}
+	var sum int64
+	for _, bucket := range breakdown.Buckets {
+		sum += bucket.Bytes
+	}
+	if sum != breakdown.Total {
+		t.Fatalf("bucket sum %d != total %d", sum, breakdown.Total)
+	}
+	for index := 1; index < len(breakdown.Buckets); index++ {
+		if breakdown.Buckets[index-1].Bytes < breakdown.Buckets[index].Bytes {
+			t.Fatalf("buckets not sorted descending: %+v", breakdown.Buckets)
+		}
+	}
+}

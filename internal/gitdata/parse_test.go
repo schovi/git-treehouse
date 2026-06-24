@@ -154,3 +154,73 @@ func TestParseUpstreamTrack(t *testing.T) {
 		})
 	}
 }
+
+func TestParseStatusPorcelainFiles(t *testing.T) {
+	output := "## feature/topic...origin/feature/topic [ahead 2, behind 1]\n" +
+		" M modified.txt\n" +
+		"A  staged.txt\n" +
+		"MM both.txt\n" +
+		"R  old.txt -> new.txt\n" +
+		"?? untracked.txt\n"
+
+	got := ParseStatusPorcelain(output)
+	if len(got.Files) != 5 {
+		t.Fatalf("ParseStatusPorcelain().Files len = %d, want 5: %+v", len(got.Files), got.Files)
+	}
+
+	modified := got.Files[0]
+	if modified.Path != "modified.txt" || modified.Staged() || modified.Untracked() || modified.Glyph() != 'M' {
+		t.Fatalf("modified entry parsed incorrectly: %+v glyph=%c staged=%v", modified, modified.Glyph(), modified.Staged())
+	}
+	staged := got.Files[1]
+	if staged.Path != "staged.txt" || !staged.Staged() || staged.Glyph() != 'A' {
+		t.Fatalf("staged entry parsed incorrectly: %+v glyph=%c staged=%v", staged, staged.Glyph(), staged.Staged())
+	}
+	rename := got.Files[3]
+	if rename.Path != "new.txt" || rename.OrigPath != "old.txt" || rename.Glyph() != 'R' {
+		t.Fatalf("rename entry parsed incorrectly: %+v glyph=%c", rename, rename.Glyph())
+	}
+	untracked := got.Files[4]
+	if untracked.Path != "untracked.txt" || !untracked.Untracked() || untracked.Glyph() != '?' {
+		t.Fatalf("untracked entry parsed incorrectly: %+v glyph=%c", untracked, untracked.Glyph())
+	}
+	for _, file := range got.Files {
+		if file.HasStats() {
+			t.Fatalf("expected no stats before numstat enrichment, got %+v", file)
+		}
+	}
+}
+
+func TestParseNumstat(t *testing.T) {
+	output := "42\t3\tmodified.txt\n" +
+		"-\t-\timage.png\n" +
+		"5\t0\told.go => new.go\n"
+
+	stats := ParseNumstat(output)
+	if got, ok := stats["modified.txt"]; !ok || got.Added != 42 || got.Deleted != 3 {
+		t.Fatalf("ParseNumstat()[modified.txt] = %+v, ok=%v, want {42 3}", got, ok)
+	}
+	if _, ok := stats["image.png"]; ok {
+		t.Fatalf("ParseNumstat() should skip binary files, got entry for image.png")
+	}
+	if got, ok := stats["new.go"]; !ok || got.Added != 5 || got.Deleted != 0 {
+		t.Fatalf("ParseNumstat() rename keyed by new path = %+v, ok=%v, want {5 0}", got, ok)
+	}
+}
+
+func TestParseGraphCommits(t *testing.T) {
+	output := "9c429f5\x1fdocs: describe copy-path action\n" +
+		"40aa71a\x1flocal-side commit\n" +
+		"\n"
+
+	commits := ParseGraphCommits(output)
+	if len(commits) != 2 {
+		t.Fatalf("ParseGraphCommits() len = %d, want 2: %+v", len(commits), commits)
+	}
+	if commits[0].Short != "9c429f5" || commits[0].Subject != "docs: describe copy-path action" {
+		t.Fatalf("first commit parsed incorrectly: %+v", commits[0])
+	}
+	if commits[1].Short != "40aa71a" || commits[1].Subject != "local-side commit" {
+		t.Fatalf("second commit parsed incorrectly: %+v", commits[1])
+	}
+}

@@ -1,0 +1,83 @@
+Frame 2: PR review
+
+Goal: show what blocks the pull request from merging. Three things, in priority order:
+CI check status, change requests, and unresolved review threads. This goes beyond the
+Details panel's one-line "PR #1 open, CI pending".
+
+Only shown when the row has a PR and GitHub lookup is enabled. Otherwise the frame is
+hidden (not rendered empty).
+
+Wide / standard variant
+
++-- PR review - #1 docs: add troubleshooting guide ------------+
+| State    open . draft no . mergeable yes                     |
+| Review   changes requested by 1                              |
+|                                                              |
+| Checks   3 passed . 1 failed . 1 running                     |
+|   ok    build            12s                                 |
+|   ok    test             1m04s                               |
+|   ok    security         18s                                 |
+|   FAIL  lint             "spec.md line 40: trailing space"   |
+|   ...   e2e               running 2m                         |
+|                                                              |
+| Threads  2 unresolved                                        |
+|   @alice  spec.md:40   nit: wrap this section?               |
+|   @bob    load.go:88   this can panic on nil runner          |
++-- p open PR . c copy URL . r re-check -----------------------+
+
+State and review-state vocabulary:
+- State line: open/closed/merged, draft yes/no, mergeable yes/no/conflicting.
+- Review line collapses GitHub review state into one of:
+  approved . changes requested by N . review requested . no review yet.
+
+Checks rules:
+- Header is the aggregate roll-up: counts of passed / failed / running / skipped.
+- Failed checks list first, with a short failure summary when the API exposes one.
+- Running checks show elapsed time. Passed checks show duration.
+- Cap the list (for example 6 rows) and add "...+N more checks" so height stays bounded.
+
+Threads rules:
+- Only unresolved threads. Resolved ones are noise here.
+- Each line: author, file:line anchor, truncated first comment.
+- Change-request review comments sort above plain comments.
+
+All checks green, no threads (ready state)
+
++-- PR review - #7 feat: disk breakdown -----------------------+
+| State    open . draft no . mergeable yes                     |
+| Review   approved by 2                                       |
+| Checks   6 passed                                            |
+| Threads  none unresolved                                     |
+|          ready to merge                                      |
++-- p open PR . m merge (if enabled) --------------------------+
+
+Draft / early state
+
++-- PR review - #9 wip: search --------------------------------+
+| State    open . DRAFT . mergeable unknown                    |
+| Review   no review yet                                       |
+| Checks   2 running                                           |
+| Threads  none                                                |
+|          draft - finish, then mark ready for review          |
++-- p open PR -------------------------------------------------+
+
+Compact variant (overlay)
+
++-- PR review #1 ---------------------+
+| changes requested by 1              |
+| checks  3 ok 1 FAIL 1 run           |
+|   FAIL lint                         |
+| threads 2 unresolved                |
++-- p open PR ------------------------+
+
+Information value:
+- Says: the merge blockers in one place: failing automation, requested changes, and
+  open conversation.
+- Used for: deciding whether the next move is fix-checks, address-comments, ping
+  reviewer, or merge. Maps to "is this branch ready, stale, or blocked?".
+- Needs new data: per-check status (GitHub checks/statuses API), review state and
+  change requests, and review threads with resolved flags. Only the aggregate CI state
+  exists today.
+- Risk: most expensive frame to build, most API surface, slowest to load. Should load
+  lazily and degrade to the existing one-line summary while fetching.
+</content>

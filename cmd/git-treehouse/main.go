@@ -365,7 +365,7 @@ func enrichListState(ctx context.Context, state *gitdata.State, runner gitdata.R
 				showPR = result.showPR
 				prPending = result.prPending
 				if len(result.pullRequests) > 0 {
-					state.Rows = github.AttachPullRequests(state.Rows, result.pullRequests)
+					state.Rows = github.AttachPullRequests(state.Rows, result.pullRequests, state.Repo.MainBranch)
 				}
 			case listSizeResult:
 				applyListSizeResult(state, result)

@@ -1,0 +1,72 @@
+Frame 3: Changes
+
+Goal: a rich, scannable `git status`. Per-file status (added, deleted, modified,
+renamed, untracked) with per-file `+/-` line stats and a staged/unstaged marker. This
+is the file-level detail behind the Details panel's "Dirty 1 staged, 2 modified".
+
+Shown whenever the worktree is dirty. Hidden (or shows the clean state) otherwise.
+
+Status glyph legend (one column, git-porcelain flavored):
+  A added      M modified    D deleted     R renamed    ? untracked
+  staged shown by a left dot:  "* M" staged+modified,  "  M" unstaged
+
+Wide / standard variant
+
++-- Changes - feature/login -----------------------------------+
+| 7 files . +312 / -98 . 1 staged 2 modified 4 untracked       |
+|                                                              |
+| * M  internal/tui/model.go              +42  -3              |
+|   M  internal/gitdata/load.go           +18  -7              |
+|   M  README.md                          +5   -1              |
+|   A  docs/wireframes/login.txt          +30  -0   untracked  |
+|   ?  scratch/notes.md                    -    -   untracked  |
+|   D  internal/old/legacy.go             +0   -56             |
+|   R  cmd/main.go -> cmd/cli/main.go      +2   -2             |
++-- enter diff . s stage . u unstage . scroll for more --------+
+
+Rules:
+- Header is the roll-up: total files, total +/-, and the staged/modified/untracked
+  split that the Details panel already shows, so they agree.
+- Staged files sort first (the "* " marker), then modified, then untracked, then
+  deletions. Within a group, largest churn first so the heavy files are visible.
+- Untracked files have no diff stats; show "-" and an "untracked" tag.
+- Renames show old -> new on one line.
+- Long paths truncate from the left ("...gitdata/load.go") so the filename stays.
+- Cap rows to the frame height; overflow scrolls. Footer hints scrolling exists.
+
+Mostly-untracked / new worktree variant
+
++-- Changes - spike/idea --------------------------------------+
+| 3 files . +0 / -0 . all untracked                           |
+|   ?  main.go                                                 |
+|   ?  go.mod                                                  |
+|   ?  notes.md                                                |
++-- nothing staged yet ----------------------------------------+
+
+Clean variant (when the frame is pinned on but the row is clean)
+
++-- Changes - docs/troubleshooting ----------------------------+
+| working tree clean                                           |
+| nothing to commit                                            |
++--------------------------------------------------------------+
+
+Compact variant (overlay)
+
++-- Changes (7) +312/-98 -------------+
+| * M model.go        +42 -3          |
+|   M load.go         +18 -7          |
+|   A login.txt       +30  -          |
+|   ? notes.md         -   -          |
+|   +3 more                           |
++-- enter diff -----------------------+
+
+Information value:
+- Says: exactly what local work exists, file by file, not just that work exists.
+- Used for: deciding whether to stage, stash, commit, or avoid deleting; sizing the
+  change before review. Maps to "is there local work at risk?".
+- Needs new data: per-file paths from `git status --porcelain` and `+/-` from
+  `git diff --numstat` (staged via `--cached`, plus unstaged). Counts exist today;
+  paths and stats do not. This is the same data the dirty-file preview needs, so it is
+  the cheapest frame to ship first.
+- Pairs with Details: Details shows the summary line, this frame is the drill-down.
+</content>

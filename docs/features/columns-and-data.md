@@ -36,7 +36,8 @@ The strategy is chosen by local branch count (threshold ~40):
 
 The PR fetch waits for local branch metadata before running, since the branch list drives the strategy choice.
 
-- Shows: `#123` + state glyph (open/ready `○`, draft `◌`, approved `◆`, merged `⬡`, closed `✕`) + CI status (`✓` passing, `✗` failing, `●` running).
+- Shows: `#123` + state glyph (open/ready `○`, draft `◌`, approved `◆`, merged `⎇`, closed `✕`) + CI status (`✓` passing, `✗` failing, `●` running). The merged glyph matches the PR review frame's badge. CI status is only shown for open PRs; merged and closed PRs have settled CI, so the glyph is dropped (both the per-branch and the lazy fallback path skip it).
+- The main branch never shows a PR. It is the integration target, not a PR head, so it is skipped when querying and again when attaching: an old or fork PR whose head ref happens to share the main branch's name (e.g. `master`) does not surface on the root row.
 - PR number is an OSC 8 hyperlink to the PR page (clickable in supporting terminals).
 - No configured remote → column hidden entirely.
 - `gh` missing/unauthed → column remains reserved but empty, no error noise.

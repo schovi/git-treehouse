@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/schovi/git-treehouse/internal/gitdata"
 )
 
 type fakeRunner struct {
@@ -132,6 +134,26 @@ func TestLoadPullRequestForBranchPrefersOpenAndIncludesCI(t *testing.T) {
 	}
 }
 
+func TestLoadPullRequestForBranchDropsCIForMergedPR(t *testing.T) {
+	runner := &fakeRunner{
+		output: []byte(`[
+			{"number":24128,"state":"MERGED","isDraft":false,"headRefName":"feature/x","url":"https://github.com/acme/repo/pull/24128","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}
+		]`),
+	}
+
+	pullRequest, ok := LoadPullRequestForBranch(context.Background(), "/repo", runner, "feature/x")
+
+	if !ok {
+		t.Fatal("LoadPullRequestForBranch() ok = false, want true")
+	}
+	if pullRequest.State != "⎇" {
+		t.Fatalf("State = %q, want merged glyph ⎇", pullRequest.State)
+	}
+	if pullRequest.CI != "" {
+		t.Fatalf("CI = %q, want empty: merged PRs have settled CI and should not show a glyph", pullRequest.CI)
+	}
+}
+
 func TestLoadPullRequestForBranchReturnsFalseWhenNoPR(t *testing.T) {
 	runner := &fakeRunner{output: []byte(`[]`)}
 
@@ -161,7 +183,7 @@ func TestLoadPullRequestSummariesSortsRecentFirstAndParsesBranchNames(t *testing
 	if len(summaries) != 2 {
 		t.Fatalf("summary count = %d, want 2: %+v", len(summaries), summaries)
 	}
-	if summaries[0].Number != 24 || summaries[0].BranchName() != "alice/fix/docs" || summaries[0].StateGlyph() != "⬡" {
+	if summaries[0].Number != 24 || summaries[0].BranchName() != "alice/fix/docs" || summaries[0].StateGlyph() != "⎇" {
 		t.Fatalf("first summary = %+v, want recent fork PR", summaries[0])
 	}
 	if summaries[1].Number != 12 || summaries[1].BranchName() != "feature/login" || summaries[1].StateGlyph() != "○" {
@@ -218,6 +240,48 @@ func TestLoadPullRequestSummariesReturnsGhErrors(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "gh auth failed") {
 		t.Fatalf("LoadPullRequestSummaries() error = %v, want gh auth failure", err)
+	}
+}
+
+func TestAttachPullRequestsSkipsMainBranch(t *testing.T) {
+	rows := []gitdata.Worktree{
+		{Path: "/repo/main", Branch: "master", IsMain: true},
+		{Path: "/repo/feature", Branch: "feature/login"},
+	}
+	// An old/fork PR whose head ref is literally "master" must not land on the
+	// main row; a feature branch's PR still attaches normally.
+	pullRequests := map[string]gitdata.PullRequest{
+		"master":        {Number: 1996, State: "⎇"},
+		"feature/login": {Number: 24, State: "○"},
+	}
+
+	rows = AttachPullRequests(rows, pullRequests, "master")
+
+	if rows[0].PR != nil {
+		t.Fatalf("main row PR = %#v, want nil (main branch never carries a PR)", rows[0].PR)
+	}
+	if rows[1].PR == nil || rows[1].PR.Number != 24 {
+		t.Fatalf("feature row PR = %#v, want #24", rows[1].PR)
+	}
+}
+
+func TestAttachBranchPullRequestsSkipsMainBranch(t *testing.T) {
+	branches := []gitdata.Branch{
+		{Name: "master"},
+		{Name: "feature/login"},
+	}
+	pullRequests := map[string]gitdata.PullRequest{
+		"master":        {Number: 1996, State: "⎇"},
+		"feature/login": {Number: 24, State: "○"},
+	}
+
+	branches = AttachBranchPullRequests(branches, pullRequests, "master")
+
+	if branches[0].PR != nil {
+		t.Fatalf("main branch PR = %#v, want nil", branches[0].PR)
+	}
+	if branches[1].PR == nil || branches[1].PR.Number != 24 {
+		t.Fatalf("feature branch PR = %#v, want #24", branches[1].PR)
 	}
 }
 

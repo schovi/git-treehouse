@@ -148,12 +148,17 @@ func LoadPullRequestForBranch(ctx context.Context, repoRoot string, runner gitda
 			break
 		}
 	}
-	return gitdata.PullRequest{
+	pullRequest := gitdata.PullRequest{
 		Number: chosen.Number,
 		State:  stateGlyph(chosen.State, chosen.IsDraft, chosen.ReviewDecision),
-		CI:     ciGlyph(chosen.StatusCheckRollup),
 		URL:    chosen.URL,
-	}, true
+	}
+	// Merged/closed PRs have settled CI; the glyph adds noise, so only open PRs
+	// carry one. This mirrors the lazy CI path, which skips non-open PRs too.
+	if pullRequest.IsOpen() {
+		pullRequest.CI = ciGlyph(chosen.StatusCheckRollup)
+	}
+	return pullRequest, true
 }
 
 func LoadPullRequestSummaries(ctx context.Context, repoRoot string, runner gitdata.Runner) ([]PullRequestSummary, error) {
@@ -245,8 +250,15 @@ func sortPullRequestSummaries(pullRequests []PullRequestSummary) {
 	})
 }
 
-func AttachPullRequests(rows []gitdata.Worktree, pullRequests map[string]gitdata.PullRequest) []gitdata.Worktree {
+// AttachPullRequests maps PRs onto rows by branch name. The main branch is the
+// integration target, never a PR's head in normal flow, so it is skipped: an old
+// or fork PR that happens to share the main branch's name (e.g. "master") must
+// not surface on the root row.
+func AttachPullRequests(rows []gitdata.Worktree, pullRequests map[string]gitdata.PullRequest, mainBranch string) []gitdata.Worktree {
 	for index := range rows {
+		if rows[index].Branch == mainBranch {
+			continue
+		}
 		if pullRequest, ok := pullRequests[rows[index].Branch]; ok {
 			rows[index].PR = &pullRequest
 		}
@@ -254,8 +266,11 @@ func AttachPullRequests(rows []gitdata.Worktree, pullRequests map[string]gitdata
 	return rows
 }
 
-func AttachBranchPullRequests(branches []gitdata.Branch, pullRequests map[string]gitdata.PullRequest) []gitdata.Branch {
+func AttachBranchPullRequests(branches []gitdata.Branch, pullRequests map[string]gitdata.PullRequest, mainBranch string) []gitdata.Branch {
 	for index := range branches {
+		if branches[index].Name == mainBranch {
+			continue
+		}
 		if pullRequest, ok := pullRequests[branches[index].Name]; ok {
 			branches[index].PR = &pullRequest
 		}
@@ -303,7 +318,7 @@ func stateGlyph(state string, draft bool, reviewDecision string) string {
 		}
 		return "○"
 	case "MERGED":
-		return "⬡"
+		return "⎇"
 	case "CLOSED":
 		return "✕"
 	default:

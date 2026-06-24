@@ -48,6 +48,9 @@ type Model struct {
 	prCacheRepoRoot        string
 	prLastCheckedAt        time.Time
 	prCIChecked            map[int]bool
+	prReview               map[int]github.PullRequestReview
+	prReviewChecked        map[int]bool
+	branchGraphChecked     map[string]bool
 	selectedPath           string
 	createDialog           *createDialog
 	checkoutDialog         *checkoutDialog
@@ -97,6 +100,7 @@ var (
 	inspectorWarnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	inspectorCommitStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
 	inspectorSubjectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	mergedGlyphStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("99")) // purple, like GitHub's merged badge
 	branchOnlyDetailStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	keyStyle              = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
 	hintStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
@@ -274,11 +278,26 @@ type prCILoadedMsg struct {
 	id       int
 }
 
+type prReviewLoadedMsg struct {
+	number   int
+	review   github.PullRequestReview
+	repoRoot string
+	id       int
+}
+
+type branchGraphLoadedMsg struct {
+	name     string
+	graph    gitdata.ContextGraph
+	repoRoot string
+	id       int
+}
+
 type sizesLoadedMsg struct {
-	gitSizes  map[string]int64
-	fullSizes map[string]int64
-	repoRoot  string
-	id        int
+	gitSizes   map[string]int64
+	fullSizes  map[string]int64
+	breakdowns map[string]gitdata.DiskBreakdown
+	repoRoot   string
+	id         int
 }
 
 type localMetadataLoadedMsg struct {
@@ -545,7 +564,7 @@ func prMergedOrClosed(row gitdata.Row) bool {
 	if pr == nil {
 		return false
 	}
-	return strings.EqualFold(pr.State, "⬡") || strings.EqualFold(pr.State, "✕")
+	return strings.EqualFold(pr.State, "⎇") || strings.EqualFold(pr.State, "✕")
 }
 
 func New(state gitdata.State, config config.Config, runner gitdata.Runner) Model {
@@ -616,7 +635,12 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.state = message.state
 		model.applyCachedPullRequests()
 		model.restoreSelection(anchor)
-		commands := []tea.Cmd{model.diskUsageCommand(context.Background(), time.Now(), model.enrichmentID)}
+		// Branches were rebuilt fresh (graphs empty), so re-arm the lazy graph load.
+		model.branchGraphChecked = map[string]bool{}
+		commands := []tea.Cmd{
+			model.diskUsageCommand(context.Background(), time.Now(), model.enrichmentID),
+			model.selectedBranchGraphCommand(model.enrichmentID),
+		}
 		// PR fetch was deferred until the branch list became available.
 		if model.prLoading && model.enrichmentContext != nil {
 			if prCommand := model.pullRequestFetchCommand(model.enrichmentContext, model.enrichmentID); prCommand != nil {
@@ -635,19 +659,23 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.prCache = message.pullRequests
 			model.prCacheRepoRoot = model.state.Repo.Root
 			model.prCIChecked = map[int]bool{}
+			model.prReviewChecked = map[int]bool{}
+			model.prReview = map[int]github.PullRequestReview{}
 			if message.ciIncluded {
 				for _, pullRequest := range message.pullRequests {
 					model.prCIChecked[pullRequest.Number] = true
 				}
 			}
-			model.state.Rows = github.AttachPullRequests(model.state.Rows, message.pullRequests)
-			model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, message.pullRequests)
+			model.state.Rows = github.AttachPullRequests(model.state.Rows, message.pullRequests, model.state.Repo.MainBranch)
+			model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, message.pullRequests, model.state.Repo.MainBranch)
 		} else if len(model.prCache) > 0 && model.prCacheRepoRoot == model.state.Repo.Root {
 			model.showPR = true
-			model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache)
-			model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, model.prCache)
+			model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache, model.state.Repo.MainBranch)
+			model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, model.prCache, model.state.Repo.MainBranch)
 		}
-		return model, model.pullRequestCICommand(message.id)
+		ciCommand := model.pullRequestCICommand(message.id)
+		reviewCommand := model.selectedReviewCommand(message.id)
+		return model, tea.Batch(ciCommand, reviewCommand)
 	case prCILoadedMsg:
 		if message.id != model.enrichmentID || message.repoRoot != model.state.Repo.Root {
 			return model, nil
@@ -661,8 +689,31 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				model.prCache[branch] = pullRequest
 			}
 		}
-		model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache)
-		model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, model.prCache)
+		model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache, model.state.Repo.MainBranch)
+		model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, model.prCache, model.state.Repo.MainBranch)
+		return model, nil
+	case prReviewLoadedMsg:
+		if message.id != model.enrichmentID || message.repoRoot != model.state.Repo.Root {
+			return model, nil
+		}
+		if model.prReview == nil {
+			model.prReview = map[int]github.PullRequestReview{}
+		}
+		// Store the outcome even on failure (a non-Loaded review). The map entry
+		// marks the attempt as finished, so the frame can stop showing "loading"
+		// and stay silent when gh is missing or the lookup failed.
+		model.prReview[message.number] = message.review
+		return model, nil
+	case branchGraphLoadedMsg:
+		if message.id != model.enrichmentID || message.repoRoot != model.state.Repo.Root {
+			return model, nil
+		}
+		for index := range model.state.Branches {
+			if model.state.Branches[index].Name == message.name {
+				model.state.Branches[index].Graph = message.graph
+				break
+			}
+		}
 		return model, nil
 	case sizesLoadedMsg:
 		if message.id != model.enrichmentID || message.repoRoot != model.state.Repo.Root {
@@ -684,6 +735,11 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				model.state.Rows[index].FullSizeLoaded = true
 				model.state.Rows[index].SizeBytes = size
 				model.state.Rows[index].SizeLoaded = true
+			}
+		}
+		for path, breakdown := range message.breakdowns {
+			if index, ok := pathIndexes[path]; ok {
+				model.state.Rows[index].DiskBreakdown = breakdown
 			}
 		}
 		return model, nil
@@ -1101,7 +1157,9 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 	case "?":
 		model.help = !model.help
 	}
-	return model, nil
+	reviewCommand := model.selectedReviewCommand(model.enrichmentID)
+	graphCommand := model.selectedBranchGraphCommand(model.enrichmentID)
+	return model, tea.Batch(reviewCommand, graphCommand)
 }
 
 func (model Model) startRefresh(fetch, automatic bool) (Model, tea.Cmd) {
@@ -2377,9 +2435,11 @@ type viewSnapshot struct {
 	visibleRows []gitdata.Row
 	selectedRow gitdata.Row
 	hasSelected bool
-	detail      string
-	start       int
-	scrollbar   listScrollbar
+	// blocks are the finished, bordered boxes that stack below the Worktrees panel
+	// (the Details box, possibly paired with Git context, then the secondary frames).
+	blocks    []string
+	start     int
+	scrollbar listScrollbar
 }
 
 type listScrollbar struct {
@@ -2396,15 +2456,13 @@ func (model Model) View() string {
 	panelWidth := max(4, contentWidth)
 	panelContentWidth := max(1, panelWidth-2)
 	rowCount := model.totalRowCount()
-	detail := ""
-	var detailRow gitdata.Row
+	var blocks []string
 	lines := []string{"Loading worktrees…"}
 	worktreeScrollbar := listScrollbar{}
 	if model.localMetadataReady() {
 		snapshot := model.viewSnapshot(now, panelContentWidth)
 		rowCount = len(snapshot.rows)
-		detail = snapshot.detail
-		detailRow = snapshot.selectedRow
+		blocks = snapshot.blocks
 		worktreeScrollbar = snapshot.scrollbar
 		tableWidth := tableContentWidth(panelContentWidth, snapshot.scrollbar)
 		table := listview.RenderMixedRows(snapshot.visibleRows, listview.Options{
@@ -2429,8 +2487,10 @@ func (model Model) View() string {
 		model.appTopLine(rowCount, outerWidth),
 		model.wrapOuter(sectionBoxWithSplitFooterTopRight("Worktrees", lines, leftFooter, rightFooter, model.worktreesFeedback(), panelWidth), outerWidth),
 	}
-	if detail != "" {
-		parts = append(parts, model.wrapOuter(sectionBoxWithFooter(rowDetailTitle(detailRow), strings.Split(detail, "\n"), detailFooterHints(detailRow, panelWidth), panelWidth), outerWidth))
+	for _, block := range blocks {
+		if block != "" {
+			parts = append(parts, model.wrapOuter(block, outerWidth))
+		}
 	}
 	if model.flash != "" {
 		parts = append(parts, model.wrapOuter(model.flashLineAtWidth(panelWidth), outerWidth))
@@ -2492,9 +2552,9 @@ func (model Model) viewSnapshot(now time.Time, panelContentWidth int) viewSnapsh
 	if len(indexes) > 0 && model.selected >= 0 && model.selected < len(indexes) {
 		snapshot.selectedRow = tableRows[indexes[model.selected]]
 		snapshot.hasSelected = true
-		snapshot.detail = model.rowDetailPanelAtWidth(snapshot.selectedRow, now, panelContentWidth)
+		snapshot.blocks = model.detailBlocks(snapshot.selectedRow, now, panelContentWidth+2)
 	}
-	availableHeight := model.availableTableHeightForDetail(snapshot.detail)
+	availableHeight := model.availableTableHeightForBlocks(snapshot.blocks)
 	if model.selected >= availableHeight {
 		snapshot.start = model.selected - availableHeight + 1
 	}
@@ -2511,6 +2571,68 @@ func (model Model) viewSnapshot(now time.Time, panelContentWidth int) viewSnapsh
 		start:   snapshot.start,
 	}
 	return snapshot
+}
+
+// detailSideBySideMinWidth is the narrowest panel at which the Details box and the
+// Git context frame render side by side. Below it they stack. The threshold keeps
+// each half at or above the frames' 50-column minimum plus the gap between them.
+const detailSideBySideMinWidth = 104
+
+// detailSideBySideGap is the blank gutter between the side-by-side boxes.
+const detailSideBySideGap = 1
+
+// detailBlocks renders the Details box together with the context frames as finished,
+// bordered blocks ready to stack below the Worktrees panel. On a wide panel the Git
+// context frame sits beside the Details box; otherwise it stacks directly beneath it.
+// The remaining frames (PR review, Changes, Disk) always stack full width below.
+func (model Model) detailBlocks(row gitdata.Row, now time.Time, panelWidth int) []string {
+	var blocks []string
+	if left, right, ok := model.detailWithGitContext(row, now, panelWidth); ok {
+		gap := strings.Repeat(" ", detailSideBySideGap)
+		blocks = append(blocks, lipgloss.JoinHorizontal(lipgloss.Top, left, gap, right))
+	} else {
+		body := model.rowDetailPanelAtWidth(row, now, panelWidth-2)
+		blocks = append(blocks, sectionBoxWithFooter(rowDetailTitle(row), strings.Split(body, "\n"), detailFooterHints(row, panelWidth), panelWidth))
+		if box := changesFrame(row, panelWidth); box != "" {
+			blocks = append(blocks, box)
+		}
+		if box := prReviewFrame(model.reviewForRow(row), model.reviewPendingNumberForRow(row), panelWidth); box != "" {
+			blocks = append(blocks, box)
+		}
+		if box := gitContextFrame(row, model.state.Repo.MainBranch, panelWidth, 0); box != "" {
+			blocks = append(blocks, box)
+		}
+	}
+	blocks = append(blocks, belowDetailFrames(row, panelWidth)...)
+	return blocks
+}
+
+// detailWithGitContext renders the Details box and the Git context frame at half
+// width each so they can be joined horizontally. It reports ok=false when the panel
+// is too narrow or the row has no Git context to pair with, leaving the caller to
+// stack them instead.
+func (model Model) detailWithGitContext(row gitdata.Row, now time.Time, panelWidth int) (left, right string, ok bool) {
+	if panelWidth < detailSideBySideMinWidth {
+		return "", "", false
+	}
+	leftWidth := (panelWidth - detailSideBySideGap) / 2
+	rightWidth := panelWidth - detailSideBySideGap - leftWidth
+	// The left column stacks the Details, Changes, and PR review boxes; the Git
+	// context frame on the right then grows to match that combined height, keeping
+	// the outer bottom borders aligned.
+	body := model.rowDetailPanelAtWidth(row, now, leftWidth-2)
+	left = sectionBoxWithFooter(rowDetailTitle(row), strings.Split(body, "\n"), detailFooterHints(row, leftWidth), leftWidth)
+	if changes := changesFrame(row, leftWidth); changes != "" {
+		left = lipgloss.JoinVertical(lipgloss.Left, left, changes)
+	}
+	if pr := prReviewFrame(model.reviewForRow(row), model.reviewPendingNumberForRow(row), leftWidth); pr != "" {
+		left = lipgloss.JoinVertical(lipgloss.Left, left, pr)
+	}
+	right = gitContextFrame(row, model.state.Repo.MainBranch, rightWidth, lineCount(left))
+	if right == "" {
+		return "", "", false
+	}
+	return left, right, true
 }
 
 func tableContentWidth(width int, scrollbar listScrollbar) int {
@@ -2588,7 +2710,7 @@ func (model Model) selectedRowInspector(row gitdata.Row, now time.Time) string {
 
 func (model Model) selectedRowInspectorAtWidth(row gitdata.Row, now time.Time, width int) string {
 	if row.IsBranch() {
-		return model.selectedBranchInspectorAtWidth(row.Branch, now, width)
+		return model.selectedBranchInspectorAtWidth(row.Branch, width)
 	}
 	worktree := row.Worktree
 	lines := []string{
@@ -2602,18 +2724,12 @@ func (model Model) selectedRowInspectorAtWidth(row gitdata.Row, now time.Time, w
 		model.inspectorFieldAtWidth("Size", sizeText(worktree), inspectorValueStyle, width),
 	}
 	lines = append(lines,
-		model.inspectorRenderedFieldAtWidth("Remote", remoteText(worktree), func(value string) string {
-			return syncStyle(worktree).Render(value)
-		}, width),
-		model.inspectorRenderedFieldAtWidth("Main", model.mainText(worktree), renderMainValue, width),
-		model.inspectorRenderedFieldAtWidth("Commit", commitText(worktree, now), renderCommitValue, width),
-		model.inspectorFieldAtWidth("PR", model.rowPRText(row), inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Delete", deleteSafetyText(worktree), deleteSafetyStyle(worktree), width),
 	)
 	return strings.Join(lines, "\n")
 }
 
-func (model Model) selectedBranchInspectorAtWidth(branch gitdata.Branch, now time.Time, width int) string {
+func (model Model) selectedBranchInspectorAtWidth(branch gitdata.Branch, width int) string {
 	lines := []string{
 		model.inspectorFieldAtWidth("Branch", branch.DisplayBranch(), branchOnlyDetailStyle, width),
 		model.inspectorRenderedFieldAtWidth("HEAD", branchHeadText(branch), renderHeadValue, width),
@@ -2621,12 +2737,6 @@ func (model Model) selectedBranchInspectorAtWidth(branch gitdata.Branch, now tim
 		model.inspectorFieldAtWidth("Status", "no worktree", inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Dirty", "-", inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Size", "-", inspectorValueStyle, width),
-		model.inspectorRenderedFieldAtWidth("Remote", branchRemoteText(branch), func(value string) string {
-			return branchSyncStyle(branch).Render(value)
-		}, width),
-		model.inspectorRenderedFieldAtWidth("Main", model.branchMainText(branch), renderMainValue, width),
-		model.inspectorRenderedFieldAtWidth("Commit", branchCommitText(branch, now), renderCommitValue, width),
-		model.inspectorFieldAtWidth("PR", model.rowPRText(gitdata.Row{Kind: gitdata.RowKindBranch, Branch: branch}), inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Action", "create worktree; checkout root with c", inspectorCleanStyle, width),
 	}
 	return strings.Join(lines, "\n")
@@ -2724,38 +2834,12 @@ func renderDirtyDetailValue(value string) string {
 	return strings.Join(parts, hintStyle.Render("  "))
 }
 
-func renderCommitValue(value string) string {
-	hash, rest, found := strings.Cut(value, " ")
-	if !found {
-		return inspectorCommitStyle.Render(value)
-	}
-	return inspectorCommitStyle.Render(hash) + inspectorSubjectStyle.Render(" "+rest)
-}
-
 func renderHeadValue(value string) string {
 	head, rest, found := strings.Cut(value, " ")
 	if !found {
 		return inspectorCommitStyle.Render(value)
 	}
 	return inspectorCommitStyle.Render(head) + inspectorSubjectStyle.Render(" "+rest)
-}
-
-func renderMainValue(value string) string {
-	if strings.HasPrefix(value, "↑") || strings.Contains(value, " ↑") || strings.Contains(value, "↓") {
-		parts := strings.Split(value, " ")
-		for index, part := range parts {
-			switch {
-			case strings.HasPrefix(part, "↑"):
-				parts[index] = inspectorWarnStyle.Render(part)
-			case strings.HasPrefix(part, "↓"):
-				parts[index] = inspectorWarnStyle.Render(part)
-			default:
-				parts[index] = inspectorValueStyle.Render(part)
-			}
-		}
-		return strings.Join(parts, " ")
-	}
-	return inspectorValueStyle.Render(value)
 }
 
 func statusStyle(row gitdata.Worktree) lipgloss.Style {
@@ -2772,43 +2856,7 @@ func branchStyle(row gitdata.Worktree) lipgloss.Style {
 	return inspectorValueStyle
 }
 
-func syncStyle(row gitdata.Worktree) lipgloss.Style {
-	if row.UpstreamGone || row.HeadSync.Ahead > 0 || row.HeadSync.Behind > 0 {
-		return inspectorWarnStyle
-	}
-	if row.Upstream != "" {
-		return inspectorCleanStyle
-	}
-	return inspectorValueStyle
-}
 
-func remoteText(row gitdata.Worktree) string {
-	if row.Upstream == "" {
-		return "no upstream"
-	}
-	if row.UpstreamGone {
-		return "Remote branch gone, likely merged or deleted"
-	}
-	state := row.HeadSync.Compact()
-	if state == "" {
-		state = "synced"
-	}
-	return row.Upstream + ", " + state
-}
-
-func branchRemoteText(branch gitdata.Branch) string {
-	if branch.Upstream == "" {
-		return "no upstream"
-	}
-	if branch.UpstreamGone {
-		return "Remote branch gone, likely merged or deleted"
-	}
-	state := branch.HeadSync.Compact()
-	if state == "" {
-		state = "synced"
-	}
-	return branch.Upstream + ", " + state
-}
 
 func branchText(row gitdata.Worktree) string {
 	return row.DisplayBranch()
@@ -2853,40 +2901,6 @@ func statusText(row gitdata.Worktree) string {
 	return "dirty"
 }
 
-func (model Model) mainText(row gitdata.Worktree) string {
-	if model.state.Repo.MainBranch == "" {
-		return "unknown"
-	}
-	if row.Branch == model.state.Repo.MainBranch && !row.Detached {
-		return "on local " + model.state.Repo.MainBranch
-	}
-	state := row.MainSync.Compact()
-	if state == "" {
-		if row.MainSync.Available {
-			return "synced with local " + model.state.Repo.MainBranch
-		}
-		return "- vs local " + model.state.Repo.MainBranch
-	}
-	return state + " vs local " + model.state.Repo.MainBranch
-}
-
-func (model Model) branchMainText(branch gitdata.Branch) string {
-	if model.state.Repo.MainBranch == "" {
-		return "unknown"
-	}
-	if branch.Name == model.state.Repo.MainBranch {
-		return "on local " + model.state.Repo.MainBranch
-	}
-	state := branch.MainSync.Compact()
-	if state == "" {
-		if branch.MainSync.Available {
-			return "synced with local " + model.state.Repo.MainBranch
-		}
-		return "- vs local " + model.state.Repo.MainBranch
-	}
-	return state + " vs local " + model.state.Repo.MainBranch
-}
-
 func selectionContextTitle(row gitdata.Row) string {
 	if row.IsBranch() {
 		return "Local branch"
@@ -2919,27 +2933,6 @@ func dirtyDetailText(counts gitdata.StatusCounts) string {
 		return "none"
 	}
 	return strings.Join(parts, "  ")
-}
-
-func branchSyncStyle(branch gitdata.Branch) lipgloss.Style {
-	if branch.UpstreamGone || branch.HeadSync.Ahead > 0 || branch.HeadSync.Behind > 0 {
-		return inspectorWarnStyle
-	}
-	if branch.Upstream != "" {
-		return inspectorCleanStyle
-	}
-	return inspectorValueStyle
-}
-
-func branchCommitText(branch gitdata.Branch, now time.Time) string {
-	if branch.CommitShort == "" {
-		return "-"
-	}
-	commit := branch.CommitShort + " " + branch.CommitSubject
-	if age := gitdata.RelativeAge(now, branch.CommitTime); age != "" {
-		commit += ", " + age
-	}
-	return commit
 }
 
 func (model Model) prText(row gitdata.Worktree) string {
@@ -3001,17 +2994,6 @@ func deleteSafetyStyle(row gitdata.Worktree) lipgloss.Style {
 		return inspectorWarnStyle
 	}
 	return inspectorCleanStyle
-}
-
-func commitText(row gitdata.Worktree, now time.Time) string {
-	if row.CommitShort == "" {
-		return "-"
-	}
-	commit := row.CommitShort + " " + row.CommitSubject
-	if age := gitdata.RelativeAge(now, row.CommitTime); age != "" {
-		commit += ", " + age
-	}
-	return commit
 }
 
 func sizeText(row gitdata.Worktree) string {
@@ -3764,8 +3746,8 @@ func (model *Model) applyCachedPullRequests() {
 		return
 	}
 	model.showPR = true
-	model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache)
-	model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, model.prCache)
+	model.state.Rows = github.AttachPullRequests(model.state.Rows, model.prCache, model.state.Repo.MainBranch)
+	model.state.Branches = github.AttachBranchPullRequests(model.state.Branches, model.prCache, model.state.Repo.MainBranch)
 }
 
 func (model Model) frame(content string) string {
@@ -3969,7 +3951,7 @@ func helpLegendSections() []helpSection {
 				{lead: "◌", description: "draft", kind: helpEntryPullRequest},
 				{lead: "○", description: "ready/open", kind: helpEntryPullRequest},
 				{lead: "◆", description: "approved", kind: helpEntryApproved},
-				{lead: "⬡", description: "merged", kind: helpEntryMerged},
+				{lead: "⎇", description: "merged", kind: helpEntryMerged},
 				{lead: "✕", description: "closed", kind: helpEntryClosed},
 				{lead: "✓", description: "CI passed", kind: helpEntryClean},
 				{lead: "✗", description: "CI error", kind: helpEntryError},
@@ -4005,8 +3987,10 @@ func helpEntryStyle(kind helpEntryKind) lipgloss.Style {
 		return listview.WorktreeTypeIconStyle()
 	case helpEntryBranch:
 		return listview.BranchTypeIconStyle()
-	case helpEntryPullRequest, helpEntryMerged:
+	case helpEntryPullRequest:
 		return inspectorCommitStyle
+	case helpEntryMerged:
+		return mergedGlyphStyle
 	case helpEntryActive:
 		return inspectorValueStyle.Bold(true)
 	case helpEntryLocked, helpEntryPrunable, helpEntryModified, helpEntryClosed, helpEntryRunning, helpEntryError:
@@ -5044,19 +5028,56 @@ func (model Model) availableTableHeight(now time.Time) int {
 	contentWidth := max(1, outerWidth-4)
 	panelWidth := max(4, contentWidth)
 	panelContentWidth := max(1, panelWidth-2)
-	detail := ""
+	var blocks []string
 	if row, ok := model.selectedTableRow(); ok {
-		detail = model.rowDetailPanelAtWidth(row, now, panelContentWidth)
+		blocks = model.detailBlocks(row, now, panelContentWidth+2)
 	}
-	return model.availableTableHeightForDetail(detail)
+	return model.availableTableHeightForBlocks(blocks)
 }
 
-func (model Model) availableTableHeightForDetail(detail string) int {
-	detailFixedLines := 0
-	if detail != "" {
-		detailFixedLines = 2 + lineCount(detail)
+// reviewForRow returns the loaded PR review for the row's open pull request, or
+// nil when none has been fetched.
+func (model Model) reviewForRow(row gitdata.Row) *github.PullRequestReview {
+	pullRequest := row.PullRequest()
+	if pullRequest == nil || pullRequest.Number == 0 || model.prReview == nil {
+		return nil
 	}
-	fixedLines := 1 + 2 + 1 + detailFixedLines + 1
+	if review, ok := model.prReview[pullRequest.Number]; ok {
+		return &review
+	}
+	return nil
+}
+
+// reviewPendingNumberForRow returns the PR number whose review detail is still
+// being fetched for the row, or 0 when nothing is pending. It powers the PR review
+// frame's loading state. A finished attempt (success or failure) leaves a prReview
+// map entry, so it is no longer pending; this also keeps a failed or gh-less
+// lookup from showing "loading" forever.
+func (model Model) reviewPendingNumberForRow(row gitdata.Row) int {
+	if !model.showPR {
+		return 0
+	}
+	pullRequest := row.PullRequest()
+	if pullRequest == nil || pullRequest.Number == 0 {
+		return 0
+	}
+	if model.prReview != nil {
+		if _, attempted := model.prReview[pullRequest.Number]; attempted {
+			return 0
+		}
+	}
+	return pullRequest.Number
+}
+
+func (model Model) availableTableHeightForBlocks(blocks []string) int {
+	blockLines := 0
+	for _, block := range blocks {
+		if block != "" {
+			// Each block already includes its own top/bottom borders.
+			blockLines += lineCount(block)
+		}
+	}
+	fixedLines := 1 + 2 + 1 + blockLines + 1
 	if model.flash != "" {
 		fixedLines++
 	}
@@ -5251,8 +5272,11 @@ func (model Model) pullRequestFetchCommand(ctx context.Context, id int) tea.Cmd 
 func (model Model) localBranchNames() []string {
 	seen := map[string]bool{}
 	names := []string{}
+	mainBranch := model.state.Repo.MainBranch
 	add := func(name string) {
-		if name == "" || seen[name] {
+		// The main branch is never a PR head, so querying it is wasted work and
+		// any same-named old/fork PR is dropped at attach time anyway.
+		if name == "" || name == mainBranch || seen[name] {
 			return
 		}
 		seen[name] = true
@@ -5346,6 +5370,79 @@ func (model *Model) pullRequestCICommand(id int) tea.Cmd {
 	repoRoot := model.state.Repo.Root
 	return func() tea.Msg {
 		return loadPullRequestCIMsg(ctx, runner, repoRoot, id, numbers)
+	}
+}
+
+// selectedReviewCommand lazily loads the detailed PR review for the selected row
+// (checks, change requests, inline comments) when it has a PR not yet fetched,
+// open or merged. It is cheap to call on every navigation: it returns nil when
+// there is nothing to load.
+func (model *Model) selectedReviewCommand(id int) tea.Cmd {
+	if !model.showPR || model.enrichmentContext == nil {
+		return nil
+	}
+	row, ok := model.selectedTableRow()
+	if !ok {
+		return nil
+	}
+	pullRequest := row.PullRequest()
+	if pullRequest == nil || pullRequest.Number == 0 {
+		return nil
+	}
+	if model.prReviewChecked == nil {
+		model.prReviewChecked = map[int]bool{}
+	}
+	if model.prReviewChecked[pullRequest.Number] {
+		return nil
+	}
+	model.prReviewChecked[pullRequest.Number] = true
+	number := pullRequest.Number
+	ctx := model.enrichmentContext
+	runner := model.runner
+	repoRoot := model.state.Repo.Root
+	return func() tea.Msg {
+		callContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		review, ok := github.LoadPullRequestReview(callContext, repoRoot, runner, number)
+		if !ok {
+			return prReviewLoadedMsg{number: number, repoRoot: repoRoot, id: id}
+		}
+		return prReviewLoadedMsg{number: number, review: review, repoRoot: repoRoot, id: id}
+	}
+}
+
+// selectedBranchGraphCommand lazily loads the Git context graph for the selected
+// branch-only row when it has not been fetched yet. It is loaded per selected row,
+// not eagerly for every branch, since a repo can have many local branches and only
+// the selected one is ever shown. Cheap to call on every navigation: returns nil when
+// the selection is not a branch row or its graph is already loaded.
+func (model *Model) selectedBranchGraphCommand(id int) tea.Cmd {
+	if model.enrichmentContext == nil {
+		return nil
+	}
+	row, ok := model.selectedTableRow()
+	if !ok || !row.IsBranch() {
+		return nil
+	}
+	name := row.Branch.Name
+	if name == "" || name == model.state.Repo.MainBranch || row.Branch.Graph.Loaded {
+		return nil
+	}
+	if model.branchGraphChecked == nil {
+		model.branchGraphChecked = map[string]bool{}
+	}
+	if model.branchGraphChecked[name] {
+		return nil
+	}
+	model.branchGraphChecked[name] = true
+	ctx := model.enrichmentContext
+	runner := model.runner
+	repo := model.state.Repo
+	return func() tea.Msg {
+		callContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		graph := gitdata.LoadBranchContextGraph(callContext, repo, name, runner)
+		return branchGraphLoadedMsg{name: name, graph: graph, repoRoot: repo.Root, id: id}
 	}
 }
 
@@ -5462,8 +5559,9 @@ func loadSizesMsg(ctx context.Context, runner gitdata.Runner, repoRoot string, i
 	}
 	gitSizes := map[string]int64{}
 	fullSizes := map[string]int64{}
+	breakdowns := map[string]gitdata.DiskBreakdown{}
 	if len(jobs) == 0 {
-		return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, repoRoot: repoRoot, id: id}
+		return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, breakdowns: breakdowns, repoRoot: repoRoot, id: id}
 	}
 	jobChannel := make(chan sizeJob)
 	var mutex sync.Mutex
@@ -5475,9 +5573,10 @@ func loadSizesMsg(ctx context.Context, runner gitdata.Runner, repoRoot string, i
 			defer waitGroup.Done()
 			for job := range jobChannel {
 				if job.full {
-					if size, err := gitdata.FullDiskUsage(ctx, job.path); err == nil {
+					if breakdown, err := gitdata.BucketedDiskUsage(ctx, job.path); err == nil {
 						mutex.Lock()
-						fullSizes[job.path] = size
+						fullSizes[job.path] = breakdown.Total
+						breakdowns[job.path] = breakdown
 						mutex.Unlock()
 					}
 					continue
@@ -5496,12 +5595,12 @@ func loadSizesMsg(ctx context.Context, runner gitdata.Runner, repoRoot string, i
 		case <-ctx.Done():
 			close(jobChannel)
 			waitGroup.Wait()
-			return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, repoRoot: repoRoot, id: id}
+			return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, breakdowns: breakdowns, repoRoot: repoRoot, id: id}
 		}
 	}
 	close(jobChannel)
 	waitGroup.Wait()
-	return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, repoRoot: repoRoot, id: id}
+	return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, breakdowns: breakdowns, repoRoot: repoRoot, id: id}
 }
 
 func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo gitdata.Repository, fetch, automatic bool, id int) tea.Cmd {

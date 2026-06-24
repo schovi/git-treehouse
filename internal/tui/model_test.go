@@ -111,14 +111,6 @@ func TestSelectedInspectorUsesLabeledRelativeFields(t *testing.T) {
 		"dirty",
 		"Dirty",
 		"~ modified 2  ? untracked 1",
-		"Remote",
-		"origin/main, synced",
-		"Main",
-		"on local main",
-		"Commit",
-		"c00b701 Add strategy-review analysis artifacts, 4h",
-		"PR",
-		"none",
 		"Delete",
 		"allowed with force, dirty worktree",
 	} {
@@ -172,7 +164,7 @@ func TestDetailPanelRendersInspectorOnly(t *testing.T) {
 
 	output := model.detailPanel(row, time.Now())
 
-	for _, want := range []string{"Branch", "main", "Dirty", "none", "Remote", "no upstream", "PR", "Delete"} {
+	for _, want := range []string{"Branch", "main", "Dirty", "none", "Delete"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("detailPanel() missing %q:\n%s", want, output)
 		}
@@ -337,24 +329,6 @@ func TestViewRendersBranchDetailActionsInDetailsFooter(t *testing.T) {
 		if strings.Contains(footerLine, unwanted) {
 			t.Fatalf("Branch Details footer should not contain %q:\n%s", unwanted, footerLine)
 		}
-	}
-}
-
-func TestSelectedInspectorShowsPendingPRWhileLoading(t *testing.T) {
-	model := testModelWithRows([]gitdata.Worktree{
-		{Path: "/repo/feature", Branch: "feature"},
-	})
-	model.state.Repo.RemoteConfigured = true
-	model.showPR = true
-	model.prLoading = true
-
-	output := model.selectedInspector(model.state.Rows[0], time.Now())
-
-	if !strings.Contains(output, "PR") || !strings.Contains(output, listview.LoadingPlaceholder) {
-		t.Fatalf("selectedInspector() should show pending PR marker:\n%s", output)
-	}
-	if strings.Contains(output, "PR        none") {
-		t.Fatalf("selectedInspector() should not show none while PR data is loading:\n%s", output)
 	}
 }
 
@@ -1300,7 +1274,7 @@ func TestMergedFilterIncludesSafeCleanupRows(t *testing.T) {
 		{Path: "/repo/merged-dirty", Branch: "merged-dirty", Status: gitdata.StatusCounts{Modified: 1}, BranchMergedToMain: true},
 		{Path: "/repo/unmerged-clean", Branch: "unmerged-clean"},
 		{Path: "/repo/detached", Head: "abc123456", Detached: true, BranchMergedToMain: true},
-		{Path: "/repo/pr-merged", Branch: "pr-merged", PR: &gitdata.PullRequest{Number: 1, State: "⬡"}},
+		{Path: "/repo/pr-merged", Branch: "pr-merged", PR: &gitdata.PullRequest{Number: 1, State: "⎇"}},
 		{Path: "/repo/pr-closed", Branch: "pr-closed", PR: &gitdata.PullRequest{Number: 2, State: "✕"}},
 		{Path: "/repo/pr-open", Branch: "pr-open", PR: &gitdata.PullRequest{Number: 3, State: "○"}},
 	})
@@ -2135,7 +2109,7 @@ func TestHelpRendersGroupedKeysAndLegends(t *testing.T) {
 		"◌ draft",
 		"○ ready/open",
 		"◆ approved",
-		"⬡ merged",
+		"⎇ merged",
 		"✗ CI error",
 	} {
 		if !strings.Contains(output, want) {
@@ -3842,6 +3816,80 @@ func TestLocalBranchNamesDedupesWorktreeAndBranchRows(t *testing.T) {
 		if names[index] != branch {
 			t.Fatalf("localBranchNames() = %v, want %v", names, want)
 		}
+	}
+}
+
+func TestSelectedBranchGraphLoadsLazilyForSelectedRow(t *testing.T) {
+	const root = "/repo/main"
+	const ref = "refs/heads/feature/x"
+	runner := &recordingRunner{results: map[string]recordingResult{
+		root + "|git log -n 5 --format=%h%x1f%s refs/heads/main.." + ref: {output: "aaaaaaa\x1fwire handler\n"},
+		root + "|git merge-base " + ref + " refs/heads/main":             {output: "fff0000\n"},
+		root + "|git log -n 12 --format=%h%x1f%s fff0000":                 {output: "fff0000\x1ffork base\n"},
+	}}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: root, Branch: "main", IsMain: true},
+	})
+	model.runner = runner
+	model.enrichmentContext = context.Background()
+	model.state.Repo.MainBranch = "main"
+	model.state.Branches = []gitdata.Branch{{Name: "feature/x", MainSync: gitdata.SyncState{Available: true, Ahead: 1}}}
+	model.filter = filterBranches
+	model.selected = 0
+
+	command := model.selectedBranchGraphCommand(model.enrichmentID)
+	if command == nil {
+		t.Fatal("selectedBranchGraphCommand() = nil, want a command for the selected branch row")
+	}
+	message, ok := command().(branchGraphLoadedMsg)
+	if !ok {
+		t.Fatalf("command produced %T, want branchGraphLoadedMsg", command())
+	}
+	if message.name != "feature/x" || !message.graph.Loaded {
+		t.Fatalf("branchGraphLoadedMsg = %+v, want a loaded graph for feature/x", message)
+	}
+
+	updated, _ := model.Update(message)
+	updatedModel := updated.(Model)
+	if !updatedModel.state.Branches[0].Graph.Loaded {
+		t.Fatal("Update(branchGraphLoadedMsg) did not attach the graph to the branch")
+	}
+
+	// A second call is a no-op: the graph is already loaded for this selection.
+	if again := updatedModel.selectedBranchGraphCommand(model.enrichmentID); again != nil {
+		t.Fatal("selectedBranchGraphCommand() should return nil once the branch graph is loaded")
+	}
+}
+
+func TestSelectedBranchGraphSkipsWorktreeAndMainRows(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.runner = &recordingRunner{}
+	model.enrichmentContext = context.Background()
+	model.selected = 0 // the main worktree row, not a branch
+
+	if command := model.selectedBranchGraphCommand(model.enrichmentID); command != nil {
+		t.Fatal("selectedBranchGraphCommand() should return nil for a worktree row")
+	}
+}
+
+func TestLocalBranchNamesExcludesMainBranch(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "master", IsMain: true},
+		{Path: "/repo/feature", Branch: "feature"},
+	})
+	model.state.Repo.MainBranch = "master"
+
+	names := model.localBranchNames()
+
+	for _, name := range names {
+		if name == "master" {
+			t.Fatalf("localBranchNames() = %v, must not query the main branch", names)
+		}
+	}
+	if len(names) != 1 || names[0] != "feature" {
+		t.Fatalf("localBranchNames() = %v, want [feature]", names)
 	}
 }
 

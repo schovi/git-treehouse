@@ -49,6 +49,7 @@ type Branch struct {
 	CommitTime         time.Time
 	BranchMergedToMain bool
 	PR                 *PullRequest
+	Graph              ContextGraph
 }
 
 func RowsFromWorktrees(worktrees []Worktree) []Row {
@@ -228,6 +229,100 @@ func sortRows(rows []Row) {
 	})
 }
 
+// GraphCommit is a single commit in the local context graph: a short SHA and
+// its subject line.
+type GraphCommit struct {
+	Short   string
+	Subject string
+}
+
+// ContextGraph places a worktree's HEAD in its local history relative to the
+// main branch. BranchCommits are the worktree's own commits ahead of the fork
+// point (`<main>..HEAD`, newest first); MainCommits are commits on main that the
+// worktree is behind (`HEAD..<main>`, newest first). ForkPoint is the merge-base
+// commit both sides diverge from, and BaseCommits are the shared ancestors below
+// it (newest first), used to pad short graphs to a minimum height. Both side
+// lists are capped; the true totals live in the row's MainSync. It powers the Git
+// context frame.
+type ContextGraph struct {
+	Loaded        bool
+	BranchCommits []GraphCommit
+	MainCommits   []GraphCommit
+	ForkPoint     GraphCommit
+	BaseCommits   []GraphCommit
+	// RemoteCommits are commits on the upstream tracking branch that HEAD does not
+	// have yet (git log HEAD..@{u}), newest first. They render as the commits we
+	// would pull, above HEAD on the branch rail.
+	RemoteCommits []GraphCommit
+}
+
+// DiskBucket is one coarse category of disk usage within a worktree.
+type DiskBucket struct {
+	Label string
+	Bytes int64
+}
+
+// DiskBreakdown groups a worktree's bytes into cleanup-relevant buckets
+// (dependencies, build output, git data, source). Buckets are sorted largest
+// first and exclude empty categories. ReclaimableBytes sums the regenerable
+// buckets. It powers the Disk frame.
+type DiskBreakdown struct {
+	Loaded           bool
+	Total            int64
+	Buckets          []DiskBucket
+	ReclaimableBytes int64
+}
+
+// ChangedFile is a single entry from `git status --porcelain`, optionally
+// enriched with line stats from `git diff --numstat HEAD`. It powers the
+// Changes frame, which previews local work file by file.
+type ChangedFile struct {
+	Path      string // current path (new path for renames)
+	OrigPath  string // previous path for renames, empty otherwise
+	IndexCode byte   // X column of the porcelain XY status (staged side)
+	WorkCode  byte   // Y column (worktree side); '?' for untracked
+	Added     int    // inserted lines vs HEAD; -1 when unknown (binary/untracked)
+	Deleted   int    // deleted lines vs HEAD; -1 when unknown
+}
+
+// Staged reports whether the index side carries a tracked change.
+func (file ChangedFile) Staged() bool {
+	return file.IndexCode != ' ' && file.IndexCode != '?' && file.IndexCode != 0
+}
+
+// Untracked reports whether git knows nothing about the file yet.
+func (file ChangedFile) Untracked() bool {
+	return file.WorkCode == '?' || file.IndexCode == '?'
+}
+
+// Glyph collapses the XY status into a single display letter: A, M, D, R, or ?.
+func (file ChangedFile) Glyph() byte {
+	if file.Untracked() {
+		return '?'
+	}
+	if file.IndexCode == 'R' || file.WorkCode == 'R' {
+		return 'R'
+	}
+	for _, code := range []byte{file.IndexCode, file.WorkCode} {
+		switch code {
+		case 'A', 'M', 'D':
+			return code
+		}
+	}
+	if file.IndexCode != ' ' && file.IndexCode != 0 {
+		return file.IndexCode
+	}
+	if file.WorkCode != ' ' && file.WorkCode != 0 {
+		return file.WorkCode
+	}
+	return 'M'
+}
+
+// HasStats reports whether line counts were resolved for this file.
+func (file ChangedFile) HasStats() bool {
+	return file.Added >= 0 && file.Deleted >= 0
+}
+
 type StatusCounts struct {
 	Staged    int
 	Modified  int
@@ -303,7 +398,7 @@ type PullRequest struct {
 }
 
 // IsOpen reports whether the PR is still open, based on the state glyph set by
-// stateGlyph: open (○), approved (◆), or draft (◌). Merged (⬡) and closed (✕)
+// stateGlyph: open (○), approved (◆), or draft (◌). Merged (⎇) and closed (✕)
 // PRs have settled CI, so they are skipped by the lazy CI fetch.
 func (pr PullRequest) IsOpen() bool {
 	switch pr.State {
@@ -344,6 +439,9 @@ type Worktree struct {
 	IsMain              bool
 	LocalMetadataLoaded bool
 	Status              StatusCounts
+	ChangedFiles        []ChangedFile
+	Graph               ContextGraph
+	DiskBreakdown       DiskBreakdown
 	Upstream            string
 	UpstreamGone        bool
 	HeadSync            SyncState

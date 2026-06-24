@@ -1,0 +1,72 @@
+Frame 4: Disk breakdown
+
+Goal: show where a worktree's bytes go, as a small horizontal bar chart, so cleanup
+decisions are concrete. The Details panel shows only "Disk 1.4G loaded"; this frame
+shows why it is 1.4G.
+
+Chosen as the fourth frame because it is visually distinct (bars, not text rows), uses
+data no other frame shows, and is already flagged as a context item in
+`detail-information-value.md` (Disk Footprint / Disk Breakdown).
+
+Shown when disk usage is loaded and the total crosses a notable threshold. Below the
+threshold it stays collapsed to a single line, since small worktrees do not need a
+cleanup pitch.
+
+Bars are drawn with block glyphs, scaled to the largest bucket. Buckets are coarse and
+meaningful for cleanup decisions: dependencies, build output, repo data, source, other.
+
+Wide / standard variant
+
++-- Disk - feature/login - 1.4G -------------------------------+
+|                                                              |
+|  node_modules   980M  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  70%            |
+|  .git           220M  ▓▓▓▓▓                    16%            |
+|  dist / build    140M  ▓▓▓                       10%          |
+|  source           48M  ▓                          3%          |
+|  other            12M                             1%          |
+|                                                              |
+|  reclaimable: 1.1G (deps + build) without losing work        |
++-- size is informational, not a delete guard -----------------+
+
+Rules:
+- Title carries the total. Buckets sort largest first.
+- Bar width scales to the frame, normalized to the largest bucket so the top bar is
+  always full width and the rest are proportional.
+- "reclaimable" line sums the regenerable buckets (dependencies + build output) and
+  states that removing them loses no committed work. This is the actionable takeaway.
+- Footer repeats the safety note from the Details panel: disk size never blocks or
+  enables delete. It is purely informational.
+
+Below-threshold variant (small worktree)
+
++-- Disk - docs/troubleshooting -------------------------------+
+| 163K total - small, nothing to clean up                      |
++--------------------------------------------------------------+
+
+Loading variant (walk in progress)
+
++-- Disk - feature/login --------------------------------------+
+| measuring... 612M so far                                     |
+| (walk is cancellable on quit, resize, and reload)            |
++--------------------------------------------------------------+
+
+Compact variant (overlay)
+
++-- Disk 1.4G ------------------------+
+| node_modules 980M ▓▓▓▓▓▓▓▓ 70%      |
+| .git         220M ▓▓        16%     |
+| build        140M ▓         10%     |
+| reclaimable 1.1G                    |
++-------------------------------------+
+
+Information value:
+- Says: the storage cost of the worktree and which buckets dominate it.
+- Used for: prioritizing cleanup across many worktrees, and judging whether a large
+  worktree is large because of regenerable junk (safe to delete and recreate) or real
+  repo data.
+- Needs new data: a bucketed per-directory size walk. The total already exists; the
+  breakdown does not. The walk must stay cancellable (see ideas.md performance notes),
+  and should reuse the existing disk-usage walk rather than adding a second pass.
+- Value is medium by default, high only past the threshold, which is exactly why this
+  frame self-collapses when small.
+</content>

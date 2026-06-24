@@ -1,0 +1,86 @@
+Frame 1: Git context tree
+
+Goal: place the selected commit in its local graph. Show the direct parent
+contributors leading to HEAD, the integration base (local main), and whether the base
+has moved ahead since the branch diverged. HEAD is the anchor and sits in the middle:
+ancestors above, base-ahead commits above the merge-base, the branch's own commits
+below it toward HEAD.
+
+Reading direction: newest at the top of each side, like `git log --graph`. The "*"
+marks the selected HEAD. The merge-base (fork point) is where the branch left main.
+
+Wide / standard variant
+
++-- Git context - docs/troubleshooting ------------------------+
+|                                                              |
+|   * 9f1c2ab  main, +24 ahead since fork    chore: bump deps  |
+|   |          (base moved ahead of you)                       |
+|   o 5d80f3a  ...22 more on main...                           |
+|   |                                                          |
+|   o 1a2b3c4  fork point                     feat: base setup |
+|   |\                                                         |
+|   | * d3c7756  HEAD  docs/troubleshooting    docs: add guide  |
+|   |            you: +1 ahead, -24 behind main                |
+|   +                                                          |
+|                                                              |
++-- behind 24 . ahead 1 . rebase to catch up ------------------+
+
+Notes on the wide variant:
+- The base (main) tip is at the very top with an explicit "base moved ahead" tag so a
+  stale branch is obvious at a glance.
+- The fork point ("o ... fork point") is the pivot. Everything above it on main is
+  what you are behind; everything below the branch line is your own work.
+- Collapse long runs into a single "...N more on main..." node so the frame height
+  stays bounded regardless of how far behind the branch is.
+- Footer restates the relationship as plain counts plus the recommended move.
+
+Branch ahead of its upstream too (three-way)
+
++-- Git context - feature/login -------------------------------+
+|   o a1b2c3d  main tip                        fix: flake      |
+|   |  ...2 more on main...                                    |
+|   o 88f0aa1  fork point                                      |
+|   |\                                                         |
+|   | o 44aa102  feature/login                 add login form  |
+|   | o 2ba9910                                 validate input  |
+|   | * 91ac32f  HEAD  (local)                  wire handler    |
+|   |            origin/feature/login is 1 behind you          |
++-- behind 2 . ahead 3 . local has 1 unpushed -----------------+
+
+Detached HEAD variant
+
++-- Git context - detached ------------------------------------+
+|   o 1a2b3c4  on main                                         |
+|   |                                                          |
+|   * d3c7756  HEAD  (detached)                 docs: add guide |
+|              not on any branch                               |
+|   reachable from: docs/troubleshooting, origin/docs/...      |
++-- detached . checkout a branch to keep new commits ----------+
+
+Up to date variant (nothing to show but reassurance)
+
++-- Git context - chore/ci ------------------------------------+
+|   o 7c9e1f0  main tip == fork point                          |
+|   |                                                          |
+|   * 7c9e1f0  HEAD                             (same commit)   |
+|              up to date with main, 0 ahead 0 behind          |
++-- in sync with main -----------------------------------------+
+
+Compact variant (overlay, <104 cols)
+
++-- Git context ----------------------+
+| main  +24 ahead (stale)             |
+| fork  1a2b3c4 feat: base setup      |
+| you   +1 / -24                      |
+| HEAD  d3c7756 docs: add guide       |
++-- rebase to catch up ---------------+
+
+Information value:
+- Says: how the branch relates to its base in history, not just as +/- counts.
+- Used for: deciding to rebase, recognizing a stale branch, confirming a detached row
+  before destructive actions, seeing unpushed local commits.
+- Needs new data: parent commit subjects along the first-parent chain, and the list of
+  base-ahead commits (a `git rev-list` / `git log --graph` style walk). Counts already
+  exist; the graph and subjects do not.
+- Height is bounded by collapsing long runs, so a branch 300 commits behind still fits.
+</content>

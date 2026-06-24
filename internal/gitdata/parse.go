@@ -59,6 +59,7 @@ type ParsedStatus struct {
 	Counts       StatusCounts
 	UpstreamGone bool
 	Upstream     string
+	Files        []ChangedFile
 }
 
 func ParseStatusPorcelain(output string) ParsedStatus {
@@ -73,6 +74,7 @@ func ParseStatusPorcelain(output string) ParsedStatus {
 		}
 		if strings.HasPrefix(line, "??") {
 			status.Counts.Untracked++
+			status.Files = append(status.Files, changedFileFromLine(line))
 			continue
 		}
 		if len(line) < 2 {
@@ -86,8 +88,74 @@ func ParseStatusPorcelain(output string) ParsedStatus {
 		if worktreeStatus != ' ' && worktreeStatus != '?' {
 			status.Counts.Modified++
 		}
+		status.Files = append(status.Files, changedFileFromLine(line))
 	}
 	return status
+}
+
+// NumStat holds inserted and deleted line counts for one file.
+type NumStat struct {
+	Added   int
+	Deleted int
+}
+
+// ParseNumstat parses `git diff --numstat` output into a path-keyed map. Binary
+// files (reported as `-`) are skipped. Rename entries of the form
+// `added\tdeleted\told => new` are keyed by the new path.
+func ParseNumstat(output string) map[string]NumStat {
+	stats := map[string]NumStat{}
+	for _, line := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		added, addedErr := strconv.Atoi(fields[0])
+		deleted, deletedErr := strconv.Atoi(fields[1])
+		if addedErr != nil || deletedErr != nil {
+			continue
+		}
+		path := fields[2]
+		if renameParts := strings.SplitN(path, " => ", 2); len(renameParts) == 2 {
+			path = renameParts[1]
+		}
+		stats[path] = NumStat{Added: added, Deleted: deleted}
+	}
+	return stats
+}
+
+// ParseGraphCommits parses `git log --format=%h%x1f%s` output (short SHA and
+// subject separated by a unit-separator byte) into commits, newest first.
+func ParseGraphCommits(output string) []GraphCommit {
+	var commits []GraphCommit
+	for _, line := range strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		short, subject, _ := strings.Cut(line, "\x1f")
+		if short == "" {
+			continue
+		}
+		commits = append(commits, GraphCommit{Short: short, Subject: subject})
+	}
+	return commits
+}
+
+// changedFileFromLine parses one porcelain v1 entry (`XY path` or, for renames,
+// `XY orig -> new`) into a ChangedFile. Line stats start unknown (-1) and are
+// filled later from `git diff --numstat`.
+func changedFileFromLine(line string) ChangedFile {
+	file := ChangedFile{IndexCode: line[0], WorkCode: line[1], Added: -1, Deleted: -1}
+	path := ""
+	if len(line) > 3 {
+		path = line[3:]
+	}
+	if origAndNew := strings.SplitN(path, " -> ", 2); len(origAndNew) == 2 {
+		file.OrigPath = origAndNew[0]
+		file.Path = origAndNew[1]
+	} else {
+		file.Path = path
+	}
+	return file
 }
 
 func parseBranchStatusLine(line string, status *ParsedStatus) {

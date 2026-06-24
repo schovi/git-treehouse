@@ -138,9 +138,107 @@ func EnrichLocalMetadata(ctx context.Context, state State, runner Runner) (State
 		}
 		row.LocalMetadataLoaded = true
 	}
+	if mainExists {
+		enrichContextGraphs(ctx, state.Repo, state.Rows, runner)
+	}
 	state.Branches = branchRowsFromMetadata(refMetadataByBranch, state.Rows, state.Repo.MainBranch)
 	sortWorktrees(state.Rows)
 	return state, nil
+}
+
+// graphCommitFetch is how many commits per side the context graph fetches. The
+// frame displays fewer; the surplus lets it detect overflow without relying on
+// ahead/behind totals.
+const graphCommitFetch = 5
+
+// graphBaseFetch is how many shared commits below the fork point the graph fetches.
+// It runs deeper than graphCommitFetch because those ancestors pad the graph to
+// match the Details box height when the two render side by side.
+const graphBaseFetch = 12
+
+// enrichContextGraphs attaches a local ContextGraph to each non-main, non-prunable
+// worktree row by collecting its commits ahead of and behind the main branch. Runs
+// concurrently like enrichStatusCounts. Failures leave Graph.Loaded false.
+func enrichContextGraphs(ctx context.Context, repo Repository, rows []Worktree, runner Runner) {
+	mainRef := "refs/heads/" + repo.MainBranch
+	concurrency := min(4, runtime.NumCPU())
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	limit := make(chan struct{}, concurrency)
+	var waitGroup sync.WaitGroup
+	for index := range rows {
+		row := &rows[index]
+		if row.Prunable || row.Bare || row.IsMain || row.Path == "" {
+			continue
+		}
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			select {
+			case limit <- struct{}{}:
+				defer func() { <-limit }()
+			case <-ctx.Done():
+				return
+			}
+			row.Graph = loadContextGraph(ctx, row.Path, "HEAD", "@{u}", mainRef, runner)
+		}()
+	}
+	waitGroup.Wait()
+}
+
+// LoadBranchContextGraph builds the context graph for a single local branch that has
+// no worktree, so the Git context frame can render for branch-only rows too. Unlike
+// worktree rows there is no checkout to log from, so it runs from the repo root
+// against the branch ref (and its upstream) directly. It is loaded lazily for the
+// selected row, not eagerly for every branch, since a repo can have many branches and
+// only the selected one is ever shown. Returns an unloaded graph when there is no main
+// branch to compare against.
+func LoadBranchContextGraph(ctx context.Context, repo Repository, branchName string, runner Runner) ContextGraph {
+	if repo.MainBranch == "" || branchName == "" || branchName == repo.MainBranch {
+		return ContextGraph{}
+	}
+	ref := "refs/heads/" + branchName
+	mainRef := "refs/heads/" + repo.MainBranch
+	return loadContextGraph(ctx, repo.Root, ref, branchName+"@{u}", mainRef, runner)
+}
+
+// loadContextGraph builds the commit graph for one ref relative to main and its
+// upstream. ref is the tip to view from ("HEAD" for a worktree, "refs/heads/<name>"
+// for a branch row); upstreamRef resolves that ref's upstream ("@{u}" for the
+// checked-out HEAD, "<name>@{u}" for a branch). path is where the git commands run
+// (the worktree path, or the repo root for a branch with no checkout).
+func loadContextGraph(ctx context.Context, path, ref, upstreamRef, mainRef string, runner Runner) ContextGraph {
+	graph := ContextGraph{}
+	fetch := strconv.Itoa(graphCommitFetch)
+	if output, err := runner.Run(ctx, path, "git", "log", "-n", fetch, "--format=%h%x1f%s", mainRef+".."+ref); err == nil {
+		graph.BranchCommits = ParseGraphCommits(string(output))
+		graph.Loaded = true
+	}
+	if output, err := runner.Run(ctx, path, "git", "log", "-n", fetch, "--format=%h%x1f%s", ref+".."+mainRef); err == nil {
+		graph.MainCommits = ParseGraphCommits(string(output))
+		graph.Loaded = true
+	}
+	// Commits on the upstream tracking branch that the ref lacks (what a pull would
+	// bring in). Errors when there is no upstream; that is fine, we just skip them.
+	if output, err := runner.Run(ctx, path, "git", "log", "-n", fetch, "--format=%h%x1f%s", ref+".."+upstreamRef); err == nil {
+		graph.RemoteCommits = ParseGraphCommits(string(output))
+	}
+	// Fetch the fork point (merge-base) and a few shared ancestors below it, so the
+	// frame can label the fork commit and pad short graphs with shared history.
+	if output, err := runner.Run(ctx, path, "git", "merge-base", ref, mainRef); err == nil {
+		base := strings.TrimSpace(string(output))
+		if base != "" {
+			if log, err := runner.Run(ctx, path, "git", "log", "-n", strconv.Itoa(graphBaseFetch), "--format=%h%x1f%s", base); err == nil {
+				if commits := ParseGraphCommits(string(log)); len(commits) > 0 {
+					graph.ForkPoint = commits[0]
+					graph.BaseCommits = commits[1:]
+					graph.Loaded = true
+				}
+			}
+		}
+	}
+	return graph
 }
 
 func loadRefMetadata(ctx context.Context, repo Repository, runner Runner) (map[string]refMetadata, error) {
@@ -263,7 +361,9 @@ func enrichStatusCounts(ctx context.Context, rows []Worktree, runner Runner) {
 				results <- result{index: index}
 				return
 			}
-			results <- result{index: index, status: ParseStatusPorcelain(string(output)), ok: true}
+			status := ParseStatusPorcelain(string(output))
+			fillNumstat(ctx, path, &status, runner)
+			results <- result{index: index, status: status, ok: true}
 		}()
 	}
 	go func() {
@@ -275,9 +375,38 @@ func enrichStatusCounts(ctx context.Context, rows []Worktree, runner Runner) {
 			continue
 		}
 		rows[result.index].Status = result.status.Counts
+		rows[result.index].ChangedFiles = result.status.Files
 		if rows[result.index].Upstream == "" {
 			rows[result.index].Upstream = result.status.Upstream
 			rows[result.index].UpstreamGone = result.status.UpstreamGone
+		}
+	}
+}
+
+// fillNumstat runs `git diff --numstat HEAD` for the worktree and merges the
+// resulting line counts into the tracked entries of status. Untracked files and
+// files without a numstat entry keep their unknown (-1) counts. Errors are
+// non-fatal: the Changes frame simply omits stats it could not resolve.
+func fillNumstat(ctx context.Context, path string, status *ParsedStatus, runner Runner) {
+	hasTracked := false
+	for _, file := range status.Files {
+		if !file.Untracked() {
+			hasTracked = true
+			break
+		}
+	}
+	if !hasTracked {
+		return
+	}
+	output, err := runner.Run(ctx, path, "git", "diff", "--numstat", "HEAD")
+	if err != nil {
+		return
+	}
+	stats := ParseNumstat(string(output))
+	for index := range status.Files {
+		if stat, ok := stats[status.Files[index].Path]; ok {
+			status.Files[index].Added = stat.Added
+			status.Files[index].Deleted = stat.Deleted
 		}
 	}
 }
@@ -551,6 +680,93 @@ func FullDiskUsage(ctx context.Context, path string) (int64, error) {
 
 func DiskUsage(path string) (int64, error) {
 	return FullDiskUsage(context.Background(), path)
+}
+
+const (
+	diskBucketDependencies = "dependencies"
+	diskBucketBuild        = "build output"
+	diskBucketGit          = "git data"
+	diskBucketSource       = "source"
+)
+
+// diskDependencyDirs and diskBuildDirs name directory segments treated as
+// regenerable (safe to delete and rebuild). Anything under them is bucketed
+// accordingly regardless of depth.
+var (
+	diskDependencyDirs = map[string]bool{
+		"node_modules": true, "vendor": true, ".venv": true, "venv": true,
+		".tox": true, ".gradle": true, ".cargo": true, "Pods": true,
+	}
+	diskBuildDirs = map[string]bool{
+		"dist": true, "build": true, "out": true, "target": true,
+		".next": true, ".nuxt": true, ".turbo": true, "coverage": true,
+	}
+)
+
+// BucketedDiskUsage walks a worktree once and groups file sizes into cleanup
+// buckets. It is the breakdown-aware replacement for FullDiskUsage when the Disk
+// frame needs detail; the returned breakdown also carries the total.
+func BucketedDiskUsage(ctx context.Context, path string) (DiskBreakdown, error) {
+	sizes := map[string]int64{}
+	var total int64
+	err := filepath.WalkDir(path, func(entryPath string, entry os.DirEntry, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+		relative, relErr := filepath.Rel(path, entryPath)
+		if relErr != nil {
+			relative = entryPath
+		}
+		sizes[classifyDiskPath(relative)] += info.Size()
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		return DiskBreakdown{}, err
+	}
+	return buildDiskBreakdown(sizes, total), nil
+}
+
+func classifyDiskPath(relative string) string {
+	segments := strings.Split(relative, string(filepath.Separator))
+	for _, segment := range segments {
+		if diskDependencyDirs[segment] {
+			return diskBucketDependencies
+		}
+	}
+	for _, segment := range segments {
+		if diskBuildDirs[segment] {
+			return diskBucketBuild
+		}
+	}
+	if len(segments) > 0 && segments[0] == ".git" {
+		return diskBucketGit
+	}
+	return diskBucketSource
+}
+
+func buildDiskBreakdown(sizes map[string]int64, total int64) DiskBreakdown {
+	breakdown := DiskBreakdown{Loaded: true, Total: total}
+	for label, bytes := range sizes {
+		if bytes == 0 {
+			continue
+		}
+		breakdown.Buckets = append(breakdown.Buckets, DiskBucket{Label: label, Bytes: bytes})
+		if label == diskBucketDependencies || label == diskBucketBuild {
+			breakdown.ReclaimableBytes += bytes
+		}
+	}
+	sort.SliceStable(breakdown.Buckets, func(left, right int) bool {
+		return breakdown.Buckets[left].Bytes > breakdown.Buckets[right].Bytes
+	})
+	return breakdown
 }
 
 func sortWorktrees(rows []Worktree) {
