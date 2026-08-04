@@ -158,8 +158,8 @@ func TestGitContextFrameRendersGraph(t *testing.T) {
 		"├─┘",                                           // branch rail folds back into the trunk
 		"wire handler",
 		inspectorWarnStyle.Render("← HEAD"),
-		"f0f0f0f",                            // fork point rendered as a real commit SHA
-		"shared base commit",                 // ...with its subject
+		"f0f0f0f",            // fork point rendered as a real commit SHA
+		"shared base commit", // ...with its subject
 		inspectorLabelStyle.Render("← fork point"),
 		"+3 more on main", // 5 behind, only 2 shown
 	} {
@@ -413,13 +413,13 @@ func TestPRReviewFrameRendersBlockers(t *testing.T) {
 		panelTitleStyle.Render("PR review"),
 		"changes requested by 2",
 		"2 passed · 1 failed · 1 running",
-		deleteDangerStyle.Render("✗"),                  // failing check glyph
-		inspectorWarnStyle.Render("●"),                 // running check glyph
+		deleteDangerStyle.Render("✗"),  // failing check glyph
+		inspectorWarnStyle.Render("●"), // running check glyph
 		"lint",
 		inspectorCommitStyle.Render("@alice"),
 		"blocked by merge requirements",                // verdict from merge state
-		"\x1b]8;;https://github.com/o/r/runs/42\x1b\\",  // failing check links to its detail page
-		"\x1b]8;;https://github.com/o/r/pull/1\x1b\\",   // change-request preview links to the PR
+		"\x1b]8;;https://github.com/o/r/runs/42\x1b\\", // failing check links to its detail page
+		"\x1b]8;;https://github.com/o/r/pull/1\x1b\\",  // change-request preview links to the PR
 	} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("prReviewFrame() missing %q:\n%s", want, frame)
@@ -493,10 +493,10 @@ func TestPRReviewFrameRendersInlineComments(t *testing.T) {
 	frame := prReviewFrame(&review, 0, panelWidth)
 	for _, want := range []string{
 		"1 unresolved · 1 resolved",
-		inspectorWarnStyle.Render("○"),                                          // unresolved glyph
-		inspectorCleanStyle.Render("✓"),                                         // resolved glyph
-		"load.go:88",                                                            // compact file location
-		"\x1b]8;;https://github.com/o/r/pull/24128#discussion_r1\x1b\\",          // deep link to the comment
+		inspectorWarnStyle.Render("○"),  // unresolved glyph
+		inspectorCleanStyle.Render("✓"), // resolved glyph
+		"load.go:88",                    // compact file location
+		"\x1b]8;;https://github.com/o/r/pull/24128#discussion_r1\x1b\\", // deep link to the comment
 	} {
 		if !strings.Contains(frame, want) {
 			t.Fatalf("prReviewFrame() inline comments missing %q:\n%s", want, frame)
@@ -712,7 +712,7 @@ func TestGitContextFrameWeavesRemoteCommits(t *testing.T) {
 	frame := gitContextFrame(behind, "main", 70, 0)
 	for _, want := range []string{
 		"server commit B", "server commit A", // remote-only commits rendered as nodes
-		inspectorLabelStyle.Render("◆"),       // remote node glyph
+		inspectorLabelStyle.Render("◆"),        // remote node glyph
 		inspectorLabelStyle.Render("← origin"), // newest remote commit carries the ref label
 		"├─┘",                                  // the remote nodes fold back into HEAD
 	} {

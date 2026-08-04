@@ -1005,4 +1005,3 @@ func commentLocation(thread github.ReviewThread) string {
 	}
 	return name
 }
-
