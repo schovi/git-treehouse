@@ -81,12 +81,12 @@ func dialogBottomLine(content string, width int) string {
 	return bottomBorderLine(width, appBorderStyle, borderControls{text: content}, borderControls{})
 }
 
-func createDialogHintsAtWidth(width int) string {
-	full := colorKeyHints("Enter create · Tab switch base · ctrl+o config · Esc cancel", false)
+func createDialogHintsAtWidth(destination worktreeDestination, width int) string {
+	full := colorKeyHints(destination.createHint()+" · Tab switch base · ctrl+o config · Esc cancel", false)
 	if lipgloss.Width(full) <= width {
 		return full
 	}
-	medium := colorKeyHints("Enter create · Tab base · ctrl+o config · Esc cancel", false)
+	medium := colorKeyHints(destination.createHint()+" · Tab base · ctrl+o config · Esc cancel", false)
 	if lipgloss.Width(medium) <= width {
 		return medium
 	}

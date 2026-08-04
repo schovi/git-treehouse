@@ -424,6 +424,8 @@ func TestPullRequestCheckoutReusesExistingWorktree(t *testing.T) {
 }
 
 func TestPullRequestCheckoutCreatesWorktreeForExistingBranch(t *testing.T) {
+	t.Setenv("TMUX", "")
+	t.Setenv("ZELLIJ", "")
 	runner := &recordingRunner{results: map[string]recordingResult{
 		"/repo/main|git worktree add /repo/.worktrees/main/feature-login feature/login": {},
 	}}
@@ -461,6 +463,8 @@ func TestPullRequestCheckoutCreatesWorktreeForExistingBranch(t *testing.T) {
 }
 
 func TestPullRequestCheckoutFetchesNewBranchAndRunsPostCreateHook(t *testing.T) {
+	t.Setenv("TMUX", "")
+	t.Setenv("ZELLIJ", "")
 	runner := &recordingRunner{results: map[string]recordingResult{
 		"/repo/main|git fetch origin pull/42/head":                                                    {},
 		"/repo/main|git worktree add -b alice/feature /repo/.worktrees/main/alice-feature FETCH_HEAD": {},

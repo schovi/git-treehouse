@@ -4,6 +4,7 @@ import (
 	"errors"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	appconfig "github.com/schovi/git-treehouse/internal/config"
 	"github.com/schovi/git-treehouse/internal/gitdata"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNOnBranchRowShowsEnterHint(t *testing.T) {
@@ -313,6 +315,101 @@ func TestCreateDialogRenderShowsTypedBranchName(t *testing.T) {
 
 	if !strings.Contains(output, "feature/login") {
 		t.Fatalf("renderCreateAtWidth() should show typed branch name:\n%s", output)
+	}
+}
+
+func TestCreateDialogRendersDetectedMultiplexerDestination(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.createDialog.destination = worktreeDestinationTmux
+
+	output := ansi.Strip(model.renderCreateAtWidth(120))
+
+	if !strings.Contains(output, "Enter create + open tmux window") {
+		t.Fatalf("create dialog should name tmux destination:\n%s", output)
+	}
+}
+
+func TestAllCreationRoutesReloadAndSelectMultiplexerWorktree(t *testing.T) {
+	const path = "/repo/.worktrees/main/feature-new"
+	const branch = "feature/new"
+	tests := []struct {
+		name   string
+		model  func() Model
+		result tea.Msg
+	}{
+		{
+			name: "new branch",
+			model: func() Model {
+				model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+				model.createInFlight = true
+				return model
+			},
+			result: createMsg{path: path, branch: branch, destination: worktreeDestinationTmux, created: true},
+		},
+		{
+			name: "existing local branch",
+			model: func() Model {
+				model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+				model.branchWorktreeDialog = &branchWorktreeDialog{branch: gitdata.Branch{Name: branch}, path: path}
+				return model
+			},
+			result: checkoutMsg{path: path, branch: branch, destination: worktreeDestinationTmux, createsWorktree: true, created: true},
+		},
+		{
+			name: "pull request",
+			model: func() Model {
+				model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+				model.pullRequestDialog = &pullRequestCheckoutDialog{}
+				return model
+			},
+			result: checkoutMsg{path: path, branch: branch, destination: worktreeDestinationZellij, createsWorktree: true, created: true},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			started, startCmd := updateModel(t, test.model(), test.result)
+			if startCmd == nil {
+				t.Fatal("successful creation should start the multiplexer action")
+			}
+			if started.selectedPath != "" {
+				t.Fatalf("selectedPath = %q, want empty until reload", started.selectedPath)
+			}
+
+			reloading, reloadCmd := updateModel(t, started, worktreeDestinationOpenedMsg{path: path})
+			if reloadCmd == nil || !reloading.refreshInFlight || reloading.refreshAnchor.path != path || reloading.createInFlight {
+				t.Fatalf("multiplexer action should reload with the created path selected: %+v", reloading)
+			}
+			if reloading.createDialog != nil || reloading.branchWorktreeDialog != nil || reloading.pullRequestDialog != nil {
+				t.Fatal("multiplexer action should return to the table before reloading")
+			}
+
+			state := reloading.state
+			state.Rows = []gitdata.Worktree{
+				{Path: "/repo/main", Branch: "main", IsMain: true, LocalMetadataLoaded: true},
+				{Path: path, Branch: branch, LocalMetadataLoaded: true},
+			}
+			updated, _ := updateModel(t, reloading, reloadMsg{id: reloading.refreshID, state: state, completedAt: time.Now()})
+			row, ok := updated.selectedTableRow()
+			if !ok || !row.IsWorktree() || row.Worktree.Path != path {
+				t.Fatalf("selected row = %+v, want created worktree %q", row, path)
+			}
+		})
+	}
+}
+
+func TestMultiplexerStartFailureReloadsCreatedWorktreeAndShowsError(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.createInFlight = true
+	path := "/repo/.worktrees/main/feature-new"
+
+	updated, reloadCmd := updateModel(t, model, worktreeDestinationOpenedMsg{path: path, err: errors.New("open tmux window: executable not found")})
+
+	if reloadCmd == nil || !updated.refreshInFlight || updated.refreshAnchor.path != path {
+		t.Fatalf("failed multiplexer start should still reload created worktree: %+v", updated)
+	}
+	if updated.createDialog != nil || !strings.Contains(updated.flash, "open tmux window") {
+		t.Fatalf("failure should close the dialog and report the action error: %+v", updated)
 	}
 }
 

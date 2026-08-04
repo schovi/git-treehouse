@@ -1,6 +1,6 @@
 # 020 — Open new worktrees in tmux or Zellij
 
-priority: 40
+done: 2026-08-04
 tags: tui, ux
 
 ## What & why

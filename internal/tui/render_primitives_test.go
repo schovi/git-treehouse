@@ -107,7 +107,7 @@ func TestCreateDialogRendersColoredBorderAndBottomHints(t *testing.T) {
 		appBorderStyle.Render("╭─"),
 		appBorderStyle.Render("│ "),
 		appBorderStyle.Render("╰─ "),
-		colorKeyHints("Enter create · Tab switch base · ctrl+o config · Esc cancel", false),
+		colorKeyHints("Enter create + go · Tab switch base · ctrl+o config · Esc cancel", false),
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("renderCreateAtWidth() missing %q:\n%s", want, output)

@@ -14,10 +14,11 @@ import (
 )
 
 type createDialog struct {
-	input     textinput.Model
-	bases     []gitdata.BaseOption
-	baseIndex int
-	error     string
+	input       textinput.Model
+	bases       []gitdata.BaseOption
+	baseIndex   int
+	destination worktreeDestination
+	error       string
 }
 
 func createdHookError(hook, path string, err error) string {
@@ -47,7 +48,7 @@ func (model Model) openCreate() (Model, tea.Cmd) {
 	model.paletteDialog = nil
 	model.checkoutDialog = nil
 	model.branchWorktreeDialog = nil
-	model.createDialog = &createDialog{input: input, bases: bases}
+	model.createDialog = &createDialog{input: input, bases: bases, destination: detectedWorktreeDestination()}
 	return model, focusCmd
 }
 
@@ -80,6 +81,7 @@ func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
 			return model, nil
 		}
 		base := dialog.bases[dialog.baseIndex].Rev
+		destination := dialog.destination
 		repoRoot := model.state.Repo.Root
 		mainBranch := model.state.Repo.MainBranch
 		repoConfig := model.repoConfig
@@ -91,10 +93,10 @@ func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 			if err := gitdata.CreateWorktree(ctx, repoRoot, branch, path, base, runner); err != nil {
-				return createMsg{path: path, err: err}
+				return createMsg{path: path, branch: branch, destination: destination, err: err}
 			}
 			warnings, err := runPostCreateSteps(ctx, repoRoot, path, branch, mainBranch, repoConfig, hooksApproved, runner)
-			return createMsg{path: path, created: true, err: err, warnings: warnings}
+			return createMsg{path: path, branch: branch, destination: destination, created: true, err: err, warnings: warnings}
 		}
 	default:
 		var cmd tea.Cmd
@@ -146,7 +148,7 @@ func (model Model) renderCreateAtWidth(width int) string {
 	if dialog.error != "" {
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(truncatePlain(dialog.error, contentWidth)))
 	}
-	return dialogBox("New worktree", lines, createDialogHintsAtWidth(width-6), width)
+	return dialogBox("New worktree", lines, createDialogHintsAtWidth(dialog.destination, width-6), width)
 }
 
 func (model Model) createPathPreview() string {

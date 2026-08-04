@@ -169,17 +169,27 @@ type reloadMsg struct {
 }
 
 type createMsg struct {
-	path     string
-	created  bool
-	err      error
-	warnings []string
+	path        string
+	branch      string
+	destination worktreeDestination
+	created     bool
+	err         error
+	warnings    []string
 }
 
 type checkoutMsg struct {
-	path     string
-	created  bool
-	err      error
-	warnings []string
+	path            string
+	branch          string
+	destination     worktreeDestination
+	createsWorktree bool
+	created         bool
+	err             error
+	warnings        []string
+}
+
+type worktreeDestinationOpenedMsg struct {
+	path string
+	err  error
 }
 
 type deleteMsg struct {
@@ -346,6 +356,47 @@ func (model Model) withCreateWarnings(warnings []string, command tea.Cmd) (Model
 	}
 	model, flashCmd := model.setFlash(strings.Join(warnings, "\n"))
 	return model, tea.Batch(flashCmd, command)
+}
+
+func (model Model) finishCreatedWorktree(path, branch string, destination worktreeDestination, warnings []string) (Model, tea.Cmd) {
+	model.loading = ""
+	if destination == worktreeDestinationGo {
+		model.selectedPath = path
+		return model.withCreateWarnings(warnings, tea.Quit)
+	}
+	return model.withCreateWarnings(warnings, openWorktreeDestinationCmd(destination, path, branch))
+}
+
+func (model Model) reportCreatedWorktreeError(path string, created bool, err error) (Model, tea.Cmd) {
+	model.loading = ""
+	errorText := err.Error()
+	if created {
+		errorText = createdHookError("post_create", path, err)
+	}
+	if model.createDialog != nil {
+		model.createDialog.error = errorText
+	} else if model.branchWorktreeDialog != nil {
+		model.branchWorktreeDialog.error = errorText
+	} else if model.pullRequestDialog != nil {
+		model.pullRequestDialog.error = errorText
+	} else {
+		return model.setFlash(errorText)
+	}
+	return model, nil
+}
+
+func (model Model) reloadCreatedWorktree(path string, err error) (Model, tea.Cmd) {
+	model.createInFlight = false
+	model.createDialog = nil
+	model.branchWorktreeDialog = nil
+	model.pullRequestDialog = nil
+	model, reloadCommand := model.startRefresh(false, false)
+	model.refreshAnchor = selectionAnchor{path: path}
+	if err == nil {
+		return model, reloadCommand
+	}
+	model, flashCommand := model.setFlash(err.Error())
+	return model, tea.Batch(reloadCommand, flashCommand)
 }
 
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -518,28 +569,21 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model, flashCmd := model.setSuccessFeedbackFor(feedbackFrameWorktrees, "refreshed", successFeedbackTimeout)
 		return model, tea.Batch(enrichmentCmd, flashCmd)
 	case createMsg:
-		model.loading = ""
-		model.createInFlight = false
 		if message.err != nil {
-			if message.created {
-				errorText := createdHookError("post_create", message.path, message.err)
-				if model.createDialog != nil {
-					model.createDialog.error = errorText
-				} else {
-					return model.setFlash(errorText)
-				}
-				return model, nil
-			}
-			if model.createDialog != nil {
-				model.createDialog.error = message.err.Error()
-			} else {
-				return model.setFlash(message.err.Error())
-			}
-			return model, nil
+			model.createInFlight = false
+			return model.reportCreatedWorktreeError(message.path, message.created, message.err)
 		}
-		model.selectedPath = message.path
-		return model.withCreateWarnings(message.warnings, tea.Quit)
+		if message.destination == worktreeDestinationGo {
+			model.createInFlight = false
+		}
+		return model.finishCreatedWorktree(message.path, message.branch, message.destination, message.warnings)
 	case checkoutMsg:
+		if message.createsWorktree {
+			if message.err != nil {
+				return model.reportCreatedWorktreeError(message.path, message.created, message.err)
+			}
+			return model.finishCreatedWorktree(message.path, message.branch, message.destination, message.warnings)
+		}
 		model.loading = ""
 		if message.err != nil {
 			if message.created {
@@ -568,6 +612,8 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		model.selectedPath = message.path
 		return model.withCreateWarnings(message.warnings, tea.Quit)
+	case worktreeDestinationOpenedMsg:
+		return model.reloadCreatedWorktree(message.path, message.err)
 	case deleteMsg:
 		if message.id != model.deleteID || !model.deleteInFlight {
 			return model, nil

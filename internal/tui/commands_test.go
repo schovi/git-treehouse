@@ -11,6 +11,7 @@ import (
 	"github.com/schovi/git-treehouse/internal/github"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +61,48 @@ func TestConfigReloadedMessageUpdatesCreatePathPreview(t *testing.T) {
 	output := model.renderCreateAtWidth(120)
 	if !strings.Contains(output, ".worktrees/git-treehouse/feature-login") {
 		t.Fatalf("renderCreateAtWidth() should use reloaded path template:\n%s", output)
+	}
+}
+
+func TestWorktreeDestinationUsesOnlyUnambiguousMultiplexerEnvironment(t *testing.T) {
+	tests := []struct {
+		name        string
+		tmux        string
+		zellij      string
+		destination worktreeDestination
+	}{
+		{name: "tmux", tmux: "/tmp/tmux-1000/default,1,0", destination: worktreeDestinationTmux},
+		{name: "zellij", zellij: "session", destination: worktreeDestinationZellij},
+		{name: "neither", destination: worktreeDestinationGo},
+		{name: "both", tmux: "socket", zellij: "session", destination: worktreeDestinationGo},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := worktreeDestinationFromEnvironment(test.tmux, test.zellij); got != test.destination {
+				t.Fatalf("worktreeDestinationFromEnvironment(%q, %q) = %v, want %v", test.tmux, test.zellij, got, test.destination)
+			}
+		})
+	}
+}
+
+func TestWorktreeDestinationBuildsArgvWithoutShellInterpolation(t *testing.T) {
+	path := "/repo/.worktrees/repo/feature; echo nope"
+	branch := "feature/with spaces"
+	tests := []struct {
+		destination worktreeDestination
+		command     string
+		arguments   []string
+	}{
+		{worktreeDestinationTmux, "tmux", []string{"new-window", "-c", path, "-n", branch}},
+		{worktreeDestinationZellij, "zellij", []string{"action", "new-tab", "--cwd", path, "--name", branch}},
+	}
+
+	for _, test := range tests {
+		command, arguments, ok := test.destination.command(path, branch)
+		if !ok || command != test.command || !slices.Equal(arguments, test.arguments) {
+			t.Fatalf("command() = %q, %q, %v; want %q, %q, true", command, arguments, ok, test.command, test.arguments)
+		}
 	}
 }
 

@@ -25,9 +25,10 @@ type checkoutDialog struct {
 }
 
 type branchWorktreeDialog struct {
-	branch gitdata.Branch
-	path   string
-	error  string
+	branch      gitdata.Branch
+	path        string
+	destination worktreeDestination
+	error       string
 }
 
 type pullRequestCheckoutDialog struct {
@@ -239,6 +240,7 @@ func (model Model) startPullRequestCheckout(summary github.PullRequestSummary) (
 		model.pullRequestDialog.error = "target path already exists: " + path
 		return model, nil
 	}
+	destination := detectedWorktreeDestination()
 	repoRoot := model.state.Repo.Root
 	mainBranch := model.state.Repo.MainBranch
 	repoConfig := model.repoConfig
@@ -250,20 +252,20 @@ func (model Model) startPullRequestCheckout(summary github.PullRequestSummary) (
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 			if err := gitdata.CheckoutBranchWorktree(ctx, repoRoot, branch, path, runner); err != nil {
-				return checkoutMsg{path: path, err: err}
+				return checkoutMsg{path: path, branch: branch, destination: destination, createsWorktree: true, err: err}
 			}
 			warnings, err := runPostCreateSteps(ctx, repoRoot, path, branch, mainBranch, repoConfig, hooksApproved, runner)
-			return checkoutMsg{path: path, created: true, err: err, warnings: warnings}
+			return checkoutMsg{path: path, branch: branch, destination: destination, createsWorktree: true, created: true, err: err, warnings: warnings}
 		}
 	}
 	return model, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		if err := gitdata.CheckoutPullRequestWorktree(ctx, repoRoot, summary.Number, branch, path, runner); err != nil {
-			return checkoutMsg{path: path, err: err}
+			return checkoutMsg{path: path, branch: branch, destination: destination, createsWorktree: true, err: err}
 		}
 		warnings, err := runPostCreateSteps(ctx, repoRoot, path, branch, mainBranch, repoConfig, hooksApproved, runner)
-		return checkoutMsg{path: path, created: true, err: err, warnings: warnings}
+		return checkoutMsg{path: path, branch: branch, destination: destination, createsWorktree: true, created: true, err: err, warnings: warnings}
 	}
 }
 
@@ -295,7 +297,7 @@ func (model Model) openBranchWorktree(branch gitdata.Branch) (Model, tea.Cmd) {
 	model.createDialog = nil
 	model.checkoutDialog = nil
 	model.deleteDialog = nil
-	model.branchWorktreeDialog = &branchWorktreeDialog{branch: branch, path: path}
+	model.branchWorktreeDialog = &branchWorktreeDialog{branch: branch, path: path, destination: detectedWorktreeDestination()}
 	return model, nil
 }
 
@@ -312,6 +314,7 @@ func (model Model) updateBranchWorktree(message tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		branch := dialog.branch.Name
 		path := dialog.path
+		destination := dialog.destination
 		repoRoot := model.state.Repo.Root
 		mainBranch := model.state.Repo.MainBranch
 		repoConfig := model.repoConfig
@@ -322,10 +325,10 @@ func (model Model) updateBranchWorktree(message tea.KeyMsg) (Model, tea.Cmd) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 			if err := gitdata.CheckoutBranchWorktree(ctx, repoRoot, branch, path, runner); err != nil {
-				return checkoutMsg{path: path, err: err}
+				return checkoutMsg{path: path, branch: branch, destination: destination, createsWorktree: true, err: err}
 			}
 			warnings, err := runPostCreateSteps(ctx, repoRoot, path, branch, mainBranch, repoConfig, hooksApproved, runner)
-			return checkoutMsg{path: path, created: true, err: err, warnings: warnings}
+			return checkoutMsg{path: path, branch: branch, destination: destination, createsWorktree: true, created: true, err: err, warnings: warnings}
 		}
 	}
 	return model, nil
@@ -475,7 +478,7 @@ func (model Model) renderBranchWorktreeAtWidth(width int) string {
 	if dialog.error != "" {
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(truncatePlain(dialog.error, contentWidth)))
 	}
-	return dialogBox("New worktree", lines, colorKeyHints("Enter create + go · Esc cancel", false), width)
+	return dialogBox("New worktree", lines, colorKeyHints(dialog.destination.createHint()+" · Esc cancel", false), width)
 }
 
 func (model Model) renderPullRequestCheckoutAtWidth(width int) string {

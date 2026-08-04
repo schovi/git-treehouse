@@ -11,7 +11,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 │       ○ origin/feature/grouping    │
 │       ○ origin/main                │
 │                                    │
-│ Enter create · Tab switch · Esc ✕  │
+│ Enter create + go · Tab switch · Esc ✕ │
 └────────────────────────────────────┘
 ```
 
@@ -28,8 +28,8 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
   3. Run `git worktree add -b <name> <path> <base>`.
   4. Copy any repo-scoped `copy_untracked` files (see [Configuration](./configuration.md)) from the root repository into the new worktree.
   5. Run the approved `post_create` hook, if configured (see [Configuration](./configuration.md)).
-  6. Success → **cd into the new worktree immediately** (write `--cd-file`, exit app).
-  7. Failure → git's stderr or hook error shown in the dialog, dialog stays open. If Esc closed the dialog while the command ran, the error appears in the status flash. If the failure happened after `git worktree add`, the created worktree remains on disk.
+  6. Success → when `$TMUX` is set and `$ZELLIJ` is unset, start `tmux new-window -c <path> -n <branch>` and keep Treehouse open; when `$ZELLIJ` is set and `$TMUX` is unset, start `zellij action new-tab --cwd <path> --name <branch>` and keep Treehouse open. In either multiplexer case Treehouse reloads and selects the new worktree. With neither or both variables set, **cd into the new worktree immediately** (write `--cd-file`, exit app).
+  7. Failure → git's stderr or hook error shown in the dialog, dialog stays open. If starting the tmux or Zellij action fails, Treehouse stays open, reloads, selects the created worktree, and shows the action error. If Esc closed the dialog while the command ran, the error appears in the status flash. If the failure happened after `git worktree add`, the created worktree remains on disk.
   8. While the command runs, Enter is ignored to prevent a duplicate create. Esc closes only the dialog.
 
 ## Existing branch worktree flow
@@ -49,7 +49,8 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 - On Enter, path collision → inline error, dialog stays open.
 - On Enter, run `git worktree add <path> <branch>`.
 - Then copy repo-scoped `copy_untracked` files and run the approved `post_create` hook, if configured (see [Configuration](./configuration.md)).
-- Success → cd into the new worktree immediately (write `--cd-file`, exit app).
+- The Enter hint names the detected destination: `Enter create + open tmux window` when only `$TMUX` is set, `Enter create + open Zellij tab` when only `$ZELLIJ` is set, otherwise `Enter create + go`.
+- Success follows the same tmux/Zellij behavior as the new-branch flow: start the argv-safe multiplexer action, keep Treehouse open, reload, and select the worktree. With neither or both variables set, cd into it immediately (write `--cd-file`, exit app).
 - Failure → git's stderr or hook error shown in the dialog, dialog stays open. If the failure happened after `git worktree add`, the created worktree remains on disk.
 - Copying arbitrary uncommitted changes from another worktree is intentionally not automatic. Only the named `copy_untracked` files are copied.
 
@@ -108,7 +109,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
   2. Existing non-prunable worktree for that branch → cd into it immediately.
   3. Existing local branch without a worktree → compute the target path from the normal path template, run `git worktree add <path> <branch>`, then run normal post-create steps.
   4. New PR branch → run `git fetch origin pull/<number>/head`, then `git worktree add -b <branch> <path> FETCH_HEAD`, then run normal post-create steps.
-  5. Success → cd into the worktree immediately (write `--cd-file`, exit app).
-  6. Failure → show the error inline in the picker, and keep the app open.
+  5. After creating a PR worktree, follow the same tmux/Zellij behavior as the new-branch flow. An existing worktree still uses the normal cd-and-exit behavior.
+  6. Failure → show the error inline in the picker, and keep the app open. A tmux or Zellij start failure reloads and selects the created worktree before showing the error.
 - If the input is a PR URL or number that is not in the loaded list, `Enter` tries `gh pr view <input>` directly. Invalid input shows `No matching PR`.
 - Existing local branch reuse does not force-update the branch from the PR head.

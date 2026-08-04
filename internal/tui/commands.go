@@ -514,6 +514,69 @@ func openEditorCmd(editor, path string) tea.Cmd {
 	}
 }
 
+type worktreeDestination int
+
+const (
+	worktreeDestinationGo worktreeDestination = iota
+	worktreeDestinationTmux
+	worktreeDestinationZellij
+)
+
+func detectedWorktreeDestination() worktreeDestination {
+	return worktreeDestinationFromEnvironment(os.Getenv("TMUX"), os.Getenv("ZELLIJ"))
+}
+
+func worktreeDestinationFromEnvironment(tmux, zellij string) worktreeDestination {
+	switch {
+	case tmux != "" && zellij == "":
+		return worktreeDestinationTmux
+	case tmux == "" && zellij != "":
+		return worktreeDestinationZellij
+	default:
+		return worktreeDestinationGo
+	}
+}
+
+func (destination worktreeDestination) createHint() string {
+	return "Enter create + " + destination.description()
+}
+
+func (destination worktreeDestination) description() string {
+	switch destination {
+	case worktreeDestinationTmux:
+		return "open tmux window"
+	case worktreeDestinationZellij:
+		return "open Zellij tab"
+	default:
+		return "go"
+	}
+}
+
+func (destination worktreeDestination) command(path, branch string) (string, []string, bool) {
+	switch destination {
+	case worktreeDestinationTmux:
+		return "tmux", []string{"new-window", "-c", path, "-n", branch}, true
+	case worktreeDestinationZellij:
+		return "zellij", []string{"action", "new-tab", "--cwd", path, "--name", branch}, true
+	default:
+		return "", nil, false
+	}
+}
+
+func openWorktreeDestinationCmd(destination worktreeDestination, path, branch string) tea.Cmd {
+	return func() tea.Msg {
+		command, arguments, ok := destination.command(path, branch)
+		if !ok {
+			return worktreeDestinationOpenedMsg{path: path}
+		}
+		err := exec.Command(command, arguments...).Start()
+		if err != nil {
+			err = fmt.Errorf("%s: %w", destination.description(), err)
+		}
+		return worktreeDestinationOpenedMsg{path: path, err: err}
+	}
+}
+
 func openConfigCmd(editor string, currentConfig config.Config) tea.Cmd {
 	return func() tea.Msg {
 		path, err := config.Path()
