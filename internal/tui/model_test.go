@@ -1481,6 +1481,62 @@ func TestQQuitsFromList(t *testing.T) {
 	}
 }
 
+func TestCtrlCQuitsFromEveryInputState(t *testing.T) {
+	list := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main"}})
+	search := list
+	search.searching = true
+
+	for _, test := range []struct {
+		name  string
+		model Model
+	}{
+		{name: "list", model: list},
+		{name: "search", model: search},
+		{name: "command palette", model: Model{paletteDialog: &paletteDialog{}}},
+		{name: "filter picker", model: Model{filterDialog: &filterDialog{}}},
+		{name: "create", model: Model{createDialog: &createDialog{}}},
+		{name: "checkout", model: Model{checkoutDialog: &checkoutDialog{}}},
+		{name: "branch worktree", model: Model{branchWorktreeDialog: &branchWorktreeDialog{}}},
+		{name: "delete", model: Model{deleteDialog: &deleteDialog{}}},
+		{name: "cleanup merged", model: Model{cleanupMergedDialog: &cleanupMergedDialog{}}},
+		{name: "pull request checkout", model: Model{pullRequestDialog: &pullRequestCheckoutDialog{}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, cmd := updateModel(t, test.model, tea.KeyMsg{Type: tea.KeyCtrlC})
+			if cmd == nil {
+				t.Fatal("ctrl+c returned nil command, want quit command")
+			}
+			message := cmd()
+			if _, ok := message.(tea.QuitMsg); !ok {
+				t.Fatalf("ctrl+c command = %T, want tea.QuitMsg", message)
+			}
+		})
+	}
+}
+
+func TestCtrlOOpensConfigFromList(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main"}})
+	model.config = appconfig.Config{
+		Editor:       "true",
+		PathTemplate: "{repo_parent}/custom/{branch}",
+	}
+
+	_, cmd := updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
+	if cmd == nil {
+		t.Fatal("ctrl+o should return config editor command")
+	}
+	message := cmd()
+	opened, ok := message.(configOpenedMsg)
+	if !ok {
+		t.Fatalf("config command message = %T, want configOpenedMsg", message)
+	}
+	if opened.err != nil {
+		t.Fatalf("config command error = %v", opened.err)
+	}
+}
+
 func TestFDoesNotRefresh(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main"},

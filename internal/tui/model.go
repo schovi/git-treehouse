@@ -1032,6 +1032,10 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.pullRequestDialog.spinnerFrame = (model.pullRequestDialog.spinnerFrame + 1) % len(refreshSpinnerFrames)
 		return model, pullRequestSpinnerTickCmd(model.pullRequestDialog.id)
 	case tea.KeyMsg:
+		if message.Type == tea.KeyCtrlC {
+			model = model.cancelEnrichment()
+			return model, tea.Quit
+		}
 		if model.createDialog != nil {
 			return model.updateCreate(message)
 		}
@@ -1067,11 +1071,13 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 	switch message.String() {
-	case "ctrl+c", "q":
+	case "q":
 		model = model.cancelEnrichment()
 		return model, tea.Quit
 	case "ctrl+p":
 		return model.openPalette()
+	case "ctrl+o":
+		return model, openConfigCmd(model.config.Editor, model.config)
 	case "esc":
 		if model.help {
 			model.help = false

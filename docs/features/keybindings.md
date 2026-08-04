@@ -16,13 +16,15 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 | `u` | Restore the just-deleted branch ([delete-and-restore.md](./delete-and-restore.md)) |
 | `h` | Jump to the root repository worktree |
 | `a` | Jump to the active worktree |
+| `g` / `G` | Jump to the first / last visible row |
 | `s` | Fuzzy branch search |
 | `b` | Toggle branch-only rows and persist the setting |
 | `Tab` | Open filter picker |
 | `Ctrl+P` | Open command palette ([command-palette.md](./command-palette.md)), including the palette-only `Checkout PR` flow |
 | `Ctrl+O` | Open the config file in the editor (also a palette command) |
-| `Esc` | Contextual cancel or clear: close topmost dialog, clear current search, or clear active filter. Does not quit. |
-| `q`, `Ctrl+C` | Quit immediately from list view (no cd) |
+| `Esc` | Contextual cancel or clear: close the topmost dialog, leave search mode, then clear an active filter before a committed search. Does not quit. |
+| `q` | Quit immediately from list view (no cd) |
+| `Ctrl+C` | Quit immediately from any state (no cd) |
 | `?` | Toggle a help overlay with the full key list |
 
 No generic multi-select in v1. Most actions apply to the focused row; `Clean up merged` is a dedicated palette-only batch command over safe merged cleanup candidates.
