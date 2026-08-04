@@ -110,6 +110,7 @@ func resolveRepositoryWithWorktrees(ctx context.Context, cwd string, config conf
 }
 
 func EnrichLocalMetadata(ctx context.Context, state State, runner Runner) (State, error) {
+	state.Rows = append([]Worktree(nil), state.Rows...)
 	refMetadataByBranch, refMetadataErr := loadRefMetadata(ctx, state.Repo, runner)
 	if refMetadataErr != nil {
 		for index := range state.Rows {

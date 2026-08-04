@@ -1,6 +1,6 @@
 # 001 — Fix startup enrichment data race on shared Worktree slice
 
-priority: 10
+done: 2026-08-04
 
 tags: gitdata, tui
 

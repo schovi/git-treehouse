@@ -19,6 +19,21 @@ type fakeResult struct {
 	err    error
 }
 
+type blockingRefMetadataFailureRunner struct {
+	readerReady <-chan struct{}
+}
+
+func (runner blockingRefMetadataFailureRunner) Run(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
+	if name == "git" && len(args) > 0 && args[0] == "for-each-ref" {
+		<-runner.readerReady
+	}
+	return nil, errors.New("metadata unavailable")
+}
+
+func (runner blockingRefMetadataFailureRunner) RunWithEnv(ctx context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
+	return runner.Run(ctx, dir, name, args...)
+}
+
 func (runner fakeRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
 	key := dir + "|" + name + " " + strings.Join(args, " ")
 	result, ok := runner[key]
@@ -108,6 +123,49 @@ func (runner branchRowFakeRunner) Run(_ context.Context, dir, name string, args 
 
 func (runner branchRowFakeRunner) RunWithEnv(ctx context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
 	return runner.Run(ctx, dir, name, args...)
+}
+
+func TestEnrichLocalMetadataDoesNotMutateInputState(t *testing.T) {
+	const worktreeCount = 10_000
+	state := State{Rows: make([]Worktree, worktreeCount)}
+	for index := range state.Rows {
+		state.Rows[index].Prunable = true
+	}
+	readerReady := make(chan struct{})
+	completed := make(chan struct{})
+	var enriched State
+	var enrichErr error
+	go func() {
+		enriched, enrichErr = EnrichLocalMetadata(context.Background(), state, blockingRefMetadataFailureRunner{readerReady: readerReady})
+		close(completed)
+	}()
+	go func() {
+		close(readerReady)
+		for {
+			select {
+			case <-completed:
+				return
+			default:
+				for _, row := range state.Rows {
+					_ = row.LocalMetadataLoaded
+				}
+			}
+		}
+	}()
+	<-completed
+	if enrichErr != nil {
+		t.Fatalf("EnrichLocalMetadata() error = %v", enrichErr)
+	}
+	for index, row := range state.Rows {
+		if row.LocalMetadataLoaded {
+			t.Fatalf("input row %d was mutated", index)
+		}
+	}
+	for index, row := range enriched.Rows {
+		if !row.LocalMetadataLoaded {
+			t.Fatalf("enriched row %d is not marked loaded", index)
+		}
+	}
 }
 
 func TestResolveRepositorySupportsBareInvocation(t *testing.T) {
