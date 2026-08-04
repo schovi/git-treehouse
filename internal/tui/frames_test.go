@@ -402,42 +402,6 @@ func TestPRReviewFrameHiddenStates(t *testing.T) {
 	}
 }
 
-func TestPRReviewFrameRendersInlineComments(t *testing.T) {
-	forceANSIProfile(t)
-	const panelWidth = 70
-
-	review := github.PullRequestReview{
-		Loaded: true, Number: 24128, State: "OPEN", MergeStateStatus: "BLOCKED",
-		Threads: []github.ReviewThread{
-			{Author: "alice", Body: "fixed now", Path: "internal/tui/model.go", Line: 10, URL: "https://github.com/o/r/pull/24128#discussion_r2", Resolved: true},
-			{Author: "Copilot", Body: "consider a nil check here", Path: "internal/gitdata/load.go", Line: 88, URL: "https://github.com/o/r/pull/24128#discussion_r1"},
-		},
-	}
-	frame := prReviewFrame(&review, 0, panelWidth)
-	for _, want := range []string{
-		"1 unresolved · 1 resolved",
-		inspectorWarnStyle.Render("○"),  // unresolved glyph
-		inspectorCleanStyle.Render("✓"), // resolved glyph
-		"load.go:88",                    // compact file location
-		"\x1b]8;;https://github.com/o/r/pull/24128#discussion_r1\x1b\\", // deep link to the comment
-	} {
-		if !strings.Contains(frame, want) {
-			t.Fatalf("prReviewFrame() inline comments missing %q:\n%s", want, frame)
-		}
-	}
-	// Unresolved threads list before resolved ones.
-	unresolvedAt := strings.Index(frame, "load.go:88")
-	resolvedAt := strings.Index(frame, "model.go:10")
-	if unresolvedAt < 0 || resolvedAt < 0 || unresolvedAt > resolvedAt {
-		t.Fatalf("expected unresolved comment before resolved, got %d/%d:\n%s", unresolvedAt, resolvedAt, frame)
-	}
-	for index, line := range strings.Split(frame, "\n") {
-		if width := lipgloss.Width(line); width != panelWidth {
-			t.Fatalf("prReviewFrame() comment line %d width = %d, want %d:\n%s", index, width, panelWidth, line)
-		}
-	}
-}
-
 func TestPRReviewFrameMergedShowsPurpleGlyph(t *testing.T) {
 	forceANSIProfile(t)
 	review := github.PullRequestReview{

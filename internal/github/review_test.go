@@ -1,6 +1,10 @@
 package github
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func TestParsePullRequestReview(t *testing.T) {
 	output := []byte(`{
@@ -91,44 +95,16 @@ func TestParsePullRequestReviewInvalid(t *testing.T) {
 	}
 }
 
-func TestParseReviewThreads(t *testing.T) {
-	output := []byte(`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
-		{"isResolved":false,"isOutdated":false,"comments":{"nodes":[
-			{"author":{"login":"Copilot"},"body":"consider a nil check\nmore detail","url":"https://github.com/o/r/pull/1#discussion_r1","path":"internal/tui/model.go","line":42}
-		]}},
-		{"isResolved":true,"isOutdated":true,"comments":{"nodes":[
-			{"author":{"login":"alice"},"body":"done","url":"https://github.com/o/r/pull/1#discussion_r2","path":"main.go","line":7}
-		]}},
-		{"isResolved":false,"isOutdated":false,"comments":{"nodes":[]}}
-	]}}}}}`)
+func TestLoadPullRequestReviewUsesPRViewOnly(t *testing.T) {
+	runner := &fakeRunner{output: []byte(`{"number":7,"url":"https://github.com/o/r/pull/7"}`)}
 
-	threads := ParseReviewThreads(output)
-	if len(threads) != 2 {
-		t.Fatalf("ParseReviewThreads = %d threads, want 2 (empty-comment thread skipped)", len(threads))
+	if _, ok := LoadPullRequestReview(context.Background(), "/repo", runner, 7); !ok {
+		t.Fatal("LoadPullRequestReview() failed")
 	}
-	first := threads[0]
-	if first.Author != "Copilot" || first.Resolved || first.Body != "consider a nil check" {
-		t.Fatalf("first thread parsed incorrectly: %+v", first)
+	if len(runner.commands) != 1 {
+		t.Fatalf("command count = %d, want 1: %v", len(runner.commands), runner.commands)
 	}
-	if first.URL != "https://github.com/o/r/pull/1#discussion_r1" || first.Path != "internal/tui/model.go" || first.Line != 42 {
-		t.Fatalf("first thread location/url incorrect: %+v", first)
-	}
-	if !threads[1].Resolved || !threads[1].Outdated {
-		t.Fatalf("second thread should be resolved+outdated: %+v", threads[1])
-	}
-
-	review := PullRequestReview{Threads: threads}
-	if unresolved, resolved := review.ThreadCounts(); unresolved != 1 || resolved != 1 {
-		t.Fatalf("ThreadCounts = %d/%d, want 1/1", unresolved, resolved)
-	}
-}
-
-func TestParseOwnerRepo(t *testing.T) {
-	owner, name, ok := parseOwnerRepo("https://github.com/productboard/pb-backend/pull/24128")
-	if !ok || owner != "productboard" || name != "pb-backend" {
-		t.Fatalf("parseOwnerRepo = %q/%q ok=%v, want productboard/pb-backend", owner, name, ok)
-	}
-	if _, _, ok := parseOwnerRepo(""); ok {
-		t.Fatal("parseOwnerRepo(\"\") should fail")
+	if command := runner.commands[0]; !strings.HasPrefix(command, "gh pr view 7 ") || strings.Contains(command, "api graphql") || strings.Contains(command, "reviewThreads") {
+		t.Fatalf("LoadPullRequestReview() command = %q, want gh pr view without GraphQL review threads", command)
 	}
 }

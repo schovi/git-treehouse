@@ -600,10 +600,6 @@ const prReviewFrameMaxChecks = 5
 // prReviewFrameMaxThreads caps how many change-request notes the frame lists.
 const prReviewFrameMaxThreads = 3
 
-// prReviewFrameMaxComments caps how many inline review threads (line comments) the
-// frame lists; unresolved threads are listed first.
-const prReviewFrameMaxComments = 6
-
 const prReviewLabelColumn = 9
 
 // prReviewFrame surfaces the merge blockers for the selected row's pull request,
@@ -623,11 +619,7 @@ func prReviewFrame(review *github.PullRequestReview, pendingNumber, panelWidth i
 		}
 		lines = append(lines, prReviewCheckLines(*review, innerWidth)...)
 		lines = append(lines, prReviewField("review", prReviewDecisionText(*review), innerWidth))
-		lines = append(lines, prReviewThreadLines(*review, innerWidth)...)
-		if len(review.Threads) > 0 {
-			lines = append(lines, prReviewField("comments", prReviewCommentsSummary(*review), innerWidth))
-			lines = append(lines, prReviewCommentLines(*review, innerWidth)...)
-		}
+		lines = append(lines, prReviewChangeRequestLines(*review, innerWidth)...)
 		title := fmt.Sprintf("PR review · #%d", review.Number)
 		return sectionBoxWithFooter(title, lines, "", panelWidth)
 	}
@@ -794,7 +786,7 @@ func prReviewCheckGlyph(state string) (lipgloss.Style, string) {
 	}
 }
 
-func prReviewThreadLines(review github.PullRequestReview, innerWidth int) []string {
+func prReviewChangeRequestLines(review github.PullRequestReview, innerWidth int) []string {
 	if len(review.ChangeRequests) == 0 {
 		return nil
 	}
@@ -818,86 +810,4 @@ func prReviewThreadLines(review github.PullRequestReview, innerWidth int) []stri
 		lines = append(lines, hintStyle.Render(fmt.Sprintf("  +%d more", overflow)))
 	}
 	return lines
-}
-
-func prReviewCommentsSummary(review github.PullRequestReview) string {
-	unresolved, resolved := review.ThreadCounts()
-	parts := make([]string, 0, 2)
-	if unresolved > 0 {
-		parts = append(parts, fmt.Sprintf("%d unresolved", unresolved))
-	}
-	if resolved > 0 {
-		parts = append(parts, fmt.Sprintf("%d resolved", resolved))
-	}
-	if len(parts) == 0 {
-		return "none"
-	}
-	return strings.Join(parts, " · ")
-}
-
-// prReviewCommentLines lists inline review threads, unresolved first, each with a
-// resolution glyph (`○` open / `✓` resolved), file location, and the first line of
-// the opening comment, linking to the comment on the web. Capped with "+N more".
-func prReviewCommentLines(review github.PullRequestReview, innerWidth int) []string {
-	ordered := make([]github.ReviewThread, 0, len(review.Threads))
-	for _, thread := range review.Threads {
-		if !thread.Resolved {
-			ordered = append(ordered, thread)
-		}
-	}
-	for _, thread := range review.Threads {
-		if thread.Resolved {
-			ordered = append(ordered, thread)
-		}
-	}
-	shown := ordered
-	overflow := 0
-	if len(shown) > prReviewFrameMaxComments {
-		shown = shown[:prReviewFrameMaxComments]
-		overflow = len(ordered) - prReviewFrameMaxComments
-	}
-	lines := make([]string, 0, len(shown)+1)
-	for _, thread := range shown {
-		lines = append(lines, prReviewCommentLine(thread, innerWidth))
-	}
-	if overflow > 0 {
-		lines = append(lines, hintStyle.Render(fmt.Sprintf("  +%d more", overflow)))
-	}
-	return lines
-}
-
-func prReviewCommentLine(thread github.ReviewThread, innerWidth int) string {
-	glyphStyle, glyph := inspectorWarnStyle, "○"
-	if thread.Resolved {
-		glyphStyle, glyph = inspectorCleanStyle, "✓"
-	}
-	location := commentLocation(thread)
-	locationWidth := lipgloss.Width(location)
-	if location != "" {
-		location = inspectorCommitStyle.Render(location) + " "
-		locationWidth++
-	}
-	bodyBudget := innerWidth - 4 - locationWidth
-	if bodyBudget < 1 {
-		bodyBudget = 1
-	}
-	body := hintStyle.Render(truncatePlain(thread.Body, bodyBudget))
-	preview := location + body
-	return "  " + glyphStyle.Render(glyph) + " " + osc8(thread.URL, preview)
-}
-
-// commentLocation is the compact "file:line" tag for an inline comment, using the
-// file's base name to stay short. Returns "" when there is no path.
-func commentLocation(thread github.ReviewThread) string {
-	if thread.Path == "" {
-		return ""
-	}
-	name := thread.Path
-	if slash := strings.LastIndex(name, "/"); slash >= 0 {
-		name = name[slash+1:]
-	}
-	if thread.Line > 0 {
-		return fmt.Sprintf("%s:%d", name, thread.Line)
-	}
-	return name
 }

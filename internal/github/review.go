@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"encoding/json"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -34,19 +33,6 @@ type ReviewNote struct {
 	URL    string
 }
 
-// ReviewThread is one inline review conversation on a PR (a reviewer or bot line
-// comment, e.g. Copilot), summarized by its first comment and resolution state.
-// URL deep-links to the comment on the web.
-type ReviewThread struct {
-	Author   string
-	Body     string
-	Path     string
-	Line     int
-	URL      string
-	Resolved bool
-	Outdated bool
-}
-
 // PullRequestReview is the detailed review/CI state behind a single PR, powering
 // the PR review frame. It is loaded lazily for the selected row.
 type PullRequestReview struct {
@@ -60,7 +46,6 @@ type PullRequestReview struct {
 	ReviewDecision   string
 	Checks           []Check
 	ChangeRequests   []ReviewNote
-	Threads          []ReviewThread
 }
 
 // CheckCounts rolls the checks up into pass/fail/running/skipped totals.
@@ -78,18 +63,6 @@ func (review PullRequestReview) CheckCounts() (pass, fail, running, skipped int)
 		}
 	}
 	return pass, fail, running, skipped
-}
-
-// ThreadCounts rolls the review threads up into unresolved/resolved totals.
-func (review PullRequestReview) ThreadCounts() (unresolved, resolved int) {
-	for _, thread := range review.Threads {
-		if thread.Resolved {
-			resolved++
-		} else {
-			unresolved++
-		}
-	}
-	return unresolved, resolved
 }
 
 type rawReviewView struct {
@@ -110,27 +83,8 @@ type rawReview struct {
 	Body   string   `json:"body"`
 }
 
-// reviewThreadsQuery fetches inline review threads (line comments) with their
-// resolution state. gh pr view does not expose these, so it goes through the
-// GraphQL API. Only the first comment of each thread is needed for the summary.
-const reviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!){
-  repository(owner:$owner,name:$name){
-    pullRequest(number:$number){
-      reviewThreads(first:100){
-        nodes{
-          isResolved
-          isOutdated
-          comments(first:1){nodes{author{login} body url path line}}
-        }
-      }
-    }
-  }
-}`
-
 // LoadPullRequestReview fetches the detailed review/CI state for one PR. ok is
-// false on error (caller keeps whatever it had). Inline review threads are loaded
-// via a second GraphQL call; that call failing (old gh, GHE quirks) leaves Threads
-// empty without failing the whole load.
+// false on error (caller keeps whatever it had).
 func LoadPullRequestReview(ctx context.Context, repoRoot string, runner gitdata.Runner, number int) (PullRequestReview, bool) {
 	output, err := runner.Run(ctx, repoRoot, "gh", "pr", "view", strconv.Itoa(number),
 		"--json", "number,url,state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,reviews")
@@ -141,85 +95,7 @@ func LoadPullRequestReview(ctx context.Context, repoRoot string, runner gitdata.
 	if !ok {
 		return review, ok
 	}
-	if owner, name, parsed := parseOwnerRepo(review.URL); parsed {
-		if threads, err := runner.Run(ctx, repoRoot, "gh", "api", "graphql",
-			"-f", "query="+reviewThreadsQuery,
-			"-f", "owner="+owner, "-f", "name="+name,
-			"-F", "number="+strconv.Itoa(number)); err == nil {
-			review.Threads = ParseReviewThreads(threads)
-		}
-	}
 	return review, true
-}
-
-// parseOwnerRepo extracts the owner and repo name from a PR web URL such as
-// https://github.com/owner/repo/pull/123, independent of the host (so it works
-// for GitHub Enterprise too).
-func parseOwnerRepo(prURL string) (owner, name string, ok bool) {
-	parsed, err := url.Parse(prURL)
-	if err != nil {
-		return "", "", false
-	}
-	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	if len(segments) < 2 || segments[0] == "" || segments[1] == "" {
-		return "", "", false
-	}
-	return segments[0], segments[1], true
-}
-
-type rawThreadsResponse struct {
-	Data struct {
-		Repository struct {
-			PullRequest struct {
-				ReviewThreads struct {
-					Nodes []rawReviewThread `json:"nodes"`
-				} `json:"reviewThreads"`
-			} `json:"pullRequest"`
-		} `json:"repository"`
-	} `json:"data"`
-}
-
-type rawReviewThread struct {
-	IsResolved bool `json:"isResolved"`
-	IsOutdated bool `json:"isOutdated"`
-	Comments   struct {
-		Nodes []rawThreadComment `json:"nodes"`
-	} `json:"comments"`
-}
-
-type rawThreadComment struct {
-	Author rawOwner `json:"author"`
-	Body   string   `json:"body"`
-	URL    string   `json:"url"`
-	Path   string   `json:"path"`
-	Line   int      `json:"line"`
-}
-
-// ParseReviewThreads parses the reviewThreads GraphQL response into thread
-// summaries (one per thread, from its first comment). Pure for testing.
-func ParseReviewThreads(output []byte) []ReviewThread {
-	var raw rawThreadsResponse
-	if err := json.Unmarshal(output, &raw); err != nil {
-		return nil
-	}
-	nodes := raw.Data.Repository.PullRequest.ReviewThreads.Nodes
-	threads := make([]ReviewThread, 0, len(nodes))
-	for _, node := range nodes {
-		if len(node.Comments.Nodes) == 0 {
-			continue
-		}
-		comment := node.Comments.Nodes[0]
-		threads = append(threads, ReviewThread{
-			Author:   comment.Author.Login,
-			Body:     firstLine(comment.Body),
-			Path:     comment.Path,
-			Line:     comment.Line,
-			URL:      comment.URL,
-			Resolved: node.IsResolved,
-			Outdated: node.IsOutdated,
-		})
-	}
-	return threads
 }
 
 // ParsePullRequestReview parses the JSON from `gh pr view --json ...` into a

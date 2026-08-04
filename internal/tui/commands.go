@@ -221,9 +221,8 @@ func (model *Model) pullRequestCICommand(id int) tea.Cmd {
 }
 
 // selectedReviewCommand lazily loads the detailed PR review for the selected row
-// (checks, change requests, inline comments) when it has a PR not yet fetched,
-// open or merged. It is cheap to call on every navigation: it returns nil when
-// there is nothing to load.
+// (checks and change requests) when it has a PR not yet fetched, open or merged.
+// It is cheap to call on every navigation: it returns nil when there is nothing to load.
 func (model *Model) selectedReviewCommand(id int) tea.Cmd {
 	if !model.showPR || model.enrichmentContext == nil {
 		return nil

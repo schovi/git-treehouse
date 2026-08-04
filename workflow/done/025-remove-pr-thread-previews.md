@@ -1,6 +1,6 @@
 # 025 — Remove inline PR-thread previews
 
-priority: 60
+done: 2026-08-04
 tags: github, tui
 
 ## What & why
