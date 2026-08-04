@@ -260,7 +260,8 @@ Then `git-treehouse` reloads the table.
 | `Ctrl+O` | Open the config file in your editor |
 | `Esc` | Close dialog, clear search, or clear the active filter (does not quit) |
 | `?` | Toggle help |
-| `q`, `Ctrl+C` | Quit |
+| `q` | Quit from the list |
+| `Ctrl+C` | Quit immediately from any TUI state |
 
 Create popup:
 
@@ -291,6 +292,7 @@ editor = "cursor"
 path_template = "~/.worktrees/{repo_name}/{branch}"
 main_branch = ""
 show_branches = false
+github = true
 skip_shell_integration_welcome = false
 ```
 
@@ -302,6 +304,7 @@ Options:
 | `path_template` | `{repo_parent}/.worktrees/{repo_name}/{branch}` | New worktree path template |
 | `main_branch` | auto-detected | Override main branch detection |
 | `show_branches` | `false` | Show branch-only rows on startup (also toggled with `b`) |
+| `github` | `true` | Load GitHub PR data in the TUI |
 | `skip_shell_integration_welcome` | `false` | Do not show first-run shell setup |
 
 Path template placeholders:
@@ -349,7 +352,7 @@ Hooks (`post_create`, `before_delete`) are executable commands, so they require 
 git-treehouse allow
 ```
 
-This records the current hook strings in repo-local Git config (`treehouse.approvedHash`). Hooks run only while the approval matches. If they are absent, changed, or unapproved, they are skipped silently and worktree create/delete continue without them. Changing `path_template` or `copy_untracked` does not invalidate approval. Hooks always run through POSIX `sh -c` in the target worktree directory. Run `git-treehouse doctor` to see recognized `.worktree` keys and hook approval state.
+Answer `y` to approve. Scripts must use `git-treehouse allow --yes`; without `--yes`, non-terminal calls fail instead of approving hooks. Approval is stored in repo-local Git config (`treehouse.approvedHash`). Hooks run only while the approval matches. If they are absent, changed, or unapproved, they are skipped silently and worktree create/delete continue without them. Changing `path_template` or `copy_untracked` does not invalidate approval. Hooks always run through POSIX `sh -c` in the target worktree directory. Run `git-treehouse doctor` to see recognized `.worktree` keys and hook approval state.
 
 ## Commands
 
@@ -358,6 +361,12 @@ Interactive TUI:
 ```sh
 git-treehouse
 gth
+```
+
+Launch without GitHub PR lookup:
+
+```sh
+git-treehouse --no-github
 ```
 
 Print a plain table:
@@ -419,6 +428,8 @@ When a row is selected, the PR review frame below the table drills further: a st
 
 If `gh` is missing or unauthenticated, PR columns stay hidden or pending without noisy errors.
 
+Use `git-treehouse --no-github` to skip GitHub lookup for one launch. Set `github = false` in config to disable it by default, or pass `--no-github=false` to override that setting once.
+
 The `Checkout PR` palette command also uses `gh` to list pull requests and check one out into a worktree. See [Checkout A Pull Request](#checkout-a-pull-request).
 
 ## Troubleshooting
@@ -475,9 +486,10 @@ Check that GitHub CLI is installed and authenticated:
 gh auth status
 ```
 
-You can always skip PR lookup:
+You can always skip PR lookup for the TUI or list command:
 
 ```sh
+git-treehouse --no-github
 git-treehouse list --no-github
 ```
 
