@@ -3712,7 +3712,7 @@ func TestRestoreBatchContinuesAfterBranchAlreadyExists(t *testing.T) {
 	}
 }
 
-func TestRestoreOfferClearsWithRefreshFlashLifecycle(t *testing.T) {
+func TestRestoreOfferClearsWithFeedbackLifecycle(t *testing.T) {
 	restore := &pendingBranchRestore{branch: "feature", sha: "0123456789abcdef0123456789abcdef01234567", short: "0123456"}
 	model := Model{
 		feedback:       restoreOfferFeedback(*restore),
@@ -3732,9 +3732,19 @@ func TestRestoreOfferClearsWithRefreshFlashLifecycle(t *testing.T) {
 
 	model.pendingRestore = restore
 	model.feedback = restoreOfferFeedback(*restore)
+	autoRefreshed, autoRefreshCmd := updateModel(t, model, autoRefreshMsg{})
+	if autoRefreshed.pendingRestore == nil || *autoRefreshed.pendingRestore != *restore || autoRefreshed.feedback.plainText() != model.feedback.plainText() {
+		t.Fatalf("auto refresh should preserve offer, got feedback %q restore %+v", autoRefreshed.feedback.plainText(), autoRefreshed.pendingRestore)
+	}
+	if autoRefreshCmd == nil {
+		t.Fatal("auto refresh should schedule the next tick while the offer is live")
+	}
+
+	model.pendingRestore = restore
+	model.feedback = restoreOfferFeedback(*restore)
 	refreshed, _ := model.startRefresh(false, false)
 	if refreshed.pendingRestore != nil || refreshed.feedback.plainText() != "" {
-		t.Fatalf("startRefresh should clear offer, got flash %q restore %+v", refreshed.feedback.plainText(), refreshed.pendingRestore)
+		t.Fatalf("manual refresh should clear offer, got flash %q restore %+v", refreshed.feedback.plainText(), refreshed.pendingRestore)
 	}
 
 	model.pendingRestore = restore

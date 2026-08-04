@@ -1236,7 +1236,8 @@ func (model Model) canApplyAutoRefresh() bool {
 		model.cleanupMergedDialog == nil &&
 		model.paletteDialog == nil &&
 		model.filterDialog == nil &&
-		model.pullRequestDialog == nil
+		model.pullRequestDialog == nil &&
+		!model.hasPendingRestore()
 }
 
 func (model Model) reloadCwd() string {

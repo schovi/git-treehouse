@@ -1,6 +1,6 @@
 # 006 — Auto-refresh must not revoke the 10s "u to restore" undo offer
 
-priority: 60
+done: 2026-08-04
 
 tags: tui, safety
 
