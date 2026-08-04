@@ -37,9 +37,9 @@
 | | Feature |
 | --- | --- |
 | ✅ | List every worktree for the repository containing your current directory. |
-| ✅ | Show local branches that have no worktree, and create or checkout from them. |
+| ✅ | On Git 2.41 or newer, show local branches that have no worktree, and create or checkout from them. |
 | ✅ | Jump your shell into the selected worktree with the `gth` shell wrapper. |
-| ✅ | Create a new branch and worktree from the focused row, with the target path previewed before creation. |
+| ✅ | Create a new branch and worktree from the focused row, with the target path previewed before creation, then open it in tmux or Zellij when available. |
 | ✅ | Delete worktrees with guardrails for active, main, dirty, and unmerged branches, and restore a just-deleted branch with `u`. |
 | ✅ | Search branches with `s`, filter worktree states with `Tab`, and run any action from the `Ctrl+P` command palette. |
 | ✅ | See dirty counts, upstream sync, main comparison, commit age, disk size, PR, and CI state in one table. |
@@ -75,6 +75,7 @@ Go installs the `git-treehouse` binary.
 Optional dependency:
 
 - `gh`, authenticated with GitHub, enables PR and CI status.
+- Git 2.41 or newer enables branch-only rows, upstream/main sync, and merged-branch detection. Older versions show a warning and omit those features.
 
 ## First Run
 
@@ -183,6 +184,8 @@ Your shell moves into the selected worktree. Without shell integration, run `git
 
 The popup shows the resolved path before creation.
 
+When only `TMUX` is set, Git Treehouse opens the new worktree in a tmux window. When only `ZELLIJ` is set, it opens a Zellij tab. Otherwise, it moves your shell into the new worktree as usual.
+
 Default path:
 
 ```text
@@ -207,7 +210,7 @@ To change where new worktrees go, press `ctrl+o` in the create popup. This opens
 4. Move with `up` / `down` (or `k` / `j`).
 5. Press `Enter` to check the PR out into a worktree, or `o` to open it in the browser.
 
-The picker loads up to 200 pull requests via `gh` (open, draft, merged, and closed). `Enter` reuses an existing worktree or branch when present, otherwise it fetches the PR head and creates a new worktree. On success your shell moves into the worktree. This flow is available from the palette only; there is no dedicated key.
+The picker loads up to 200 pull requests via `gh` (open, draft, merged, and closed). `Enter` reuses an existing worktree or branch when present, otherwise it fetches the PR head and creates a new worktree. New worktrees open in tmux or Zellij when only one is active, otherwise your shell moves into the worktree. This flow is available from the palette only; there is no dedicated key.
 
 ### Delete A Worktree
 
@@ -246,7 +249,6 @@ Then `git-treehouse` reloads the table.
 | `a` | Jump to active worktree |
 | `Enter` | Go to selected worktree and exit; on a branch-only row, create a worktree for that branch and go |
 | `n` | Create a new worktree from the focused row |
-| `c` | On a branch-only row, checkout that branch in the root worktree |
 | `d`, `Delete`, `Backspace` | Delete focused worktree or branch |
 | `u` | Restore the just-deleted branch |
 | `o` | Open selected worktree in editor |
@@ -256,7 +258,7 @@ Then `git-treehouse` reloads the table.
 | `s` | Search branches |
 | `b` | Toggle branch-only rows (persists the setting) |
 | `Tab` | Open the filter picker |
-| `Ctrl+P` | Open the command palette |
+| `Ctrl+P` | Open the command palette, including `Checkout root` for branch-only rows |
 | `Ctrl+O` | Open the config file in your editor |
 | `Esc` | Close dialog, clear search, or clear the active filter (does not quit) |
 | `?` | Toggle help |
@@ -424,7 +426,7 @@ If `gh` is installed and authenticated, `git-treehouse` loads PR data in the bac
 - CI status
 - terminal hyperlinks where supported
 
-When a row is selected, the PR review frame below the table drills further: a state/checks/reviews roll-up, individual failing or running checks, change-request previews, and inline review threads, each a terminal hyperlink. It loads lazily per selected row and stays visible with a loading placeholder for open PRs.
+When a row is selected, the PR review frame below the table drills further: a state/checks/reviews roll-up, individual failing or running checks, and change-request previews. It loads lazily per selected row and stays visible with a loading placeholder for open PRs.
 
 If `gh` is missing or unauthenticated, PR columns stay hidden or pending without noisy errors.
 

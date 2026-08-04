@@ -4,6 +4,28 @@ Release notes for Git Treehouse.
 
 Dates use the GitHub release publication date for published releases. Entries without a GitHub release use the annotated tag date.
 
+## v1.1.0 - 2026-08-04
+
+### New Features
+
+#### Open New Worktrees In tmux Or Zellij
+
+When Git Treehouse creates a worktree and only one multiplexer is active, it opens a tmux window or Zellij tab at that path and keeps the TUI open. Without a multiplexer, it keeps the existing cd-and-exit flow.
+
+#### Checkout Root From The Palette
+
+`Checkout root` is now a command-palette action for branch-only rows.
+
+### Bug Fixes
+
+- Auto-refresh retains unchanged local enrichment, avoiding unnecessary detail reloads and list jitter.
+- Large repositories keep open PR mappings even when the merged-PR query reaches its 200-item limit.
+- Git versions older than 2.41 warn once and skip unsupported branch metadata instead of issuing compatibility queries.
+
+### Improvements
+
+- Removed the unused disk-breakdown detail and inline PR-thread previews. PR review still shows state, checks, reviews, and change-request previews.
+
 ## v1.0.0 - 2026-08-04
 
 ### Breaking Changes
