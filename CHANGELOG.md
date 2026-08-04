@@ -4,6 +4,12 @@ Release notes for Git Treehouse.
 
 Dates use the GitHub release publication date for published releases. Entries without a GitHub release use the annotated tag date.
 
+## v0.12.1 - 2026-08-04
+
+### Bug Fixes
+
+- Fixed the list resizing while navigating. The table was sized from the selected row's detail region, so moving between rows whose frames differ in height (a dirty worktree adds a Changes frame) grew or shrank the visible rows and made list entries appear and disappear. The detail region now reserves the tallest height any row in the list needs, and a shorter row pads the gap instead of handing lines back to the table.
+
 ## v0.12.0 - 2026-06-24
 
 ### New Features
