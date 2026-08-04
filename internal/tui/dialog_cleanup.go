@@ -128,7 +128,7 @@ func cleanupMergedAndLoadCmd(ctx context.Context, cwd string, config config.Conf
 		result := runCleanupMerged(ctx, repo, plan, runner)
 		reloadCtx, cancel := context.WithTimeout(context.Background(), destructiveActionTimeout)
 		defer cancel()
-		state, err := loadStableState(reloadCtx, cwd, config, runner, nil)
+		state, err := loadStableState(reloadCtx, cwd, config, runner, repo.GitVersion, nil)
 		if err != nil {
 			return cleanupMergedMsg{id: id, result: result, err: fmt.Errorf("cleaned up merged, but reload failed: %w", err)}
 		}

@@ -463,7 +463,7 @@ func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo git
 		if automatic {
 			prior = &priorState
 		}
-		state, err := loadStableState(ctx, cwd, config, runner, prior)
+		state, err := loadStableState(ctx, cwd, config, runner, repo.GitVersion, prior)
 		if err != nil {
 			return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), err: err}
 		}
@@ -472,8 +472,8 @@ func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo git
 	}
 }
 
-func loadStableState(ctx context.Context, cwd string, config config.Config, runner gitdata.Runner, priorState *gitdata.State) (gitdata.State, error) {
-	state, err := gitdata.LoadSkeleton(ctx, cwd, config, runner)
+func loadStableState(ctx context.Context, cwd string, config config.Config, runner gitdata.Runner, gitVersion string, priorState *gitdata.State) (gitdata.State, error) {
+	state, err := gitdata.LoadSkeletonWithGitVersion(ctx, cwd, config, runner, gitVersion)
 	if err != nil {
 		return gitdata.State{}, err
 	}

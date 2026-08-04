@@ -632,6 +632,24 @@ func TestFormatDoctorChecks(t *testing.T) {
 	}
 }
 
+func TestDoctorGitWarnsBeforeGit241(t *testing.T) {
+	runner := &commandRunner{results: map[string]commandResult{
+		".|git --version": {output: "git version 2.40.9\n"},
+	}}
+
+	check := doctorGit(context.Background(), runner)
+	output := formatDoctorChecks([]doctorCheck{check})
+
+	if check.Status != doctorWarning {
+		t.Fatalf("doctorGit().Status = %q, want warn", check.Status)
+	}
+	for _, want := range []string{"warn  git:", "branch-only rows", "main sync", "merged-branch detection"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("doctor output missing %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestDoctorWorktreeFileReportsConfiguredKeys(t *testing.T) {
 	repoRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(repoRoot, ".worktree"), []byte(`

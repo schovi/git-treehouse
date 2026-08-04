@@ -16,6 +16,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 Prints a stdout report for local setup diagnostics:
 
 - `git` availability and version.
+- Git versions older than 2.41, which cannot provide branch-only rows, main sync, or merged-branch detection.
 - Current repository detection and main branch.
 - `gh` availability/authentication for PR data.
 - Config load/path.

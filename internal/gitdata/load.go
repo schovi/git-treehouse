@@ -29,10 +29,20 @@ func Load(ctx context.Context, cwd string, config config.Config, runner Runner) 
 }
 
 func LoadSkeleton(ctx context.Context, cwd string, config config.Config, runner Runner) (State, error) {
+	return LoadSkeletonWithGitVersion(ctx, cwd, config, runner, "")
+}
+
+// LoadSkeletonWithGitVersion keeps the startup Git version across TUI reloads.
+// An empty version is detected once before local metadata is loaded.
+func LoadSkeletonWithGitVersion(ctx context.Context, cwd string, config config.Config, runner Runner, gitVersion string) (State, error) {
 	repo, rows, err := resolveRepositoryWithWorktrees(ctx, cwd, config, runner)
 	if err != nil {
 		return State{}, err
 	}
+	if gitVersion == "" {
+		gitVersion = detectGitVersion(ctx, repo.Root, runner)
+	}
+	repo.GitVersion = gitVersion
 	realRows := make([]Worktree, 0, len(rows))
 	for index, row := range rows {
 		if row.Bare {
@@ -47,6 +57,32 @@ func LoadSkeleton(ctx context.Context, cwd string, config config.Config, runner 
 	}
 	sortWorktrees(realRows)
 	return State{Repo: repo, Rows: realRows}, nil
+}
+
+func detectGitVersion(ctx context.Context, repoRoot string, runner Runner) string {
+	output, err := runner.Run(ctx, repoRoot, "git", "--version")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
+// GitVersionSupportsBranchMetadata reports whether Git supports the
+// %(ahead-behind:<committish>) for-each-ref atom added in Git 2.41. Unknown
+// version strings stay enabled, preserving the existing behavior.
+func GitVersionSupportsBranchMetadata(gitVersion string) bool {
+	version := strings.TrimSpace(strings.TrimPrefix(gitVersion, "git version "))
+	majorText, minorText, found := strings.Cut(version, ".")
+	if !found {
+		return true
+	}
+	minorText, _, _ = strings.Cut(minorText, ".")
+	major, majorErr := strconv.Atoi(majorText)
+	minor, minorErr := strconv.Atoi(minorText)
+	if majorErr != nil || minorErr != nil {
+		return true
+	}
+	return major > 2 || major == 2 && minor >= 41
 }
 
 func ResolveRepository(ctx context.Context, cwd string, config config.Config, runner Runner) (Repository, error) {
@@ -114,6 +150,14 @@ func EnrichLocalMetadata(ctx context.Context, state State, runner Runner) (State
 // EnrichLocalMetadataWithPriorState reuses matching automatic-refresh enrichment.
 func EnrichLocalMetadataWithPriorState(ctx context.Context, state, priorState State, runner Runner) (State, error) {
 	state.Rows = append([]Worktree(nil), state.Rows...)
+	if !GitVersionSupportsBranchMetadata(state.Repo.GitVersion) {
+		enrichStatusCounts(ctx, state.Rows, runner)
+		for index := range state.Rows {
+			state.Rows[index].LocalMetadataLoaded = true
+		}
+		sortWorktrees(state.Rows)
+		return state, nil
+	}
 	skeletonHeads := worktreeHeadsByPath(state.Rows)
 	refMetadataByBranch, refMetadataErr := loadRefMetadata(ctx, state.Repo, runner)
 	if refMetadataErr != nil {

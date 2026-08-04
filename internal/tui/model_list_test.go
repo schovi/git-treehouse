@@ -727,6 +727,43 @@ func TestAutoReloadSuccessUpdatesTimestampWithoutFlash(t *testing.T) {
 	}
 }
 
+func TestOldGitWarningAppearsOnceAcrossAutomaticReloads(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main"}})
+	model.state.Repo.GitVersion = "git version 2.40.9"
+
+	updated, _ := updateModel(t, model, branchMetadataWarningMsg{})
+	if !strings.Contains(updated.flash, "Git < 2.41") {
+		t.Fatalf("warning = %q, want Git 2.41 limitation", updated.flash)
+	}
+	cleared, _ := updateModel(t, updated, clearFlashMsg{id: updated.flashID})
+	cleared.refreshID = 1
+	cleared.refreshInFlight = true
+	refreshed, _ := updateModel(t, cleared, reloadMsg{
+		id:        1,
+		automatic: true,
+		state: gitdata.State{Repo: gitdata.Repository{
+			Root: "/repo/main", GitVersion: "git version 2.40.9",
+		}, Rows: []gitdata.Worktree{{Path: "/repo/main", Branch: "main", LocalMetadataLoaded: true}}},
+	})
+	if refreshed.flash != "" {
+		t.Fatalf("automatic reload repeated warning = %q", refreshed.flash)
+	}
+	repeated, _ := updateModel(t, refreshed, branchMetadataWarningMsg{})
+	if repeated.flash != "" {
+		t.Fatalf("warning appeared more than once = %q", repeated.flash)
+	}
+}
+
+func TestGit241DoesNotShowBranchMetadataWarning(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main"}})
+	model.state.Repo.GitVersion = "git version 2.41.0"
+
+	updated, command := updateModel(t, model, branchMetadataWarningMsg{})
+	if updated.flash != "" || command != nil {
+		t.Fatalf("Git 2.41 warning = %q, command = %v", updated.flash, command)
+	}
+}
+
 func TestManualReloadSuccessShowsRefreshBadge(t *testing.T) {
 	completedAt := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 	model := Model{

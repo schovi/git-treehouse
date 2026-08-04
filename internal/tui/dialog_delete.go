@@ -224,16 +224,16 @@ func (model Model) startDelete(text string, restore *pendingBranchRestore, actio
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), destructiveActionTimeout)
 	model.actionCancel = cancel
-	command := deleteAndLoadCmd(ctx, model.reloadCwd(), model.config, model.runner, model.deleteID, text, restore, action)
+	command := deleteAndLoadCmd(ctx, model.reloadCwd(), model.config, model.runner, model.state.Repo.GitVersion, model.deleteID, text, restore, action)
 	return model, tea.Batch(command, deleteSpinnerTickCmd(model.deleteID))
 }
 
-func deleteAndLoadCmd(ctx context.Context, cwd string, config config.Config, runner gitdata.Runner, id int, text string, restore *pendingBranchRestore, action func(context.Context) error) tea.Cmd {
+func deleteAndLoadCmd(ctx context.Context, cwd string, config config.Config, runner gitdata.Runner, gitVersion string, id int, text string, restore *pendingBranchRestore, action func(context.Context) error) tea.Cmd {
 	return func() tea.Msg {
 		actionErr := action(ctx)
 		reloadCtx, cancel := context.WithTimeout(context.Background(), destructiveActionTimeout)
 		defer cancel()
-		state, err := loadStableState(reloadCtx, cwd, config, runner, nil)
+		state, err := loadStableState(reloadCtx, cwd, config, runner, gitVersion, nil)
 		if err != nil {
 			return deleteMsg{id: id, err: fmt.Errorf("%s, but reload failed: %w", text, err)}
 		}

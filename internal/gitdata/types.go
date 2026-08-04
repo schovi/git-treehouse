@@ -11,6 +11,7 @@ type Repository struct {
 	Root             string
 	CommonGitDir     string
 	Cwd              string
+	GitVersion       string
 	ActiveWorktree   string
 	MainWorktree     string
 	MainBranch       string

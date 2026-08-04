@@ -738,7 +738,11 @@ func doctorGit(ctx context.Context, runner gitdata.Runner) doctorCheck {
 	if err != nil {
 		return doctorCheck{Name: "git", Status: doctorError, Message: err.Error()}
 	}
-	return doctorCheck{Name: "git", Status: doctorOK, Message: strings.TrimSpace(string(output)) + " at " + path}
+	version := strings.TrimSpace(string(output))
+	if !gitdata.GitVersionSupportsBranchMetadata(version) {
+		return doctorCheck{Name: "git", Status: doctorWarning, Message: version + " at " + path + "; Git < 2.41 disables branch-only rows, main sync, and merged-branch detection"}
+	}
+	return doctorCheck{Name: "git", Status: doctorOK, Message: version + " at " + path}
 }
 
 func doctorConfig() (string, doctorCheck, config.Config) {

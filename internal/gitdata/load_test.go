@@ -66,6 +66,7 @@ type recordingFakeRunner struct {
 	mutex       sync.Mutex
 	commands    []string
 	refMetadata string
+	gitVersion  string
 }
 
 func (runner *recordingFakeRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
@@ -75,6 +76,11 @@ func (runner *recordingFakeRunner) Run(_ context.Context, dir, name string, args
 	runner.mutex.Unlock()
 	if name == "git" && len(args) > 0 {
 		switch args[0] {
+		case "--version":
+			if runner.gitVersion != "" {
+				return []byte(runner.gitVersion + "\n"), nil
+			}
+			return []byte("git version 2.41.0\n"), nil
 		case "rev-parse":
 			switch strings.Join(args[1:], " ") {
 			case "--show-toplevel":
@@ -103,6 +109,48 @@ func (runner *recordingFakeRunner) Run(_ context.Context, dir, name string, args
 		}
 	}
 	return nil, errors.New("unexpected command: " + key)
+}
+
+func TestLoadGatesBranchMetadataAtGit241(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		version        string
+		wantMetadata   bool
+		wantBranchRows int
+	}{
+		{name: "Git 2.40", version: "git version 2.40.9", wantMetadata: false, wantBranchRows: 0},
+		{name: "Git 2.41", version: "git version 2.41.0", wantMetadata: true, wantBranchRows: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &recordingFakeRunner{gitVersion: test.version}
+			state, err := Load(context.Background(), "/repo/main", config.Config{}, runner)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if state.Repo.GitVersion != test.version {
+				t.Fatalf("GitVersion = %q, want %q", state.Repo.GitVersion, test.version)
+			}
+			if len(state.Branches) != test.wantBranchRows {
+				t.Fatalf("branch rows = %d, want %d", len(state.Branches), test.wantBranchRows)
+			}
+			feature := state.Rows[1]
+			if feature.MainSync.Available != test.wantMetadata {
+				t.Fatalf("feature MainSync.Available = %v, want %v", feature.MainSync.Available, test.wantMetadata)
+			}
+			forEachRefCalls := 0
+			for _, command := range runner.commands {
+				if strings.Contains(command, "for-each-ref") {
+					forEachRefCalls++
+				}
+				if !test.wantMetadata && (strings.Contains(command, "rev-list") || strings.Contains(command, "merge-base")) {
+					t.Fatalf("old Git ran compatibility query %q", command)
+				}
+			}
+			if (forEachRefCalls > 0) != test.wantMetadata {
+				t.Fatalf("for-each-ref calls = %d, want metadata %v: %v", forEachRefCalls, test.wantMetadata, runner.commands)
+			}
+		})
+	}
 }
 
 func (runner *recordingFakeRunner) RunWithEnv(ctx context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {

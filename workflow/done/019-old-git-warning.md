@@ -1,6 +1,6 @@
 # 019 — Warn when Git < 2.41 disables branch metadata
 
-priority: 30
+done: 2026-08-04
 tags: gitdata
 
 ## What & why

@@ -31,6 +31,7 @@ type Model struct {
 	loading                string
 	flash                  string
 	flashID                int
+	oldGitWarned           bool
 	showPR                 bool
 	prLoading              bool
 	prCache                map[string]gitdata.PullRequest
@@ -245,6 +246,8 @@ type configReloadedMsg struct {
 
 type noOpMsg struct{}
 
+type branchMetadataWarningMsg struct{}
+
 type clearFlashMsg struct {
 	id int
 }
@@ -322,7 +325,11 @@ func (model Model) Init() tea.Cmd {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return tea.Batch(model.enrichmentCommands(ctx, model.enrichmentID, false), clockTickCmd(model.lastRefreshAt), autoRefreshTickCmd())
+	commands := []tea.Cmd{model.enrichmentCommands(ctx, model.enrichmentID, false), clockTickCmd(model.lastRefreshAt), autoRefreshTickCmd()}
+	if !gitdata.GitVersionSupportsBranchMetadata(model.state.Repo.GitVersion) {
+		commands = append(commands, func() tea.Msg { return branchMetadataWarningMsg{} })
+	}
+	return tea.Batch(commands...)
 }
 
 func (model Model) SelectedPath() string {
@@ -343,6 +350,12 @@ func (model Model) withCreateWarnings(warnings []string, command tea.Cmd) (Model
 
 func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
+	case branchMetadataWarningMsg:
+		if model.oldGitWarned || gitdata.GitVersionSupportsBranchMetadata(model.state.Repo.GitVersion) {
+			return model, nil
+		}
+		model.oldGitWarned = true
+		return model.setFlash("Git < 2.41: branch-only rows, main sync, and merged-branch detection unavailable")
 	case tea.WindowSizeMsg:
 		model.width = message.Width
 		model.height = message.Height
