@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -153,7 +155,7 @@ Usage:
   %[1]s list [--repo <path>] [--no-github] [--json]
   %[1]s init [%[2]s]
   %[1]s doctor [--repo <path>]
-  %[1]s allow [--repo <path>]
+  %[1]s allow [--repo <path>] [--yes]
   %[1]s help [list|init|doctor|allow]
 
 What it can do:
@@ -620,6 +622,7 @@ func runAllow(args []string, repoPath string) error {
 	flags := flag.NewFlagSet(commandName+" allow", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	selectedRepoPath := flags.String("repo", repoPath, "load repository from path")
+	approveWithoutPrompt := flags.Bool("yes", false, "approve hooks without prompting")
 	shortHelp := flags.Bool("h", false, "print help")
 	longHelp := flags.Bool("help", false, "print help")
 	if err := flags.Parse(args); err != nil {
@@ -630,28 +633,29 @@ func runAllow(args []string, repoPath string) error {
 		return nil
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("usage: %s allow [--repo <path>]", commandName)
+		return fmt.Errorf("usage: %s allow [--repo <path>] [--yes]", commandName)
 	}
 	loadedConfig, err := config.LoadDefault()
 	if err != nil {
 		return err
 	}
-	return allowRepoHooks(context.Background(), gitdata.ExecRunner{}, normalizeRepoPath(*selectedRepoPath), loadedConfig, os.Stdout)
+	return allowRepoHooks(context.Background(), gitdata.ExecRunner{}, normalizeRepoPath(*selectedRepoPath), loadedConfig, os.Stdin, term.IsTerminal(os.Stdin.Fd()), *approveWithoutPrompt, os.Stdout)
 }
 
 func allowHelpText() string {
 	return fmt.Sprintf(`git-treehouse allow approves executable hooks from the repo .worktree file.
 
 Usage:
-  %[1]s allow [--repo <path>]
+  %[1]s allow [--repo <path>] [--yes]
 
 Options:
   --repo <path>  Load a repository or worktree path. Default: current directory.
+  --yes          Approve without an interactive prompt.
   -h, --help     Print this help.
 `, commandName)
 }
 
-func allowRepoHooks(ctx context.Context, runner gitdata.Runner, repoPath string, loadedConfig config.Config, output io.Writer) error {
+func allowRepoHooks(ctx context.Context, runner gitdata.Runner, repoPath string, loadedConfig config.Config, input io.Reader, inputIsTerminal bool, approveWithoutPrompt bool, output io.Writer) error {
 	repo, err := gitdata.ResolveRepository(ctx, repoPath, loadedConfig, runner)
 	if err != nil {
 		return err
@@ -659,6 +663,9 @@ func allowRepoHooks(ctx context.Context, runner gitdata.Runner, repoPath string,
 	repoConfig, err := config.LoadRepoConfig(repo.Root)
 	if err != nil {
 		return err
+	}
+	if !approveWithoutPrompt && !inputIsTerminal {
+		return errors.New("refusing to approve hooks without a terminal; re-run with --yes")
 	}
 	if !repoConfig.HasHooks() {
 		_, err := fmt.Fprintln(output, "no hooks defined in .worktree; nothing to approve")
@@ -672,6 +679,21 @@ func allowRepoHooks(ctx context.Context, runner gitdata.Runner, repoPath string,
 	if repoConfig.BeforeDelete != "" {
 		if _, err := fmt.Fprintln(output, "before_delete: "+repoConfig.BeforeDelete); err != nil {
 			return err
+		}
+	}
+	if !approveWithoutPrompt {
+		if _, err := fmt.Fprint(output, "Approve these hooks? [y/N] "); err != nil {
+			return err
+		}
+		scanner := bufio.NewScanner(input)
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				return fmt.Errorf("read hook approval: %w", err)
+			}
+			return errors.New("hook approval declined")
+		}
+		if scanner.Text() != "y" && scanner.Text() != "Y" {
+			return errors.New("hook approval declined")
 		}
 	}
 	if err := gitdata.WriteApprovedHash(ctx, repo.Root, config.HookHash(repoConfig), runner); err != nil {

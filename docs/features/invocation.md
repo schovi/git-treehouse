@@ -15,5 +15,5 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 | `git-treehouse list [--repo <path>]` | Print the table to stdout, no TUI, no ANSI when piped. For scripting. `--json` prints structured repository/worktree data. |
 | `git-treehouse init <shell>` | Print shell integration functions that define `gth` (see [shell-integration.md](./shell-integration.md)) |
 | `git-treehouse doctor [--repo <path>]` | Print environment diagnostics for required and optional integrations. |
-| `git-treehouse allow [--repo <path>]` | Approve executable hooks from the repo `.worktree` file. |
+| `git-treehouse allow [--repo <path>] [--yes]` | Print executable hooks from the repo `.worktree` file and request confirmation. `--yes` approves without a prompt for scripts. |
 | `git-treehouse help [list|init|doctor|allow]` | Print command help. Root and subcommands also accept `-h` and `--help`. |

@@ -57,7 +57,8 @@ Recognized keys:
 
 Hooks are executable commands, so they require explicit local approval:
 
-- Run `git-treehouse allow [--repo <path>]` to approve the current `post_create` and `before_delete` hook strings in `.worktree`.
+- Run `git-treehouse allow [--repo <path>]` to print the current `post_create` and `before_delete` hook strings, then approve them by answering `y` at its confirmation prompt. Any other answer leaves the hooks unapproved.
+- Run `git-treehouse allow --yes [--repo <path>]` for scripts. Without `--yes`, `allow` refuses non-terminal stdin instead of waiting for input.
 - Approval is stored in the repo-local Git config as `treehouse.approvedHash`. The hash covers only hook fields, so changing `path_template` or `copy_untracked` does not invalidate approval.
 - If hooks are absent, no approval is needed. If hooks are present but not approved, or if they changed since approval, they are skipped gracefully. Worktree creation and deletion continue without running the hook, and the UI reports that approval is needed where applicable.
 - `git-treehouse doctor [--repo <path>]` reports recognized `.worktree` keys and whether hooks are approved, missing approval, or changed since approval.

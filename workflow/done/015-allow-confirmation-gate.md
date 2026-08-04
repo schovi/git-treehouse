@@ -1,6 +1,6 @@
 # 015 — `git-treehouse allow` requires interactive confirmation
 
-priority: 150
+done: 2026-08-04
 
 tags: safety
 

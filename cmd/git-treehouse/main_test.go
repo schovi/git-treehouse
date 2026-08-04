@@ -166,7 +166,7 @@ func TestHelpTextDescribesAppCommandsAndOptions(t *testing.T) {
 		"git-treehouse list [--repo <path>] [--no-github] [--json]",
 		"git-treehouse init [",
 		"git-treehouse doctor [--repo <path>]",
-		"git-treehouse allow [--repo <path>]",
+		"git-treehouse allow [--repo <path>] [--yes]",
 		"git-treehouse help [list|init|doctor|allow]",
 		"Browse worktrees",
 		"Switch directories through gth shell integration",
@@ -226,8 +226,9 @@ func TestSubcommandHelpTextDescribesOptions(t *testing.T) {
 			output: allowHelpText(),
 			want: []string{
 				"git-treehouse allow approves executable hooks",
-				"git-treehouse allow [--repo <path>]",
+				"git-treehouse allow [--repo <path>] [--yes]",
 				"--repo <path>",
+				"--yes",
 				"-h, --help",
 			},
 		},
@@ -340,7 +341,7 @@ func repositoryRunner(repoRoot string) *commandRunner {
 	}}
 }
 
-func TestAllowRepoHooksWritesHookHash(t *testing.T) {
+func TestAllowRepoHooksWritesHookHashWhenConfirmed(t *testing.T) {
 	repoRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(repoRoot, ".worktree"), []byte(`
 post_create = "npm install"
@@ -357,15 +358,78 @@ before_delete = "docker compose down"
 	runner.results[writeCommand] = commandResult{}
 	var output strings.Builder
 
-	err = allowRepoHooks(context.Background(), runner, repoRoot, config.Default(), &output)
+	err = allowRepoHooks(context.Background(), runner, repoRoot, config.Default(), strings.NewReader("y\n"), true, false, &output)
 
 	if err != nil {
 		t.Fatalf("allowRepoHooks() error = %v", err)
 	}
 	if !strings.Contains(output.String(), "post_create: npm install") ||
 		!strings.Contains(output.String(), "before_delete: docker compose down") ||
+		!strings.Contains(output.String(), "Approve these hooks? [y/N]") ||
 		!strings.Contains(output.String(), "approved hooks for "+repoRoot) {
 		t.Fatalf("allow output missing hook approval details:\n%s", output.String())
+	}
+	if !slices.Contains(runner.commands, writeCommand) {
+		t.Fatalf("commands = %v, want %q", runner.commands, writeCommand)
+	}
+}
+
+func TestAllowRepoHooksRefusesWithoutApproval(t *testing.T) {
+	tests := []struct {
+		name            string
+		input           string
+		inputIsTerminal bool
+		wantError       string
+	}{
+		{name: "declined", input: "n\n", inputIsTerminal: true, wantError: "hook approval declined"},
+		{name: "empty", input: "\n", inputIsTerminal: true, wantError: "hook approval declined"},
+		{name: "non terminal", inputIsTerminal: false, wantError: "re-run with --yes"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			if err := os.WriteFile(filepath.Join(repoRoot, ".worktree"), []byte(`post_create = "npm install"`), 0600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			runner := repositoryRunner(repoRoot)
+			var output strings.Builder
+
+			err := allowRepoHooks(context.Background(), runner, repoRoot, config.Default(), strings.NewReader(test.input), test.inputIsTerminal, false, &output)
+
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("allowRepoHooks() error = %v, want %q", err, test.wantError)
+			}
+			for _, command := range runner.commands {
+				if strings.Contains(command, "git config --local treehouse.approvedHash") {
+					t.Fatalf("commands should not write approval: %v", runner.commands)
+				}
+			}
+		})
+	}
+}
+
+func TestAllowRepoHooksYesBypassesPrompt(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repoRoot, ".worktree"), []byte(`post_create = "npm install"`), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runner := repositoryRunner(repoRoot)
+	repoConfig, err := config.LoadRepoConfig(repoRoot)
+	if err != nil {
+		t.Fatalf("LoadRepoConfig() error = %v", err)
+	}
+	writeCommand := repoRoot + "|git config --local treehouse.approvedHash " + config.HookHash(repoConfig)
+	runner.results[writeCommand] = commandResult{}
+	var output strings.Builder
+
+	err = allowRepoHooks(context.Background(), runner, repoRoot, config.Default(), strings.NewReader(""), false, true, &output)
+
+	if err != nil {
+		t.Fatalf("allowRepoHooks() error = %v", err)
+	}
+	if strings.Contains(output.String(), "Approve these hooks?") {
+		t.Fatalf("allow output unexpectedly prompted:\n%s", output.String())
 	}
 	if !slices.Contains(runner.commands, writeCommand) {
 		t.Fatalf("commands = %v, want %q", runner.commands, writeCommand)
@@ -377,7 +441,7 @@ func TestAllowRepoHooksNoHooks(t *testing.T) {
 	runner := repositoryRunner(repoRoot)
 	var output strings.Builder
 
-	err := allowRepoHooks(context.Background(), runner, repoRoot, config.Default(), &output)
+	err := allowRepoHooks(context.Background(), runner, repoRoot, config.Default(), strings.NewReader(""), true, false, &output)
 
 	if err != nil {
 		t.Fatalf("allowRepoHooks() error = %v", err)
@@ -389,6 +453,18 @@ func TestAllowRepoHooksNoHooks(t *testing.T) {
 		if strings.Contains(command, "git config --local treehouse.approvedHash") {
 			t.Fatalf("allow without hooks should not write approval: %v", runner.commands)
 		}
+	}
+}
+
+func TestAllowRepoHooksNoHooksRefusesNonTerminalInput(t *testing.T) {
+	repoRoot := t.TempDir()
+	runner := repositoryRunner(repoRoot)
+	var output strings.Builder
+
+	err := allowRepoHooks(context.Background(), runner, repoRoot, config.Default(), strings.NewReader(""), false, false, &output)
+
+	if err == nil || !strings.Contains(err.Error(), "re-run with --yes") {
+		t.Fatalf("allowRepoHooks() error = %v, want non-terminal refusal", err)
 	}
 }
 
