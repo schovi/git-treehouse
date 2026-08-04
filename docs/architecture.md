@@ -19,8 +19,13 @@ Preserve this stdout/stderr split in any new output paths.
 ```
 cmd/git-treehouse/main.go     CLI dispatch: `init` → shellinit, `list`/`doctor`/`allow` rendered here,
                               default → TUI. Parses global flags (--repo, --cd-file, --no-github) and shell detection.
-internal/tui/model.go         Bubble Tea model; composes everything below. Owns all modes,
-                              keybindings, dialogs, and the command palette.
+internal/tui/model.go         Bubble Tea model state, construction, and Update dispatch.
+internal/tui/model_list.go,
+internal/tui/model_view.go    List, selection, filter, and main View concerns.
+internal/tui/dialog_*.go      Dialog state plus open, update, and render behavior.
+internal/tui/render_*.go,
+internal/tui/help.go          Shared TUI chrome/primitives and the help overlay.
+internal/tui/commands.go      Async Bubble Tea command builders and their loaders.
 internal/gitdata              Loads + parses git state (worktree list --porcelain, status, sync),
                               plus repo-scoped copy/hook support.
 internal/github               PR/CI status by shelling out to `gh` CLI (not the API).
@@ -37,6 +42,10 @@ Notable files inside `internal/`:
 | File | Responsibility |
 |---|---|
 | `gitdata/runner.go` | The single subprocess seam (see Key patterns). |
+| `tui/model.go`, `tui/model_list.go`, `tui/model_view.go` | Bubble Tea model state/dispatch, list/selection logic, and main View composition. |
+| `tui/dialog_*.go` | Dialog state and each dialog's open, update, and render behavior. `dialog_layout.go` holds their shared box and overlay primitives. |
+| `tui/render_primitives.go`, `tui/render_chrome.go`, `tui/help.go` | Shared borders/chrome plus the help overlay renderer. |
+| `tui/commands.go` | Async `tea.Cmd` builders for refresh, enrichment, GitHub, disk, config, and external actions. |
 | `gitdata/load.go` | Orchestrates the git calls that build the worktree/branch model. Status enrichment also runs `git diff --numstat HEAD` for `Worktree.ChangedFiles`; `enrichContextGraphs` runs per non-main worktree row, for `Worktree.Graph`, three `git log` calls (commits ahead of main, behind main, and on the upstream via `HEAD..@{u}`) plus `git merge-base` and a deeper `git log` from it for the fork point and the shared ancestors that pad the Git context frame to the paired left column's height; `LoadBranchContextGraph` does the same for `Branch.Graph` on a branch-only row, but runs from the repo root against the branch ref (`refs/heads/<name>` and `<name>@{u}`) since there is no checkout to log from. It is loaded lazily for the selected branch (the TUI's `selectedBranchGraphCommand`, like the PR-review and full-disk loads) rather than eagerly for every branch, because a repo can have many local branches and only the selected one is shown. Both share `loadContextGraph`. `BucketedDiskUsage` walks a worktree once, grouping bytes into `Worktree.DiskBreakdown` (loaded lazily for the selected row alongside its full size). |
 | `gitdata/parse.go` | Pure string-in/struct-out parsers (no exec). `ParseStatusPorcelain` captures per-file `ChangedFile` entries; `ParseNumstat` parses line counts; `ParseGraphCommits` parses commit short/subject lines. |
 | `tui/frames.go` | Auxiliary context frames below the Details panel (PR review, Changes, Git context, Disk). Pure renderers returning a bordered section box or `""`. `model.detailBlocks` composes the below-Worktrees region as two columns: the left column stacks Details + Changes + PR review (via `lipgloss.JoinVertical`), the right is the Git context frame grown to match the left column's height; the two are placed side by side with `lipgloss.JoinHorizontal` on wide panels and stacked otherwise. The Git context renderer takes a `graphSource` (built from either a worktree row or a branch-only row) so the same frame serves both row kinds. `belowDetailFrames` holds only the (currently disabled) Disk frame. The resulting block list is sized into the table height budget by `availableTableHeightForBlocks`. |

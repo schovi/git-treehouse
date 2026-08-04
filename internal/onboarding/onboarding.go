@@ -183,17 +183,3 @@ func (model model) renderFrame(content string) string {
 func padStyled(value string, width int) string {
 	return value + strings.Repeat(" ", max(0, width-lipgloss.Width(value)))
 }
-
-func min(left, right int) int {
-	if left < right {
-		return left
-	}
-	return right
-}
-
-func max(left, right int) int {
-	if left > right {
-		return left
-	}
-	return right
-}

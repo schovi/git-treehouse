@@ -1,6 +1,6 @@
 # 016 — Split internal/tui/model.go along its existing seams
 
-priority: 160
+done: 2026-08-04
 
 tags: tui, code-health
 
