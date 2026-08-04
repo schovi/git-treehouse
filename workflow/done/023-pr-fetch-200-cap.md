@@ -1,6 +1,6 @@
 # 023 — List-wide PR fetch: open PRs beyond the newest 200 silently show as "none"
 
-priority: 50
+done: 2026-08-04
 tags: github
 
 ## What & why

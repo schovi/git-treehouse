@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -43,20 +44,22 @@ func TestLoadPullRequestsFromAuthenticatedCLISkipsAuthStatus(t *testing.T) {
 	if !enabled {
 		t.Fatal("LoadPullRequestsFromAuthenticatedCLI() enabled = false, want true")
 	}
-	if len(runner.commands) != 1 {
-		t.Fatalf("command count = %d, want 1: %v", len(runner.commands), runner.commands)
+	if len(runner.commands) != 2 {
+		t.Fatalf("command count = %d, want 2: %v", len(runner.commands), runner.commands)
 	}
-	if strings.Contains(runner.commands[0], "auth status") {
-		t.Fatalf("LoadPullRequestsFromAuthenticatedCLI() ran auth status: %v", runner.commands)
-	}
-	if !strings.HasPrefix(runner.commands[0], "gh pr list ") {
-		t.Fatalf("command = %q, want gh pr list", runner.commands[0])
-	}
-	if !strings.Contains(runner.commands[0], "reviewDecision") {
-		t.Fatalf("command = %q, want reviewDecision JSON field", runner.commands[0])
-	}
-	if strings.Contains(runner.commands[0], "statusCheckRollup") {
-		t.Fatalf("command = %q, must not request statusCheckRollup (times out on large repos)", runner.commands[0])
+	for _, command := range runner.commands {
+		if strings.Contains(command, "auth status") {
+			t.Fatalf("LoadPullRequestsFromAuthenticatedCLI() ran auth status: %v", runner.commands)
+		}
+		if !strings.HasPrefix(command, "gh pr list ") {
+			t.Fatalf("command = %q, want gh pr list", command)
+		}
+		if !strings.Contains(command, "reviewDecision") {
+			t.Fatalf("command = %q, want reviewDecision JSON field", command)
+		}
+		if strings.Contains(command, "statusCheckRollup") {
+			t.Fatalf("command = %q, must not request statusCheckRollup (times out on large repos)", command)
+		}
 	}
 	pullRequest, ok := pullRequests["feature/login"]
 	if !ok {
@@ -64,6 +67,47 @@ func TestLoadPullRequestsFromAuthenticatedCLISkipsAuthStatus(t *testing.T) {
 	}
 	if pullRequest.Number != 12 || pullRequest.State != "○" || pullRequest.URL == "" {
 		t.Fatalf("pull request = %#v, want parsed PR 12", pullRequest)
+	}
+}
+
+func TestLoadPullRequestsFromAuthenticatedCLILoadsOpenPRsBeyondMergedLimit(t *testing.T) {
+	mergedPullRequests := make([]string, 200)
+	for index := range mergedPullRequests {
+		branch := "merged/branch"
+		if index == 199 {
+			branch = "feature/old-open"
+		}
+		mergedPullRequests[index] = `{"number":` + strconv.Itoa(index+2) + `,"state":"MERGED","isDraft":false,"headRefName":"` + branch + `","url":"https://github.com/acme/repo/pull/` + strconv.Itoa(index+2) + `"}`
+	}
+	runner := &fakeRunner{results: map[string]fakeResult{
+		"gh pr list --limit 200 --state merged --json number,state,isDraft,headRefName,url,reviewDecision": {
+			output: []byte("[" + strings.Join(mergedPullRequests, ",") + "]"),
+		},
+		"gh pr list --limit 200 --state open --json number,state,isDraft,headRefName,url,reviewDecision": {
+			output: []byte(`[{"number":1,"state":"OPEN","isDraft":false,"headRefName":"feature/old-open","url":"https://github.com/acme/repo/pull/1"}]`),
+		},
+	}}
+
+	pullRequests, enabled := LoadPullRequestsFromAuthenticatedCLI(context.Background(), "/repo", runner)
+
+	if !enabled {
+		t.Fatal("LoadPullRequestsFromAuthenticatedCLI() enabled = false, want true")
+	}
+	if len(runner.commands) != 2 {
+		t.Fatalf("command count = %d, want 2: %v", len(runner.commands), runner.commands)
+	}
+	for _, state := range []string{"open", "merged"} {
+		command := "gh pr list --limit 200 --state " + state + " --json number,state,isDraft,headRefName,url,reviewDecision"
+		if !strings.Contains(strings.Join(runner.commands, "\n"), command) {
+			t.Fatalf("commands = %v, want %q", runner.commands, command)
+		}
+	}
+	pullRequest, ok := pullRequests["feature/old-open"]
+	if !ok {
+		t.Fatalf("missing open pull request: %#v", pullRequests)
+	}
+	if pullRequest.Number != 1 || pullRequest.State != "○" {
+		t.Fatalf("pull request = %#v, want the open PR", pullRequest)
 	}
 }
 

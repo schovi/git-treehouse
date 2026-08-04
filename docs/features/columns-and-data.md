@@ -34,7 +34,7 @@ Loaded via the `gh` CLI, only if `gh` exists and is authed. The fetch never asks
 The strategy is chosen by local branch count (threshold ~40):
 
 - **Few branches (per-branch, the common case):** one `gh pr list --head <branch>` call per local branch, run in a parallel worker pool. Each single-branch query is cheap enough to include `statusCheckRollup`, so the number, state, *and* CI all arrive together in roughly one wave. On a large repo this is far faster than the list-wide query (≈1s vs ≈5s) because it never scans the repo's full PR set.
-- **Many branches (fallback):** one `gh pr list` call for all branches (number, state, URL, no rollup), then CI fetched lazily per *open* attached PR via `gh pr view <n> --json statusCheckRollup` in a worker pool. Above the threshold the per-branch fan-out would issue too many requests, so the single list call wins. Here PR association appears first and CI glyphs fill in shortly after.
+- **Many branches (fallback):** capped `gh pr list` calls for open and merged PRs (number, state, URL, no rollup), then CI fetched lazily per *open* attached PR via `gh pr view <n> --json statusCheckRollup` in a worker pool. Open PRs overwrite merged history for the same branch. Each query is limited to 200, so merged history remains capped and closed history is excluded. Above the threshold the per-branch fan-out would issue too many requests, so the list-wide calls win. Here PR association appears first and CI glyphs fill in shortly after.
 
 The PR fetch waits for local branch metadata before running, since the branch list drives the strategy choice.
 

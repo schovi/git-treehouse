@@ -83,25 +83,28 @@ func LoadPullRequests(ctx context.Context, repoRoot string, runner gitdata.Runne
 // LoadPullRequestsFromAuthenticatedCLI fetches the branch->PR mapping without
 // statusCheckRollup. That field forces GitHub's GraphQL API to resolve CI state
 // for every PR in the list, which times out (HTTP 504) on large repositories.
-// CI status is fetched separately per attached PR via LoadPullRequestCI.
+// Merged history is loaded first so a matching open PR wins. CI status is
+// fetched separately per attached PR via LoadPullRequestCI.
 func LoadPullRequestsFromAuthenticatedCLI(ctx context.Context, repoRoot string, runner gitdata.Runner) (map[string]gitdata.PullRequest, bool) {
-	output, err := runner.Run(ctx, repoRoot, "gh", "pr", "list", "--limit", "200", "--state", "all", "--json", "number,state,isDraft,headRefName,url,reviewDecision")
-	if err != nil {
-		return nil, false
-	}
-	var rawPullRequests []rawPullRequest
-	if err := json.Unmarshal(output, &rawPullRequests); err != nil {
-		return nil, false
-	}
-	pullRequests := make(map[string]gitdata.PullRequest, len(rawPullRequests))
-	for _, raw := range rawPullRequests {
-		if raw.HeadRefName == "" {
-			continue
+	pullRequests := map[string]gitdata.PullRequest{}
+	for _, state := range []string{"merged", "open"} {
+		output, err := runner.Run(ctx, repoRoot, "gh", "pr", "list", "--limit", "200", "--state", state, "--json", "number,state,isDraft,headRefName,url,reviewDecision")
+		if err != nil {
+			return nil, false
 		}
-		pullRequests[raw.HeadRefName] = gitdata.PullRequest{
-			Number: raw.Number,
-			State:  stateGlyph(raw.State, raw.IsDraft, raw.ReviewDecision),
-			URL:    raw.URL,
+		var rawPullRequests []rawPullRequest
+		if err := json.Unmarshal(output, &rawPullRequests); err != nil {
+			return nil, false
+		}
+		for _, raw := range rawPullRequests {
+			if raw.HeadRefName == "" {
+				continue
+			}
+			pullRequests[raw.HeadRefName] = gitdata.PullRequest{
+				Number: raw.Number,
+				State:  stateGlyph(raw.State, raw.IsDraft, raw.ReviewDecision),
+				URL:    raw.URL,
+			}
 		}
 	}
 	return pullRequests, true
