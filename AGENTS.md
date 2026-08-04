@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Git Treehouse: a Bubble Tea TUI for managing Git worktrees. Module is `github.com/schovi/git-treehouse`, binary is `git-treehouse` (shell wrapper function: `gth`). The directory name `git-worktree-tui` is the old project name; ignore the stale `gwt` binary in the repo root.
+Git Treehouse: a Bubble Tea TUI for managing Git worktrees. Module is `github.com/schovi/git-treehouse`, binary is `git-treehouse` (shell wrapper function: `gth`). The directory name `git-worktree-tui` is the old project name.
 
 `docs/README.md` indexes the authoritative behavior spec, split by feature under `docs/features/`. `docs/architecture.md` documents code structure and implementation patterns. `docs/ideas.md` is an aspirational backlog, not commitments.
 

@@ -1,6 +1,6 @@
 # 010 — Backlog and repo hygiene: prune shipped ideas, stale binaries, AGENTS.md caveat
 
-priority: 100
+done: 2026-08-04
 
 tags: docs
 
