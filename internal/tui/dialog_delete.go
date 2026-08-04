@@ -233,7 +233,7 @@ func deleteAndLoadCmd(ctx context.Context, cwd string, config config.Config, run
 		actionErr := action(ctx)
 		reloadCtx, cancel := context.WithTimeout(context.Background(), destructiveActionTimeout)
 		defer cancel()
-		state, err := loadStableState(reloadCtx, cwd, config, runner)
+		state, err := loadStableState(reloadCtx, cwd, config, runner, nil)
 		if err != nil {
 			return deleteMsg{id: id, err: fmt.Errorf("%s, but reload failed: %w", text, err)}
 		}

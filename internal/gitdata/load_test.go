@@ -63,8 +63,9 @@ func (runner fakeRunner) RunWithEnv(ctx context.Context, dir string, _ []string,
 }
 
 type recordingFakeRunner struct {
-	mutex    sync.Mutex
-	commands []string
+	mutex       sync.Mutex
+	commands    []string
+	refMetadata string
 }
 
 func (runner *recordingFakeRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
@@ -92,6 +93,9 @@ func (runner *recordingFakeRunner) Run(_ context.Context, dir, name string, args
 		case "remote":
 			return []byte(""), nil
 		case "for-each-ref":
+			if runner.refMetadata != "" {
+				return []byte(runner.refMetadata), nil
+			}
 			return []byte("main\x00aaaaaaaa\x00aaaaaaa\x001780000000\x00main commit\x00origin/main\x00\x000 0\n" +
 				"feature\x00bbbbbbbb\x00bbbbbbb\x001780000100\x00feature commit\x00origin/feature\x00ahead 2, behind 1\x002 5\n"), nil
 		case "status":
@@ -564,6 +568,172 @@ func TestEnrichContextGraphs(t *testing.T) {
 	if rows[1].Graph.Loaded {
 		t.Fatal("main worktree should not get a context graph")
 	}
+}
+
+func TestEnrichLocalMetadataWithPriorStateReusesMatchingGraphAndSizes(t *testing.T) {
+	priorState := State{
+		Repo: Repository{Root: "/repo/main", MainWorktree: "/repo/main", MainBranch: "main"},
+		Rows: []Worktree{
+			{Path: "/repo/main", Head: "aaaaaaaa", Branch: "main", IsMain: true},
+			{
+				Path:           "/repo/feature",
+				Head:           "bbbbbbbb",
+				Branch:         "feature",
+				Graph:          ContextGraph{Loaded: true, BranchCommits: []GraphCommit{{Short: "feature"}}},
+				GitSizeBytes:   101,
+				GitSizeLoaded:  true,
+				FullSizeBytes:  202,
+				FullSizeLoaded: true,
+				SizeBytes:      202,
+				SizeLoaded:     true,
+				DiskBreakdown:  DiskBreakdown{Loaded: true, Total: 202},
+			},
+		},
+	}
+	state := State{
+		Repo: priorState.Repo,
+		Rows: []Worktree{
+			{Path: "/repo/main", Head: "aaaaaaaa", Branch: "main", IsMain: true},
+			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature"},
+		},
+	}
+	runner := &recordingFakeRunner{}
+
+	enriched, err := EnrichLocalMetadataWithPriorState(context.Background(), state, priorState, runner)
+
+	if err != nil {
+		t.Fatalf("EnrichLocalMetadataWithPriorState() error = %v", err)
+	}
+	feature := enriched.Rows[1]
+	if !feature.Graph.Loaded || feature.Graph.BranchCommits[0].Short != "feature" {
+		t.Fatalf("feature graph = %+v, want cached graph", feature.Graph)
+	}
+	if !feature.GitSizeLoaded || !feature.FullSizeLoaded || !feature.DiskBreakdown.Loaded {
+		t.Fatalf("feature sizes = %+v, want cached sizes and breakdown", feature)
+	}
+	for _, command := range runner.commands {
+		if strings.Contains(command, "/repo/feature|git log") || strings.Contains(command, "/repo/feature|git merge-base") {
+			t.Fatalf("matching automatic refresh ran graph command %q", command)
+		}
+	}
+	statusCalls := 0
+	for _, command := range runner.commands {
+		if strings.Contains(command, "git status --porcelain=v1") {
+			statusCalls++
+		}
+	}
+	if statusCalls != 2 {
+		t.Fatalf("status calls = %d, want 2 for refreshed worktree state: %v", statusCalls, runner.commands)
+	}
+}
+
+func TestEnrichLocalMetadataWithPriorStateReloadsChangedHeads(t *testing.T) {
+	priorState := State{
+		Repo: Repository{Root: "/repo/main", MainWorktree: "/repo/main", MainBranch: "main"},
+		Rows: []Worktree{
+			{Path: "/repo/main", Head: "aaaaaaaa", Branch: "main", IsMain: true},
+			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature", Graph: ContextGraph{Loaded: true}, GitSizeLoaded: true, FullSizeLoaded: true, DiskBreakdown: DiskBreakdown{Loaded: true}},
+		},
+	}
+	state := State{
+		Repo: priorState.Repo,
+		Rows: []Worktree{
+			{Path: "/repo/main", Head: "cccccccc", Branch: "main", IsMain: true},
+			{Path: "/repo/feature", Head: "dddddddd", Branch: "feature"},
+		},
+	}
+	runner := &recordingFakeRunner{}
+
+	enriched, err := EnrichLocalMetadataWithPriorState(context.Background(), state, priorState, runner)
+
+	if err != nil {
+		t.Fatalf("EnrichLocalMetadataWithPriorState() error = %v", err)
+	}
+	feature := enriched.Rows[1]
+	if feature.Graph.Loaded || feature.GitSizeLoaded || feature.FullSizeLoaded || feature.DiskBreakdown.Loaded {
+		t.Fatalf("changed worktree reused cached enrichment: %+v", feature)
+	}
+	graphCalls := 0
+	for _, command := range runner.commands {
+		if strings.Contains(command, "/repo/feature|git log") || strings.Contains(command, "/repo/feature|git merge-base") {
+			graphCalls++
+		}
+	}
+	if graphCalls == 0 {
+		t.Fatalf("changed HEAD should reload the graph: %v", runner.commands)
+	}
+}
+
+func TestEnrichLocalMetadataWithPriorStateReloadsGraphsWhenMainHeadChanges(t *testing.T) {
+	priorState := State{
+		Repo: Repository{Root: "/repo/main", MainWorktree: "/repo/main", MainBranch: "main"},
+		Rows: []Worktree{
+			{Path: "/repo/main", Head: "aaaaaaaa", Branch: "main", IsMain: true},
+			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature", Graph: ContextGraph{Loaded: true}, GitSizeLoaded: true},
+		},
+	}
+	state := State{
+		Repo: priorState.Repo,
+		Rows: []Worktree{
+			{Path: "/repo/main", Head: "cccccccc", Branch: "main", IsMain: true},
+			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature"},
+		},
+	}
+	runner := &recordingFakeRunner{}
+
+	enriched, err := EnrichLocalMetadataWithPriorState(context.Background(), state, priorState, runner)
+
+	if err != nil {
+		t.Fatalf("EnrichLocalMetadataWithPriorState() error = %v", err)
+	}
+	feature := enriched.Rows[1]
+	if feature.Graph.Loaded {
+		t.Fatalf("changed main HEAD reused feature graph: %+v", feature.Graph)
+	}
+	if !feature.GitSizeLoaded {
+		t.Fatal("matching worktree HEAD should retain its Git-aware size")
+	}
+	for _, command := range runner.commands {
+		if strings.Contains(command, "/repo/feature|git log") || strings.Contains(command, "/repo/feature|git merge-base") {
+			return
+		}
+	}
+	t.Fatalf("changed main HEAD should reload feature graph: %v", runner.commands)
+}
+
+func TestEnrichLocalMetadataWithPriorStateRejectsRefMetadataHeadChange(t *testing.T) {
+	priorState := State{
+		Repo: Repository{Root: "/repo/main", MainWorktree: "/repo/main", MainBranch: "main"},
+		Rows: []Worktree{
+			{Path: "/repo/main", Head: "aaaaaaaa", Branch: "main", IsMain: true},
+			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature", Graph: ContextGraph{Loaded: true}, GitSizeLoaded: true, FullSizeLoaded: true, DiskBreakdown: DiskBreakdown{Loaded: true}},
+		},
+	}
+	state := State{
+		Repo: priorState.Repo,
+		Rows: []Worktree{
+			{Path: "/repo/main", Head: "aaaaaaaa", Branch: "main", IsMain: true},
+			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature"},
+		},
+	}
+	runner := &recordingFakeRunner{refMetadata: "main\x00aaaaaaaa\x00aaaaaaa\x001780000000\x00main commit\x00origin/main\x00\x000 0\n" +
+		"feature\x00cccccccc\x00ccccccc\x001780000100\x00feature commit\x00origin/feature\x00ahead 2, behind 1\x002 5\n"}
+
+	enriched, err := EnrichLocalMetadataWithPriorState(context.Background(), state, priorState, runner)
+
+	if err != nil {
+		t.Fatalf("EnrichLocalMetadataWithPriorState() error = %v", err)
+	}
+	feature := enriched.Rows[1]
+	if feature.Graph.Loaded || feature.GitSizeLoaded || feature.FullSizeLoaded || feature.DiskBreakdown.Loaded {
+		t.Fatalf("ref metadata HEAD change reused cached enrichment: %+v", feature)
+	}
+	for _, command := range runner.commands {
+		if strings.Contains(command, "/repo/feature|git log") || strings.Contains(command, "/repo/feature|git merge-base") {
+			return
+		}
+	}
+	t.Fatalf("ref metadata HEAD change should reload the graph: %v", runner.commands)
 }
 
 func TestLoadBranchContextGraph(t *testing.T) {

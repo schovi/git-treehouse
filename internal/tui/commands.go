@@ -450,7 +450,7 @@ func loadSizesMsg(ctx context.Context, runner gitdata.Runner, repoRoot string, i
 	return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, breakdowns: breakdowns, repoRoot: repoRoot, id: id}
 }
 
-func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo gitdata.Repository, fetch, automatic bool, id int) tea.Cmd {
+func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo gitdata.Repository, priorState gitdata.State, fetch, automatic bool, id int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -459,7 +459,11 @@ func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo git
 				return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), err: fmt.Errorf("fetch failed: %w", err)}
 			}
 		}
-		state, err := loadStableState(ctx, cwd, config, runner)
+		var prior *gitdata.State
+		if automatic {
+			prior = &priorState
+		}
+		state, err := loadStableState(ctx, cwd, config, runner, prior)
 		if err != nil {
 			return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), err: err}
 		}
@@ -468,10 +472,13 @@ func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo git
 	}
 }
 
-func loadStableState(ctx context.Context, cwd string, config config.Config, runner gitdata.Runner) (gitdata.State, error) {
+func loadStableState(ctx context.Context, cwd string, config config.Config, runner gitdata.Runner, priorState *gitdata.State) (gitdata.State, error) {
 	state, err := gitdata.LoadSkeleton(ctx, cwd, config, runner)
 	if err != nil {
 		return gitdata.State{}, err
+	}
+	if priorState != nil {
+		return gitdata.EnrichLocalMetadataWithPriorState(ctx, state, *priorState, runner)
 	}
 	return gitdata.EnrichLocalMetadata(ctx, state, runner)
 }

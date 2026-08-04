@@ -362,6 +362,22 @@ func TestDiskUsagePathsPrioritizeVisibleRows(t *testing.T) {
 	}
 }
 
+func TestDiskUsageCommandSkipsCachedAutomaticSizes(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{{
+		Path:           "/repo/feature",
+		Branch:         "feature",
+		GitSizeLoaded:  true,
+		FullSizeLoaded: true,
+		DiskBreakdown:  gitdata.DiskBreakdown{Loaded: true},
+	}})
+	model.width = 160
+	model.height = 24
+
+	if command := model.diskUsageCommand(context.Background(), time.Now(), model.enrichmentID); command != nil {
+		t.Fatal("cached automatic sizes should not schedule git ls-files or a filesystem walk")
+	}
+}
+
 func TestReloadCommandFetchesBeforeStableRefreshLoad(t *testing.T) {
 	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
 	runner := &recordingRunner{results: map[string]recordingResult{
@@ -377,7 +393,7 @@ func TestReloadCommandFetchesBeforeStableRefreshLoad(t *testing.T) {
 	cmd := reloadCmd("/repo/main", appconfig.Config{}, runner, gitdata.Repository{
 		Root:             "/repo/main",
 		RemoteConfigured: true,
-	}, true, false, 9)
+	}, gitdata.State{}, true, false, 9)
 
 	message := cmd().(reloadMsg)
 
@@ -399,6 +415,52 @@ func TestReloadCommandFetchesBeforeStableRefreshLoad(t *testing.T) {
 	if worktreeListCalls != 1 {
 		t.Fatalf("worktree list calls = %d, want 1: %v", worktreeListCalls, runner.commands)
 	}
+}
+
+func TestManualReloadBypassesPriorEnrichment(t *testing.T) {
+	worktreeList := "worktree /repo/main\nHEAD aaaaaaaa\nbranch refs/heads/main\n\nworktree /repo/feature\nHEAD bbbbbbbb\nbranch refs/heads/feature\n"
+	results := stableLoadResults(worktreeList)
+	format := strings.Join([]string{
+		"%(refname:short)",
+		"%(objectname)",
+		"%(objectname:short)",
+		"%(committerdate:unix)",
+		"%(contents:subject)",
+		"%(upstream:short)",
+		"%(upstream:track,nobracket)",
+		"%(ahead-behind:refs/heads/main)",
+	}, "%00")
+	results["/repo/main|git for-each-ref --format="+format+" refs/heads"] = recordingResult{output: "main\x00aaaaaaaa\x00aaaaaaa\x001780000000\x00main commit\x00origin/main\x00\x000 0\n" +
+		"feature\x00bbbbbbbb\x00bbbbbbb\x001780000100\x00feature commit\x00origin/feature\x00ahead 2, behind 1\x002 5\n"}
+	runner := &recordingRunner{results: results}
+	priorState := gitdata.State{
+		Repo: gitdata.Repository{Root: "/repo/main", MainWorktree: "/repo/main", MainBranch: "main"},
+		Rows: []gitdata.Worktree{
+			{Path: "/repo/main", Head: "aaaaaaaa", Branch: "main", IsMain: true},
+			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature", Graph: gitdata.ContextGraph{Loaded: true, BranchCommits: []gitdata.GraphCommit{{Short: "cached"}}}, GitSizeLoaded: true, FullSizeLoaded: true, DiskBreakdown: gitdata.DiskBreakdown{Loaded: true}},
+		},
+	}
+
+	message := reloadCmd("/repo/main", appconfig.Config{}, runner, priorState.Repo, priorState, false, false, 1)().(reloadMsg)
+
+	if message.err != nil {
+		t.Fatalf("reloadCmd() error = %v", message.err)
+	}
+	var feature gitdata.Worktree
+	for _, row := range message.state.Rows {
+		if row.Path == "/repo/feature" {
+			feature = row
+		}
+	}
+	if len(feature.Graph.BranchCommits) > 0 || feature.GitSizeLoaded || feature.FullSizeLoaded || feature.DiskBreakdown.Loaded {
+		t.Fatalf("manual reload reused automatic enrichment: %+v", feature)
+	}
+	for _, command := range runner.commands {
+		if strings.Contains(command, "/repo/feature|git log") || strings.Contains(command, "/repo/feature|git merge-base") {
+			return
+		}
+	}
+	t.Fatalf("manual reload should fetch a fresh graph: %v", runner.commands)
 }
 
 func TestNextClockTickDelayUsesMinuteBoundaryAfterFirstMinute(t *testing.T) {

@@ -780,7 +780,7 @@ func TestFetchFailureClearsRefreshAndShowsError(t *testing.T) {
 		}},
 	}
 
-	message := reloadCmd("/repo/main", appconfig.Config{}, runner, model.state.Repo, true, false, model.refreshID)().(reloadMsg)
+	message := reloadCmd("/repo/main", appconfig.Config{}, runner, model.state.Repo, gitdata.State{}, true, false, model.refreshID)().(reloadMsg)
 	updated, _ := updateModel(t, model, message)
 
 	if updated.refreshInFlight || updated.refreshProgressVisible {

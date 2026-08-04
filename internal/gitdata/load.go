@@ -108,7 +108,13 @@ func resolveRepositoryWithWorktrees(ctx context.Context, cwd string, config conf
 }
 
 func EnrichLocalMetadata(ctx context.Context, state State, runner Runner) (State, error) {
+	return EnrichLocalMetadataWithPriorState(ctx, state, State{}, runner)
+}
+
+// EnrichLocalMetadataWithPriorState reuses matching automatic-refresh enrichment.
+func EnrichLocalMetadataWithPriorState(ctx context.Context, state, priorState State, runner Runner) (State, error) {
 	state.Rows = append([]Worktree(nil), state.Rows...)
+	skeletonHeads := worktreeHeadsByPath(state.Rows)
 	refMetadataByBranch, refMetadataErr := loadRefMetadata(ctx, state.Repo, runner)
 	if refMetadataErr != nil {
 		for index := range state.Rows {
@@ -137,12 +143,83 @@ func EnrichLocalMetadata(ctx context.Context, state State, runner Runner) (State
 		}
 		row.LocalMetadataLoaded = true
 	}
+	retainPriorSizes(state.Rows, priorState.Rows, skeletonHeads)
 	if mainExists {
+		retainPriorContextGraphs(state.Rows, state.Repo, priorState, skeletonHeads)
 		enrichContextGraphs(ctx, state.Repo, state.Rows, runner)
 	}
 	state.Branches = branchRowsFromMetadata(refMetadataByBranch, state.Rows, state.Repo.MainBranch)
 	sortWorktrees(state.Rows)
 	return state, nil
+}
+
+func retainPriorSizes(rows, priorRows []Worktree, skeletonHeads map[string]string) {
+	priorByPath := worktreesByPath(priorRows)
+	for index := range rows {
+		prior, ok := priorByPath[rows[index].Path]
+		if !ok || !sameWorktreeHead(rows[index], prior, skeletonHeads) {
+			continue
+		}
+		rows[index].GitSizeBytes = prior.GitSizeBytes
+		rows[index].GitSizeLoaded = prior.GitSizeLoaded
+		rows[index].FullSizeBytes = prior.FullSizeBytes
+		rows[index].FullSizeLoaded = prior.FullSizeLoaded
+		rows[index].SizeBytes = prior.SizeBytes
+		rows[index].SizeLoaded = prior.SizeLoaded
+		rows[index].DiskBreakdown = prior.DiskBreakdown
+	}
+}
+
+func retainPriorContextGraphs(rows []Worktree, repo Repository, priorState State, skeletonHeads map[string]string) {
+	main, mainOK := mainWorktree(rows, repo.MainWorktree)
+	priorMain, priorMainOK := mainWorktree(priorState.Rows, priorState.Repo.MainWorktree)
+	if !mainOK || !priorMainOK || !sameWorktreeHead(main, priorMain, skeletonHeads) {
+		return
+	}
+	priorByPath := worktreesByPath(priorState.Rows)
+	for index := range rows {
+		prior, ok := priorByPath[rows[index].Path]
+		if ok && prior.Graph.Loaded && sameWorktreeHead(rows[index], prior, skeletonHeads) {
+			rows[index].Graph = prior.Graph
+		}
+	}
+}
+
+func worktreeHeadsByPath(rows []Worktree) map[string]string {
+	headsByPath := make(map[string]string, len(rows))
+	for _, row := range rows {
+		headsByPath[row.Path] = row.Head
+	}
+	return headsByPath
+}
+
+func worktreesByPath(rows []Worktree) map[string]Worktree {
+	byPath := make(map[string]Worktree, len(rows))
+	for _, row := range rows {
+		byPath[row.Path] = row
+	}
+	return byPath
+}
+
+func mainWorktree(rows []Worktree, path string) (Worktree, bool) {
+	for _, row := range rows {
+		if path != "" && row.Path == path {
+			return row, true
+		}
+	}
+	for _, row := range rows {
+		if row.IsMain {
+			return row, true
+		}
+	}
+	return Worktree{}, false
+}
+
+func sameWorktreeHead(current, prior Worktree, skeletonHeads map[string]string) bool {
+	return current.Path == prior.Path &&
+		current.Head != "" &&
+		current.Head == skeletonHeads[current.Path] &&
+		current.Head == prior.Head
 }
 
 // graphCommitFetch is how many commits per side the context graph fetches. The
@@ -168,7 +245,7 @@ func enrichContextGraphs(ctx context.Context, repo Repository, rows []Worktree, 
 	var waitGroup sync.WaitGroup
 	for index := range rows {
 		row := &rows[index]
-		if row.Prunable || row.Bare || row.IsMain || row.Path == "" {
+		if row.Prunable || row.Bare || row.IsMain || row.Path == "" || row.Graph.Loaded {
 			continue
 		}
 		waitGroup.Add(1)

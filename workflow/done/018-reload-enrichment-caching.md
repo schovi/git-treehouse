@@ -1,6 +1,6 @@
 # 018 — Carry enrichment results across auto-refresh instead of redoing everything
 
-priority: 20
+done: 2026-08-04
 
 depends: 001
 

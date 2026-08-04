@@ -230,7 +230,12 @@ func (model Model) startRefresh(fetch, automatic bool) (Model, tea.Cmd) {
 	model.refreshProgressVisible = !automatic
 	model.refreshSpinnerFrame = 0
 	model = model.clearFeedback()
-	commands := []tea.Cmd{reloadCmd(model.reloadCwd(), model.config, model.runner, model.state.Repo, fetch, automatic, model.refreshID)}
+	priorState := gitdata.State{}
+	if automatic {
+		priorState = model.state
+		priorState.Rows = append([]gitdata.Worktree(nil), model.state.Rows...)
+	}
+	commands := []tea.Cmd{reloadCmd(model.reloadCwd(), model.config, model.runner, model.state.Repo, priorState, fetch, automatic, model.refreshID)}
 	if model.refreshProgressVisible {
 		commands = append(commands, refreshSpinnerTickCmd(model.refreshID))
 	}
