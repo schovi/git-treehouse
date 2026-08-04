@@ -1,6 +1,6 @@
 # 009 — Sync docs/features/* with implementation (12 verified disagreements)
 
-priority: 90
+done: 2026-08-04
 
 tags: docs
 
@@ -34,3 +34,7 @@ Boundary: docs only (plus zero code). Verify each cited code location before edi
 - Each of the 12 items above is resolved: doc matches code, or a one-line reason records why it was skipped (e.g. superseded by tasks 004/005/013).
 - No README.md or other public-doc changes.
 - `docs/README.md` index still accurate (no files renamed/removed without index update).
+
+## Notes
+
+- Tasks 004 and 005 landed first; their keybinding and create-dialog corrections were already reflected in the feature specs.
