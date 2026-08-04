@@ -578,7 +578,7 @@ func CheckoutPullRequestWorktree(ctx context.Context, repoRoot string, number in
 	if branch == "" {
 		return fmt.Errorf("branch name is required")
 	}
-	if _, err := runner.Run(ctx, repoRoot, "git", "fetch", "origin", fmt.Sprintf("pull/%d/head", number)); err != nil {
+	if err := runNonInteractiveGitFetch(ctx, repoRoot, runner, "fetch", "origin", fmt.Sprintf("pull/%d/head", number)); err != nil {
 		return err
 	}
 	_, err := runner.Run(ctx, repoRoot, "git", "worktree", "add", "-b", branch, path, "FETCH_HEAD")
@@ -631,7 +631,15 @@ func CreateBranchAt(ctx context.Context, repoRoot, branch, commit string, runner
 }
 
 func FetchPrune(ctx context.Context, repoRoot string, runner Runner) error {
-	_, err := runner.Run(ctx, repoRoot, "git", "fetch", "--prune")
+	return runNonInteractiveGitFetch(ctx, repoRoot, runner, "fetch", "--prune")
+}
+
+func runNonInteractiveGitFetch(ctx context.Context, repoRoot string, runner Runner, args ...string) error {
+	env := []string{"GIT_TERMINAL_PROMPT=0"}
+	if os.Getenv("GIT_SSH_COMMAND") == "" {
+		env = append(env, "GIT_SSH_COMMAND=ssh -oBatchMode=yes")
+	}
+	_, err := runner.RunWithEnv(ctx, repoRoot, env, "git", args...)
 	return err
 }
 

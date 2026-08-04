@@ -5677,10 +5677,11 @@ func loadSizesMsg(ctx context.Context, runner gitdata.Runner, repoRoot string, i
 
 func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo gitdata.Repository, fetch, automatic bool, id int) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
 		if fetch && repo.RemoteConfigured {
 			if err := gitdata.FetchPrune(ctx, repo.Root, runner); err != nil {
-				return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), err: err}
+				return reloadMsg{id: id, automatic: automatic, completedAt: time.Now(), err: fmt.Errorf("fetch failed: %w", err)}
 			}
 		}
 		state, err := loadStableState(ctx, cwd, config, runner)

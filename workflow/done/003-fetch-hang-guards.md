@@ -1,6 +1,6 @@
 # 003 — Refresh fetch: credential-prompt guards and timeout
 
-priority: 30
+done: 2026-08-04
 
 tags: gitdata, tui
 

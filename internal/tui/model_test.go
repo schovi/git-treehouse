@@ -1887,8 +1887,10 @@ func TestPullRequestCheckoutFetchesNewBranchAndRunsPostCreateHook(t *testing.T) 
 	if quitCmd == nil {
 		t.Fatal("successful PR checkout should quit")
 	}
-	if len(runner.envCommands) != 1 || runner.envCommands[0].command != "/repo/.worktrees/main/alice-feature|sh -c npm install" {
-		t.Fatalf("post_create commands = %+v, want hook in new worktree", runner.envCommands)
+	if len(runner.envCommands) != 2 ||
+		runner.envCommands[0].command != "/repo/main|git fetch origin pull/42/head" ||
+		runner.envCommands[1].command != "/repo/.worktrees/main/alice-feature|sh -c npm install" {
+		t.Fatalf("env commands = %+v, want guarded fetch then hook in new worktree", runner.envCommands)
 	}
 }
 
@@ -4595,6 +4597,35 @@ func TestManualReloadSuccessShowsRefreshBadge(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("manual reload success should rerun enrichment and schedule flash clear")
+	}
+}
+
+func TestFetchFailureClearsRefreshAndShowsError(t *testing.T) {
+	runner := &recordingRunner{results: map[string]recordingResult{
+		"/repo/main|git fetch --prune": {err: errors.New("authentication required")},
+	}}
+	model := Model{
+		refreshID:              4,
+		refreshInFlight:        true,
+		refreshProgressVisible: true,
+		state: gitdata.State{Repo: gitdata.Repository{
+			Root:             "/repo/main",
+			ActiveWorktree:   "/repo/main",
+			RemoteConfigured: true,
+		}},
+	}
+
+	message := reloadCmd("/repo/main", appconfig.Config{}, runner, model.state.Repo, true, false, model.refreshID)().(reloadMsg)
+	updated, _ := updateModel(t, model, message)
+
+	if updated.refreshInFlight || updated.refreshProgressVisible {
+		t.Fatalf("failed fetch left refresh running: %+v", updated)
+	}
+	if !updated.canAutoRefresh() {
+		t.Fatal("failed fetch should allow the next auto-refresh")
+	}
+	if !strings.Contains(updated.flash, "fetch failed: authentication required") {
+		t.Fatalf("flash = %q, want fetch failure", updated.flash)
 	}
 }
 

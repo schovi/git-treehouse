@@ -19,6 +19,21 @@ type fakeResult struct {
 	err    error
 }
 
+type checkoutRecordingRunner struct {
+	commands []string
+	fetchEnv []string
+}
+
+func (runner *checkoutRecordingRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+	runner.commands = append(runner.commands, dir+"|"+name+" "+strings.Join(args, " "))
+	return nil, nil
+}
+
+func (runner *checkoutRecordingRunner) RunWithEnv(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	runner.fetchEnv = append([]string(nil), env...)
+	return runner.Run(ctx, dir, name, args...)
+}
+
 type blockingRefMetadataFailureRunner struct {
 	readerReady <-chan struct{}
 }
@@ -338,16 +353,67 @@ func TestCreateBranchAtSkipsEmptyBranchOrCommit(t *testing.T) {
 	}
 }
 
-func TestCheckoutPullRequestWorktreeFetchesThenAddsWorktree(t *testing.T) {
-	runner := fakeRunner{
-		"/repo/main|git fetch origin pull/42/head":                                                    {},
-		"/repo/main|git worktree add -b alice/feature /repo/.worktrees/repo/alice-feature FETCH_HEAD": {},
+func TestFetchPruneDisablesInteractivePrompts(t *testing.T) {
+	tests := []struct {
+		name             string
+		sshCommand       string
+		wantSSHBatchMode bool
+	}{
+		{name: "default SSH command", wantSSHBatchMode: true},
+		{name: "existing SSH command", sshCommand: "ssh -F /tmp/config"},
 	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GIT_SSH_COMMAND", test.sshCommand)
+			runner := &hookRecordingRunner{}
+
+			if err := FetchPrune(context.Background(), "/repo/main", runner); err != nil {
+				t.Fatalf("FetchPrune() error = %v", err)
+			}
+			if runner.runCalled || runner.name != "git" || strings.Join(runner.args, " ") != "fetch --prune" {
+				t.Fatalf("fetch command = %q %q, want git fetch --prune", runner.name, runner.args)
+			}
+			if !containsString(runner.env, "GIT_TERMINAL_PROMPT=0") {
+				t.Fatalf("fetch env = %#v, want GIT_TERMINAL_PROMPT=0", runner.env)
+			}
+			hasSSHBatchMode := containsString(runner.env, "GIT_SSH_COMMAND=ssh -oBatchMode=yes")
+			if hasSSHBatchMode != test.wantSSHBatchMode {
+				t.Fatalf("fetch env = %#v, ssh batch mode = %v, want %v", runner.env, hasSSHBatchMode, test.wantSSHBatchMode)
+			}
+		})
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCheckoutPullRequestWorktreeFetchesThenAddsWorktree(t *testing.T) {
+	t.Setenv("GIT_SSH_COMMAND", "")
+	runner := &checkoutRecordingRunner{}
 
 	err := CheckoutPullRequestWorktree(context.Background(), "/repo/main", 42, "alice/feature", "/repo/.worktrees/repo/alice-feature", runner)
 
 	if err != nil {
 		t.Fatalf("CheckoutPullRequestWorktree() error = %v", err)
+	}
+	wantCommands := []string{
+		"/repo/main|git fetch origin pull/42/head",
+		"/repo/main|git worktree add -b alice/feature /repo/.worktrees/repo/alice-feature FETCH_HEAD",
+	}
+	if got := strings.Join(runner.commands, "\n"); got != strings.Join(wantCommands, "\n") {
+		t.Fatalf("commands = %q, want %q", got, strings.Join(wantCommands, "\n"))
+	}
+	for _, want := range []string{"GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -oBatchMode=yes"} {
+		if !containsString(runner.fetchEnv, want) {
+			t.Fatalf("fetch env = %#v, want %q", runner.fetchEnv, want)
+		}
 	}
 }
 
