@@ -4,6 +4,38 @@ Release notes for Git Treehouse.
 
 Dates use the GitHub release publication date for published releases. Entries without a GitHub release use the annotated tag date.
 
+## v1.0.0 - 2026-08-04
+
+### Breaking Changes
+
+#### Hook Approval Now Requires Confirmation
+
+`git-treehouse allow` prompts for `y` or `Y`. Non-terminal calls fail closed. Scripts must use `git-treehouse allow --yes`.
+
+### New Features
+
+#### Disable GitHub Enrichment
+
+Use `git-treehouse --no-github` to skip all `gh` calls and hide PR UI for one run. Set `github = false` in config to make this persistent.
+
+#### Safer Worktree Feedback
+
+The TUI now shows safe-to-remove hints for eligible merged worktrees, validates new-worktree path collisions live, and retains delete undo offers through auto-refresh.
+
+### Bug Fixes
+
+- Create failures remain visible after closing the dialog, and duplicate submits are blocked.
+- Delete and cleanup actions can be cancelled and time out after 10 minutes.
+- Manual refreshes avoid credential prompts, time out after two minutes, and clear failed spinners.
+- Fixed bare-repository main-worktree detection and the startup enrichment race.
+- Ctrl+C exits from any TUI state. Ctrl+O opens the config file.
+
+### Improvements
+
+- Committed searches, empty results, scroll positions, and narrow layouts provide clearer list feedback.
+- `--no-github=false` explicitly overrides `github = false`.
+- Internal TUI files are split along model, dialog, render, help, and command seams.
+
 ## v0.12.1 - 2026-08-04
 
 ### Bug Fixes
