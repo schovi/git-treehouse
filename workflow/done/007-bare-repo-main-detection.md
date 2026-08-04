@@ -1,6 +1,6 @@
 # 007 — Bare-repo setups misidentify the main worktree
 
-priority: 70
+done: 2026-08-04
 
 tags: gitdata
 

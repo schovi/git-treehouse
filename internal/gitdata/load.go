@@ -83,14 +83,12 @@ func resolveRepositoryWithWorktrees(ctx context.Context, cwd string, config conf
 		return Repository{}, nil, err
 	}
 	rows := ParseWorktreeList(string(output))
-	for index, row := range rows {
+	for _, row := range rows {
 		if row.Bare {
 			continue
 		}
-		if index == 0 || repoRoot == activeRoot && !samePath(row.Path, activeRoot) {
-			repoRoot = row.Path
-			break
-		}
+		repoRoot = row.Path
+		break
 	}
 	activeWorktree := activeRoot
 	if bareInvocation {

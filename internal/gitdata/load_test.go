@@ -210,6 +210,37 @@ func TestResolveRepositorySupportsBareInvocation(t *testing.T) {
 	}
 }
 
+func TestLoadSkeletonUsesSameMainWorktreeFromEitherBareRepoWorktree(t *testing.T) {
+	worktreeList := "worktree /repo.git\nbare\n\nworktree /repo/a\nHEAD aaaaaaaa\nbranch refs/heads/main\n\nworktree /repo/b\nHEAD bbbbbbbb\nbranch refs/heads/feature\n"
+	for _, cwd := range []string{"/repo/a", "/repo/b"} {
+		t.Run(cwd, func(t *testing.T) {
+			runner := fakeRunner{
+				cwd + "|git rev-parse --show-toplevel":                         {output: cwd + "\n"},
+				cwd + "|git rev-parse --git-common-dir":                        {output: "/repo.git\n"},
+				cwd + "|git rev-parse --path-format=absolute --git-common-dir": {output: "/repo.git\n"},
+				cwd + "|git worktree list --porcelain":                         {output: worktreeList},
+				"/repo/a|git symbolic-ref --short refs/remotes/origin/HEAD":    {err: errors.New("no origin")},
+				"/repo/a|git show-ref --verify --quiet refs/heads/main":        {},
+				"/repo/a|git remote":                                           {output: ""},
+			}
+
+			state, err := LoadSkeleton(context.Background(), cwd, config.Config{}, runner)
+			if err != nil {
+				t.Fatalf("LoadSkeleton() error = %v", err)
+			}
+			if state.Repo.MainWorktree != "/repo/a" {
+				t.Fatalf("MainWorktree = %q, want /repo/a", state.Repo.MainWorktree)
+			}
+			if state.Repo.Root != "/repo/a" {
+				t.Fatalf("Root = %q, want /repo/a", state.Repo.Root)
+			}
+			if len(state.Rows) != 2 || !state.Rows[0].IsMain || state.Rows[0].Path != "/repo/a" {
+				t.Fatalf("Rows = %+v, want /repo/a as the only main worktree", state.Rows)
+			}
+		})
+	}
+}
+
 func TestResolveRepositorySupportsWorktreePath(t *testing.T) {
 	worktreeList := "worktree /repo/main\nHEAD aaaaaaaa\nbranch refs/heads/main\n\nworktree /repo/feature\nHEAD bbbbbbbb\nbranch refs/heads/feature\n"
 	runner := fakeRunner{
