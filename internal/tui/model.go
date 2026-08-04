@@ -4455,7 +4455,7 @@ func (model Model) renderDeleteBranchAtWidth(branch gitdata.Branch, width int) s
 		dialogFieldLine("PR", model.rowPRText(gitdata.Row{Kind: gitdata.RowKindBranch, Branch: branch}), contentWidth),
 		"",
 		deleteSectionTitle("Branch"),
-		"[x] " + deleteBranchLabel(branch),
+		deleteCheckboxLine(true, deleteBranchLabel(branch), false),
 		deleteDetailLine("Local branch ref will be deleted. No worktree files are removed."),
 	}
 	if branch.BranchMergedToMain {

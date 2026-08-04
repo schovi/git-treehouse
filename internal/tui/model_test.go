@@ -2677,6 +2677,10 @@ func TestOpenDeleteRendersBranchOnlyDeleteDialog(t *testing.T) {
 		t.Fatal("d on branch row should open delete dialog")
 	}
 	output := model.renderDeleteAtWidth(80)
+	checkboxLine := deleteCheckboxLine(true, deleteBranchLabel(model.state.Branches[0]), false)
+	if !strings.Contains(output, checkboxLine) {
+		t.Fatalf("branch delete dialog checkbox = %q, want shared helper output:\n%s", checkboxLine, output)
+	}
 	for _, want := range []string{
 		"Delete branch",
 		"Branch:",

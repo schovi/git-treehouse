@@ -1,6 +1,6 @@
 # 008 — Branch-only delete dialog: render checkbox via the shared helper
 
-priority: 80
+done: 2026-08-04
 
 tags: tui
 
