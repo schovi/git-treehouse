@@ -822,6 +822,82 @@ func TestViewKeepsListHeightStableAcrossSelection(t *testing.T) {
 	}
 }
 
+func TestViewCachesUnselectedDetailBlockHeights(t *testing.T) {
+	rows := make([]gitdata.Worktree, 100)
+	rows[0] = gitdata.Worktree{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true}
+	rows[1] = gitdata.Worktree{Path: "/repo/finished", Branch: "finished", BranchMergedToMain: true}
+	for index := 2; index < len(rows); index++ {
+		rows[index] = gitdata.Worktree{Path: fmt.Sprintf("/repo/worktree-%d", index), Branch: fmt.Sprintf("worktree-%d", index)}
+	}
+	model := testModelWithRows(rows)
+	model.width = 100
+	model.height = 200
+
+	model.View()
+	if model.detailHeightCache == nil || model.detailHeightCache.input == "" {
+		t.Fatal("View() did not measure and cache the visible detail height")
+	}
+
+	// A selected row must still render fresh, but the 100-row height pass must not.
+	model.detailHeightCache.maxBlockLines = 1000
+	model.selected = 1
+	start, end := model.visibleTableWindow(time.Now())
+	if end-start != 1 {
+		t.Fatalf("visibleTableWindow() recomputed cached height: window = %d:%d, want one row", start, end)
+	}
+	output := ansi.Strip(model.View())
+	if !strings.Contains(output, "finished: clean, merged to main — safe to remove (d)") {
+		t.Fatalf("View() did not render the newly selected detail block:\n%s", output)
+	}
+	if model.detailHeightCache.maxBlockLines != 1000 {
+		t.Fatalf("View() recomputed unchanged visible-row height: got %d, want cached 1000", model.detailHeightCache.maxBlockLines)
+	}
+}
+
+func TestDetailHeightCacheInvalidatesForDetailInputs(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+		{Path: "/repo/feature", Branch: "feature", PR: &gitdata.PullRequest{Number: 42}},
+	})
+	model.width = 100
+	model.height = 30
+	model.showPR = true
+	model.prReview = map[int]github.PullRequestReview{}
+	now := time.Now()
+
+	model.viewSnapshot(now, model.width-6)
+	assertRecomputed := func(name string, update func()) {
+		t.Helper()
+		model.detailHeightCache.maxBlockLines = -1
+		update()
+		model.viewSnapshot(now, model.width-6)
+		if model.detailHeightCache.maxBlockLines == -1 {
+			t.Fatalf("%s did not recompute cached detail height", name)
+		}
+	}
+
+	assertRecomputed("visible rows", func() {
+		model.search.SetValue("feature")
+		model.selected = 0
+	})
+	assertRecomputed("enrichment", func() {
+		model.state.Rows[1].Status.Modified = 1
+		model.state.Rows[1].ChangedFiles = []gitdata.ChangedFile{{Path: "detail.go", WorkCode: 'M', Added: 1}}
+	})
+	assertRecomputed("PR review", func() {
+		model.prReview[42] = github.PullRequestReview{Loaded: true, Number: 42, Checks: []github.Check{{State: github.CheckFail}}}
+	})
+	assertRecomputed("GitHub visibility", func() {
+		model.showPR = false
+	})
+
+	model.detailHeightCache.maxBlockLines = -1
+	model.viewSnapshot(now, model.width-7)
+	if model.detailHeightCache.maxBlockLines == -1 {
+		t.Fatal("panel width did not recompute cached detail height")
+	}
+}
+
 func TestFramePadsToViewportHeight(t *testing.T) {
 	model := Model{width: 12, height: 4}
 

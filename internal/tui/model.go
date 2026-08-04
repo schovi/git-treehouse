@@ -22,6 +22,7 @@ type Model struct {
 	width                  int
 	height                 int
 	selected               int
+	detailHeightCache      *detailHeightCache
 	filter                 worktreeFilter
 	showBranches           bool
 	searching              bool
@@ -293,6 +294,7 @@ func New(state gitdata.State, config config.Config, runner gitdata.Runner, noGit
 		runner:            runner,
 		width:             100,
 		height:            30,
+		detailHeightCache: &detailHeightCache{},
 		search:            search,
 		showBranches:      config.ShowBranches,
 		showPR:            state.Repo.RemoteConfigured && githubEnabled,

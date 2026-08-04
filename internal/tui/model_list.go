@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/schovi/git-treehouse/internal/gitdata"
 	"github.com/schovi/git-treehouse/internal/github"
@@ -13,6 +14,13 @@ type selectionAnchor struct {
 	path   string
 	branch string
 	head   string
+}
+
+// detailHeightCache stores only the tallest rendered detail region. Its input
+// fingerprint deliberately excludes selection, whose blocks render every frame.
+type detailHeightCache struct {
+	input         string
+	maxBlockLines int
 }
 
 type worktreeFilter int
@@ -456,11 +464,24 @@ func blockLinesTotal(blocks []string) int {
 // render. Sizing the list against this instead of the selected row's own blocks
 // keeps the visible rows fixed while navigating; shorter rows pad the gap.
 func (model Model) reservedDetailBlockLines(rows []gitdata.Row, now time.Time, panelWidth int) int {
+	input := model.detailHeightCacheInput(rows, panelWidth)
+	if model.detailHeightCache != nil && model.detailHeightCache.input == input {
+		return model.detailHeightCache.maxBlockLines
+	}
+
 	reserved := 0
 	for _, row := range rows {
 		reserved = max(reserved, blockLinesTotal(model.detailBlocks(row, now, panelWidth)))
 	}
+	if model.detailHeightCache != nil {
+		model.detailHeightCache.input = input
+		model.detailHeightCache.maxBlockLines = reserved
+	}
 	return reserved
+}
+
+func (model Model) detailHeightCacheInput(rows []gitdata.Row, panelWidth int) string {
+	return fmt.Sprintf("%d:%t:%#v:%#v:%#v", panelWidth, model.showPR, model.state.Repo, rows, model.prReview)
 }
 
 func (model Model) availableTableHeightForBlockLines(blockLines int) int {

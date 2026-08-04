@@ -1,6 +1,6 @@
 # 017 — Stop re-rendering detail blocks for all filtered rows on every frame
 
-priority: 10
+done: 2026-08-04
 
 tags: tui, perf
 
