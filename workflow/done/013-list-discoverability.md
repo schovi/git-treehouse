@@ -1,6 +1,6 @@
 # 013 — List feedback: hints under scrollbar, visible committed search, informative empty state
 
-priority: 130
+done: 2026-08-04
 
 tags: tui, ux
 

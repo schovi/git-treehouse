@@ -675,6 +675,69 @@ func TestFilterFooterRendersEscClearFilter(t *testing.T) {
 	}
 }
 
+func TestCommittedSearchRendersInWorktreesFooter(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+		{Path: "/repo/docs", Branch: "docs"},
+	})
+	model.width = 120
+	model.height = 14
+	model.search.SetValue("docs")
+	model.searching = true
+
+	model, _ = model.updateSearch(tea.KeyMsg{Type: tea.KeyEnter})
+	output := ansi.Strip(model.View())
+
+	if !strings.Contains(output, "search: docs") {
+		t.Fatalf("View() should name a committed search in the footer:\n%s", output)
+	}
+}
+
+func TestEmptyListExplainsActiveFilterAndSearch(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{
+			name: "filter",
+			want: []string{"No rows match filter: locked", "Esc to clear"},
+		},
+		{
+			name:  "filter and search",
+			query: "fix",
+			want: []string{
+				"No rows match filter: locked and search: fix",
+				"Esc to clear filter",
+				"s then Esc to clear search",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			model := testModelWithRows([]gitdata.Worktree{
+				{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+			})
+			model.width = 80
+			model.height = 14
+			model.setFilter(filterLocked)
+			model.search.SetValue(test.query)
+
+			output := ansi.Strip(model.View())
+
+			for _, want := range test.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("View() missing empty-list explanation %q:\n%s", want, output)
+				}
+			}
+			for _, line := range strings.Split(output, "\n") {
+				if width := lipgloss.Width(line); width != model.width {
+					t.Fatalf("View() line width = %d, want %d:\n%q\n%s", width, model.width, line, output)
+				}
+			}
+		})
+	}
+}
+
 func TestStatusBarDropsWholeHintsWhenNarrow(t *testing.T) {
 	output := joinPartsWithin([]string{"h root", "a active", "Tab filter: all", "s search"}, 28)
 
@@ -2186,10 +2249,36 @@ func TestViewRendersScrollbarForOverflowingWorktreeList(t *testing.T) {
 	output := model.View()
 	plainOutput := ansi.Strip(output)
 
-	for _, want := range []string{"↑", "█", "↓", "0/18"} {
+	for _, want := range []string{"↑", "█", "↓", "Tab", "filter:", "all", "s", "search", "0/18"} {
 		if !strings.Contains(plainOutput, want) {
 			t.Fatalf("View() missing scrollbar element %q:\n%s", want, output)
 		}
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if width := lipgloss.Width(line); width != model.width {
+			t.Fatalf("View() line width = %d, want %d:\n%q\n%s", width, model.width, line, output)
+		}
+	}
+}
+
+func TestViewKeepsScrollbarFooterHintsWithinNarrowWidth(t *testing.T) {
+	rows := make([]gitdata.Worktree, 18)
+	rows[0] = gitdata.Worktree{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true}
+	for index := 1; index < len(rows); index++ {
+		rows[index] = gitdata.Worktree{Path: fmt.Sprintf("/repo/worktree-%d", index), Branch: fmt.Sprintf("worktree-%d", index)}
+	}
+	model := testModelWithRows(rows)
+	model.width = 56
+	model.height = 24
+
+	output := ansi.Strip(model.View())
+
+	if !strings.Contains(output, "Tab filter: all · s search") {
+		t.Fatalf("View() should keep the filter and search hints before dropping scroll position:\n%s", output)
+	}
+	_, rightFooter := model.listFooterHintsForScrollbar(listScrollbar{total: len(rows), visible: 7}, model.width-6)
+	if strings.Contains(rightFooter, "…") {
+		t.Fatalf("listFooterHintsForScrollbar() should drop whole hints, not truncate them: %q", rightFooter)
 	}
 	for _, line := range strings.Split(output, "\n") {
 		if width := lipgloss.Width(line); width != model.width {

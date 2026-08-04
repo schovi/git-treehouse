@@ -2548,7 +2548,10 @@ func (model Model) View() string {
 		}, now)
 		lines = strings.Split(table, "\n")
 		if len(snapshot.rows) == 0 {
-			lines = []string{"No rows"}
+			lines = strings.Split(model.noRowsMessage(), "\n")
+			for index := range lines {
+				lines[index] = truncatePlain(lines[index], panelContentWidth)
+			}
 		}
 		lines = renderLinesWithListScrollbar(lines, panelContentWidth, snapshot.scrollbar)
 	}
@@ -3373,6 +3376,9 @@ func (model Model) listFooterLeftHints() string {
 	if model.searching {
 		return "search " + model.search.Value() + "▌"
 	}
+	if model.search.Value() != "" {
+		return "search: " + model.search.Value()
+	}
 	return "n new worktree"
 }
 
@@ -3391,10 +3397,32 @@ func (model Model) listFooterRightHints() string {
 }
 
 func (model Model) listFooterHintsForScrollbar(scrollbar listScrollbar, width int) (string, string) {
+	leftFooter := model.listFooterLeftHints()
 	if scrollbar.shouldRender(width) {
-		return model.listFooterLeftHints(), scrollbar.positionText()
+		rightParts := []string{"Tab filter: " + model.filter.label(), "s search", scrollbar.positionText()}
+		if model.searching {
+			rightParts = []string{"Esc clear", "Tab filter: " + model.filter.label(), scrollbar.positionText()}
+		} else if model.filter != filterAll {
+			rightParts = []string{"Tab filter: " + model.filter.label(), "Esc clear filter", "s search", scrollbar.positionText()}
+		}
+		return leftFooter, joinPartsWithin(rightParts, max(0, width-runewidth.StringWidth(leftFooter)-7))
 	}
-	return model.listFooterLeftHints(), model.listFooterRightHints()
+	return leftFooter, model.listFooterRightHints()
+}
+
+func (model Model) noRowsMessage() string {
+	filter := model.filter != filterAll
+	search := model.search.Value() != ""
+	switch {
+	case filter && search:
+		return "No rows match filter: " + model.filter.label() + " and search: " + model.search.Value() + "\nEsc to clear filter · s then Esc to clear search"
+	case filter:
+		return "No rows match filter: " + model.filter.label() + " (Esc to clear)"
+	case search:
+		return "No rows match search: " + model.search.Value() + " (s then Esc to clear)"
+	default:
+		return "No rows"
+	}
 }
 
 func (model Model) worktreesFeedback() string {
