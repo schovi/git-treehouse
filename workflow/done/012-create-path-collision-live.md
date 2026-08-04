@@ -1,6 +1,6 @@
 # 012 — Validate target path collisions live in the create dialog
 
-priority: 120
+done: 2026-08-04
 
 tags: tui, ux
 
@@ -26,3 +26,7 @@ Boundary: `internal/tui/model.go` (createPathPreview and its render site, ~4049;
 - Typing a branch name whose derived worktree path already exists shows an inline collision error in the create dialog before Enter.
 - Enter remains blocked on collision with the same message (existing behavior).
 - create-and-checkout.md accurately describes what is live vs Enter-time after this change.
+
+## Notes
+
+- Branch-worktree shows a static path and PR checkout shows no path preview, so their existing Enter-time collision gates are unchanged.

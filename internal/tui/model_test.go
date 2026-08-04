@@ -2606,6 +2606,46 @@ func TestCreateDialogRenderShowsLivePathPreview(t *testing.T) {
 	}
 }
 
+func TestCreateDialogRendersLivePathCollision(t *testing.T) {
+	forceANSIProfile(t)
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.runner = &recordingRunner{}
+	repoRoot := filepath.Join(t.TempDir(), "git-treehouse")
+	model.state.Repo.Root = repoRoot
+	targetPath := filepath.Join(filepath.Dir(repoRoot), ".worktrees", "git-treehouse", "feature-login")
+	if err := os.MkdirAll(targetPath, 0755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", targetPath, err)
+	}
+
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature/login")})
+	output := model.renderCreateAtWidth(200)
+	want := "target path already exists: " + targetPath
+
+	if !strings.Contains(output, lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(want)) {
+		t.Fatalf("renderCreateAtWidth() should show styled live collision error %q:\n%s", want, output)
+	}
+
+	model, command := model.updateCreate(tea.KeyMsg{Type: tea.KeyEnter})
+	if command != nil {
+		t.Fatal("Enter should stay blocked on a path collision")
+	}
+	if got := model.createDialog.error; got != want {
+		t.Fatalf("Enter collision error = %q, want %q", got, want)
+	}
+}
+
+func TestCreateDialogDoesNotRenderCollisionForAvailablePath(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.state.Repo.Root = filepath.Join(t.TempDir(), "git-treehouse")
+
+	model, _ = model.updateCreate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature/login")})
+	output := model.renderCreateAtWidth(200)
+
+	if strings.Contains(output, "target path already exists:") {
+		t.Fatalf("renderCreateAtWidth() should not show collision for available path:\n%s", output)
+	}
+}
+
 func TestCreateDialogConfigShortcutCreatesAndOpensConfig(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)

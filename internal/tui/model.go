@@ -1933,9 +1933,9 @@ func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
 			return model, nil
 		}
 		branch := strings.TrimSpace(dialog.input.Value())
-		path := pathutil.ApplyTemplate(model.effectivePathTemplate(), model.state.Repo.Root, branch)
-		if _, err := os.Stat(path); err == nil {
-			dialog.error = "target path already exists: " + path
+		path := model.createPath()
+		if collisionError := createPathCollisionError(path); collisionError != "" {
+			dialog.error = collisionError
 			return model, nil
 		}
 		base := dialog.bases[dialog.baseIndex].Rev
@@ -4109,6 +4109,7 @@ func (model Model) renderCreateAtWidth(width int) string {
 	if lipgloss.Width(branchLine) > contentWidth {
 		branchLine = truncatePlain(strings.TrimSpace(branchLabel), contentWidth)
 	}
+	path := model.createPath()
 	lines := []string{
 		branchLine,
 		truncatePlain("Path: "+model.createPathPreview(), contentWidth),
@@ -4121,6 +4122,9 @@ func (model Model) renderCreateAtWidth(width int) string {
 		}
 		lines = append(lines, truncatePlain("  "+marker+" "+base.Label, contentWidth))
 	}
+	if collisionError := createPathCollisionError(path); collisionError != "" && dialog.error != collisionError {
+		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(truncatePlain(collisionError, contentWidth)))
+	}
 	if dialog.error != "" {
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(truncatePlain(dialog.error, contentWidth)))
 	}
@@ -4128,14 +4132,32 @@ func (model Model) renderCreateAtWidth(width int) string {
 }
 
 func (model Model) createPathPreview() string {
+	path := model.createPath()
+	if path == "" {
+		return "enter branch name"
+	}
+	return path
+}
+
+func (model Model) createPath() string {
 	if model.createDialog == nil {
 		return ""
 	}
 	branch := strings.TrimSpace(model.createDialog.input.Value())
 	if branch == "" {
-		return "enter branch name"
+		return ""
 	}
 	return pathutil.ApplyTemplate(model.effectivePathTemplate(), model.state.Repo.Root, branch)
+}
+
+func createPathCollisionError(path string) string {
+	if path == "" {
+		return ""
+	}
+	if _, err := os.Stat(path); err == nil {
+		return "target path already exists: " + path
+	}
+	return ""
 }
 
 func (model Model) renderCheckoutAtWidth(width int) string {

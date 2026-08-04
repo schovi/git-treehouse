@@ -16,6 +16,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 ```
 
 - **Branch name:** free text input. Validated on Enter against `git check-ref-format` rules and existing branch names; invalid/duplicate shows inline error and blocks Enter. Editing clears the previous error.
+- **Target path:** updates live from the branch name and effective path template. An existing target path shows an inline collision error before Enter.
 - **Base picker** (Tab or ↑/↓ cycles), defaults to the first option:
   1. Focused row's branch at its **local tip** (includes unpushed work)
   2. `origin/<focused-branch>` (last fetched remote state)
@@ -23,7 +24,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
   - Options that don't exist (no upstream, detached row) are omitted.
 - **On Enter:**
   1. Compute target path from the effective path template (see [Configuration](./configuration.md)): repo `.worktree` `path_template` if set, otherwise global `config.toml`, otherwise the default `<repo-parent>/.worktrees/<repo-name>/<sanitized-branch>` (slashes → dashes).
-  2. Path collision → inline error, dialog stays open.
+  2. Recheck path collision → inline error, dialog stays open. This remains authoritative because the filesystem can change after the live preview.
   3. Run `git worktree add -b <name> <path> <base>`.
   4. Copy any repo-scoped `copy_untracked` files (see [Configuration](./configuration.md)) from the root repository into the new worktree.
   5. Run the approved `post_create` hook, if configured (see [Configuration](./configuration.md)).
@@ -45,7 +46,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 ```
 
 - The target path uses the same path template as the create flow.
-- Path collision → inline error, dialog stays open.
+- On Enter, path collision → inline error, dialog stays open.
 - On Enter, run `git worktree add <path> <branch>`.
 - Then copy repo-scoped `copy_untracked` files and run the approved `post_create` hook, if configured (see [Configuration](./configuration.md)).
 - Success → cd into the new worktree immediately (write `--cd-file`, exit app).
