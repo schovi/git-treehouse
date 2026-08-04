@@ -348,7 +348,7 @@ func (model Model) selectedBranchInspectorAtWidth(branch gitdata.Branch, width i
 		model.inspectorFieldAtWidth("Status", "no worktree", inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Dirty", "-", inspectorValueStyle, width),
 		model.inspectorFieldAtWidth("Size", "-", inspectorValueStyle, width),
-		model.inspectorFieldAtWidth("Action", "create worktree; checkout root with c", inspectorCleanStyle, width),
+		model.inspectorFieldAtWidth("Action", "create worktree; checkout root from palette", inspectorCleanStyle, width),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -414,7 +414,7 @@ func renderSectionTitle(title string, width int) string {
 func detailFooterHints(row gitdata.Row, width int) string {
 	actionParts := []string{"↵ go", "o editor", "d delete", "y abs path", "p PR"}
 	if row.IsBranch() {
-		actionParts = []string{"↵ create+go", "c checkout root", "d delete", "y name", "p PR"}
+		actionParts = []string{"↵ create+go", "d delete", "y name", "p PR"}
 	}
 	availableWidth := max(0, width-5)
 	return joinPartsWithin(actionParts, availableWidth)

@@ -60,7 +60,6 @@ func TestHelpRendersGroupedKeysAndLegends(t *testing.T) {
 		"top/bottom",
 		"b branches",
 		"Enter go/create",
-		"c checkout root",
 		"PR/branch",
 		"⊡ worktree",
 		"⎇ branch",
@@ -76,7 +75,7 @@ func TestHelpRendersGroupedKeysAndLegends(t *testing.T) {
 			t.Fatalf("renderHelpAtWidth() missing %q:\n%s", want, output)
 		}
 	}
-	for _, unwanted := range []string{"r/f", "close/clear/quit"} {
+	for _, unwanted := range []string{"checkout root", "r/f", "close/clear/quit"} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("renderHelpAtWidth() should not contain %q:\n%s", unwanted, output)
 		}

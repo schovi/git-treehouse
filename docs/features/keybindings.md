@@ -7,7 +7,6 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 | `↑`/`↓`, `k`/`j` | Move selection |
 | `Enter` | cd to selected worktree and exit (writes `--cd-file`). On the active row: just quit. On a prunable row: disabled (hint shown in status bar). On a branch-only row: create a worktree for that existing branch, then cd there ([create-and-checkout.md](./create-and-checkout.md)). |
 | `n` | Create a new worktree from the focused worktree row ([create-and-checkout.md](./create-and-checkout.md)). On branch-only rows, use `Enter` instead. |
-| `c` | On a branch-only row, checkout that branch in the root worktree, then cd into root ([create-and-checkout.md](./create-and-checkout.md)). |
 | `Delete` / `Backspace` / `d` | Delete flow ([delete-and-restore.md](./delete-and-restore.md)) |
 | `o` | Open selected worktree in editor (config → `$EDITOR` fallback); TUI stays open |
 | `p` | Open selected row's PR in browser (`gh pr view --web`); no PR → open repo page for the branch |
@@ -20,7 +19,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 | `s` | Fuzzy branch search |
 | `b` | Toggle branch-only rows and persist the setting |
 | `Tab` | Open filter picker |
-| `Ctrl+P` | Open command palette ([command-palette.md](./command-palette.md)), including the palette-only `Checkout PR` flow |
+| `Ctrl+P` | Open command palette ([command-palette.md](./command-palette.md)), including the palette-only `Checkout root` and `Checkout PR` flows |
 | `Ctrl+O` | Open the config file in the editor (also a palette command) |
 | `Esc` | Contextual cancel or clear: close the topmost dialog, leave search mode, then clear an active filter before a committed search. Does not quit. |
 | `q` | Quit immediately from list view (no cd) |

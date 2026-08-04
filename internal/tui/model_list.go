@@ -161,12 +161,6 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 		return model, tea.Quit
 	case "n":
 		return model.openCreate()
-	case "c":
-		row, ok := model.selectedTableRow()
-		if !ok || !row.IsBranch() {
-			return model.setFlash("checkout root is only available for branch rows")
-		}
-		return model.openCheckoutRoot(row.Branch)
 	case "delete", "backspace", "d":
 		return model.openDelete()
 	case "o":

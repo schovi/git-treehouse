@@ -129,7 +129,6 @@ func helpKeySections() []helpSection {
 			title: "Worktree Detail",
 			entries: []helpEntry{
 				{lead: "Enter", description: "go/create", kind: helpEntryKey},
-				{lead: "c", description: "checkout root", kind: helpEntryKey},
 				{lead: "o", description: "editor", kind: helpEntryKey},
 				{lead: "d", description: "delete", kind: helpEntryKey},
 				{lead: "y", description: "copy", kind: helpEntryKey},

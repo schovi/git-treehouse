@@ -1,6 +1,6 @@
 # 026 — Move root checkout to the command palette
 
-priority: 70
+done: 2026-08-04
 tags: tui, ux
 
 ## What & why

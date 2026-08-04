@@ -35,6 +35,7 @@ const (
 	paletteDelete              paletteCommandID = "delete"
 	paletteOpenEditor          paletteCommandID = "open-editor"
 	paletteOpenPullRequest     paletteCommandID = "open-pull-request"
+	paletteCheckoutRoot        paletteCommandID = "checkout-root"
 	paletteCheckoutPullRequest paletteCommandID = "checkout-pull-request"
 	paletteCleanUpMerged       paletteCommandID = "clean-up-merged"
 	paletteCopyPath            paletteCommandID = "copy-path"
@@ -70,6 +71,7 @@ var paletteCommands = []paletteCommand{
 	{id: paletteDelete, title: "Delete selected row", shortcut: "d", keywords: "remove prune branch"},
 	{id: paletteOpenEditor, title: "Open in editor", shortcut: "o", keywords: "code cursor"},
 	{id: paletteOpenPullRequest, title: "Open PR or branch page", shortcut: "p", keywords: "github browser"},
+	{id: paletteCheckoutRoot, title: "Checkout root", keywords: "switch root branch"},
 	{id: paletteCheckoutPullRequest, title: "Checkout PR", keywords: "github pr worktree branch"},
 	{id: paletteCopyPath, title: "Copy path or branch name", shortcut: "y", keywords: "clipboard branch path"},
 	{id: paletteCopyPullRequestURL, title: "Copy PR URL", keywords: "clipboard pull request link github url"},
@@ -175,6 +177,12 @@ func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
 			err := github.OpenRowPullRequestOrBranch(context.Background(), model.state.Repo.Root, row, model.runner)
 			return actionMsg{text: "opened", err: err}
 		}
+	case paletteCheckoutRoot:
+		row, ok := model.selectedTableRow()
+		if !ok || !row.IsBranch() {
+			return model.setFlash("checkout root is only available for branch rows")
+		}
+		return model.openCheckoutRoot(row.Branch)
 	case paletteCheckoutPullRequest:
 		return model.openPullRequestCheckout()
 	case paletteCleanUpMerged:

@@ -34,7 +34,7 @@ func TestEnterOnBranchRowOpensBranchWorktreeDialog(t *testing.T) {
 	}
 }
 
-func TestCOnBranchRowChecksOutRootWhenRootIsClean(t *testing.T) {
+func TestPaletteCheckoutRootChecksOutBranchWhenRootIsClean(t *testing.T) {
 	runner := &recordingRunner{}
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main", IsMain: true},
@@ -43,10 +43,10 @@ func TestCOnBranchRowChecksOutRootWhenRootIsClean(t *testing.T) {
 	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
 	model.filter = filterBranches
 
-	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	model, cmd := model.executePaletteCommand(paletteCheckoutRoot)
 
 	if cmd == nil {
-		t.Fatal("c on branch returned nil command")
+		t.Fatal("palette checkout root on branch returned nil command")
 	}
 	if model.loading != "checking out…" {
 		t.Fatalf("loading = %q, want checking out…", model.loading)
@@ -66,26 +66,45 @@ func TestCOnBranchRowChecksOutRootWhenRootIsClean(t *testing.T) {
 	}
 }
 
-func TestCOnBranchRowShowsDirtyRootCheckoutDialog(t *testing.T) {
+func TestPaletteCheckoutRootShowsDirtyRootCheckoutDialog(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main", IsMain: true, Status: gitdata.StatusCounts{Modified: 1}},
 	})
 	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
 	model.filter = filterBranches
 
-	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	model, cmd := model.executePaletteCommand(paletteCheckoutRoot)
 
 	if cmd != nil {
-		t.Fatalf("dirty root checkout returned command, want nil")
+		t.Fatalf("dirty palette root checkout returned command, want nil")
 	}
 	if model.checkoutDialog == nil {
-		t.Fatal("c on branch with dirty root should open checkout dialog")
+		t.Fatal("palette checkout root on branch with dirty root should open checkout dialog")
 	}
 	output := ansi.Strip(model.renderCheckoutAtWidth(100))
 	for _, want := range []string{"Checkout root", "Branch", "feature/branch", "Root has uncommitted changes.", "~ modified 1", "s stash", "No checkout command will run."} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("dirty checkout dialog missing %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestCOnBranchRowDoesNotCheckoutRoot(t *testing.T) {
+	runner := &recordingRunner{}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+	})
+	model.runner = runner
+	model.state.Branches = []gitdata.Branch{{Name: "feature/branch"}}
+	model.filter = filterBranches
+
+	model, cmd := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+
+	if model.loading != "" || model.checkoutDialog != nil || len(runner.commands) != 0 {
+		t.Fatalf("c should not start a root checkout: loading=%q dialog=%v commands=%v", model.loading, model.checkoutDialog, runner.commands)
+	}
+	if cmd == nil {
+		t.Fatal("list updates should preserve enrichment commands")
 	}
 }
 
@@ -237,6 +256,34 @@ func TestCommandPaletteIncludesCheckoutPullRequest(t *testing.T) {
 	}
 	if commands[0].shortcut != "" {
 		t.Fatalf("Checkout PR shortcut = %q, want palette-only command", commands[0].shortcut)
+	}
+}
+
+func TestCommandPaletteIncludesCheckoutRoot(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main"}})
+	model, _ = model.openPalette()
+	model.paletteDialog.input.SetValue("checkout root")
+
+	commands := model.matchingPaletteCommands()
+
+	if len(commands) != 1 || commands[0].id != paletteCheckoutRoot || commands[0].title != "Checkout root" {
+		t.Fatalf("matching palette commands = %+v, want Checkout root", commands)
+	}
+	if commands[0].shortcut != "" {
+		t.Fatalf("Checkout root shortcut = %q, want palette-only command", commands[0].shortcut)
+	}
+}
+
+func TestPaletteCheckoutRootFlashesOutsideBranchRow(t *testing.T) {
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+
+	model, cmd := model.executePaletteCommand(paletteCheckoutRoot)
+
+	if model.flash != "checkout root is only available for branch rows" {
+		t.Fatalf("flash = %q, want unavailable-action feedback", model.flash)
+	}
+	if cmd == nil {
+		t.Fatal("unavailable palette action should return flash clear command")
 	}
 }
 

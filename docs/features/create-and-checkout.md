@@ -56,7 +56,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 
 ## Checkout branch in root flow
 
-`c` on a branch-only row checks out that branch in the root worktree. The root worktree is the only checkout target for this action.
+`Checkout root` is available from the command palette only. On a branch-only row, it checks out that branch in the root worktree. The root worktree is the only checkout target for this action.
 
 ```
 ┌ Checkout root ─────────────────────────────────────────┐

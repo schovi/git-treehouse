@@ -307,15 +307,28 @@ func TestViewRendersBranchDetailActionsInDetailsFooter(t *testing.T) {
 	if footerLine == "" {
 		t.Fatalf("View() should render branch detail actions in the Details footer:\n%s", output)
 	}
-	for _, want := range []string{"╰─", "↵", "create+go", "c", "checkout root", "d", "delete", "y", "name", "p", "PR", "╯"} {
+	for _, want := range []string{"╰─", "↵", "create+go", "d", "delete", "y", "name", "p", "PR", "╯"} {
 		if !strings.Contains(footerLine, want) {
 			t.Fatalf("Branch Details footer missing %q:\n%s", want, footerLine)
 		}
 	}
-	for _, unwanted := range []string{"n new worktree", "o editor", "abs path"} {
+	for _, unwanted := range []string{"checkout root", "n new worktree", "o editor", "abs path"} {
 		if strings.Contains(footerLine, unwanted) {
 			t.Fatalf("Branch Details footer should not contain %q:\n%s", unwanted, footerLine)
 		}
+	}
+}
+
+func TestBranchInspectorPointsCheckoutRootToPalette(t *testing.T) {
+	model := Model{}
+
+	output := ansi.Strip(model.selectedBranchInspectorAtWidth(gitdata.Branch{Name: "feature/branch"}, 80))
+
+	if !strings.Contains(output, "checkout root from palette") {
+		t.Fatalf("branch inspector should point to the palette:\n%s", output)
+	}
+	if strings.Contains(output, "with c") {
+		t.Fatalf("branch inspector should not advertise a direct key:\n%s", output)
 	}
 }
 
