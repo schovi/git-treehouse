@@ -57,7 +57,11 @@ func run(args []string) error {
 		case "init":
 			return runInit(remaining[1:])
 		case "list":
-			return runList(remaining[1:], globalOptions.repoPath)
+			listArgs := remaining[1:]
+			if globalOptions.noGitHub {
+				listArgs = append([]string{"--no-github"}, listArgs...)
+			}
+			return runList(listArgs, globalOptions.repoPath)
 		case "doctor":
 			return runDoctor(remaining[1:], globalOptions.repoPath)
 		case "allow":
@@ -66,29 +70,40 @@ func run(args []string) error {
 			return fmt.Errorf("unknown command %q", remaining[0])
 		}
 	}
-	return runTUI(globalOptions.cdFile, globalOptions.repoPath)
+	return runTUI(globalOptions.cdFile, globalOptions.repoPath, globalOptions.noGitHub, globalOptions.noGitHubSet)
 }
 
 type globalOptions struct {
-	cdFile   string
-	repoPath string
-	showHelp bool
+	cdFile      string
+	noGitHub    bool
+	noGitHubSet bool
+	repoPath    string
+	showHelp    bool
 }
 
 func parseGlobalOptions(args []string) (globalOptions, []string, error) {
 	flags := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	cdFile := flags.String("cd-file", "", "write selected worktree path to file")
+	noGitHub := flags.Bool("no-github", false, "skip GitHub PR lookup")
 	repoPath := flags.String("repo", defaultRepoPath, "load repository from path")
 	shortHelp := flags.Bool("h", false, "print help")
 	longHelp := flags.Bool("help", false, "print help")
 	if err := flags.Parse(args); err != nil {
 		return globalOptions{}, nil, err
 	}
+	noGitHubSet := false
+	flags.Visit(func(flag *flag.Flag) {
+		if flag.Name == "no-github" {
+			noGitHubSet = true
+		}
+	})
 	return globalOptions{
-		cdFile:   *cdFile,
-		repoPath: normalizeRepoPath(*repoPath),
-		showHelp: *shortHelp || *longHelp,
+		cdFile:      *cdFile,
+		noGitHub:    *noGitHub,
+		noGitHubSet: noGitHubSet,
+		repoPath:    normalizeRepoPath(*repoPath),
+		showHelp:    *shortHelp || *longHelp,
 	}, flags.Args(), nil
 }
 
@@ -134,7 +149,7 @@ func helpText() string {
 	return fmt.Sprintf(`git-treehouse manages Git worktrees from a terminal UI.
 
 Usage:
-  %[1]s [--repo <path>] [--cd-file <path>]
+  %[1]s [--repo <path>] [--cd-file <path>] [--no-github]
   %[1]s list [--repo <path>] [--no-github] [--json]
   %[1]s init [%[2]s]
   %[1]s doctor [--repo <path>]
@@ -156,6 +171,7 @@ Commands:
 Options:
   --repo <path>     Load a repository or worktree path. Default: current directory.
   --cd-file <path>  Write the selected worktree path for shell integration.
+  --no-github       Skip GitHub PR lookup.
   -h, --help        Print this help.
 
 Examples:
@@ -937,7 +953,7 @@ func applyListSizeResult(state *gitdata.State, result listSizeResult) {
 	}
 }
 
-func runTUI(cdFile, repoPath string) error {
+func runTUI(cdFile, repoPath string, noGitHub, noGitHubSet bool) error {
 	config, err := config.LoadDefault()
 	if err != nil {
 		return err
@@ -953,7 +969,7 @@ func runTUI(cdFile, repoPath string) error {
 	if err != nil {
 		return err
 	}
-	program := tea.NewProgram(tui.New(state, config, runner), tea.WithOutput(os.Stderr), tea.WithAltScreen())
+	program := tea.NewProgram(tui.New(state, config, runner, noGitHub, noGitHubSet), tea.WithOutput(os.Stderr), tea.WithAltScreen())
 	finalModel, err := program.Run()
 	if err != nil {
 		return err

@@ -100,15 +100,34 @@ func TestShouldShowShellWelcome(t *testing.T) {
 }
 
 func TestParseGlobalOptionsUsesExplicitRepo(t *testing.T) {
-	options, remaining, err := parseGlobalOptions([]string{"--repo", "/repo/feature", "list", "--json"})
+	options, remaining, err := parseGlobalOptions([]string{"--repo", "/repo/feature", "--no-github", "list", "--json"})
 	if err != nil {
 		t.Fatalf("parseGlobalOptions() error = %v", err)
 	}
 	if options.repoPath != "/repo/feature" {
 		t.Fatalf("repoPath = %q, want /repo/feature", options.repoPath)
 	}
+	if !options.noGitHub {
+		t.Fatal("noGitHub = false, want true")
+	}
+	if !options.noGitHubSet {
+		t.Fatal("noGitHubSet = false, want true")
+	}
 	if strings.Join(remaining, " ") != "list --json" {
 		t.Fatalf("remaining args = %v, want list --json", remaining)
+	}
+}
+
+func TestParseGlobalOptionsTracksExplicitFalseNoGitHub(t *testing.T) {
+	options, _, err := parseGlobalOptions([]string{"--no-github=false"})
+	if err != nil {
+		t.Fatalf("parseGlobalOptions() error = %v", err)
+	}
+	if options.noGitHub {
+		t.Fatal("noGitHub = true, want false")
+	}
+	if !options.noGitHubSet {
+		t.Fatal("noGitHubSet = false, want true")
 	}
 }
 
@@ -143,7 +162,7 @@ func TestHelpTextDescribesAppCommandsAndOptions(t *testing.T) {
 	for _, want := range []string{
 		"git-treehouse manages Git worktrees",
 		"Usage:",
-		"git-treehouse [--repo <path>] [--cd-file <path>]",
+		"git-treehouse [--repo <path>] [--cd-file <path>] [--no-github]",
 		"git-treehouse list [--repo <path>] [--no-github] [--json]",
 		"git-treehouse init [",
 		"git-treehouse doctor [--repo <path>]",
@@ -156,6 +175,7 @@ func TestHelpTextDescribesAppCommandsAndOptions(t *testing.T) {
 		"init     Print shell integration",
 		"doctor   Check Git",
 		"allow    Approve executable hooks",
+		"--no-github       Skip GitHub PR lookup.",
 		"-h, --help",
 	} {
 		if !strings.Contains(output, want) {

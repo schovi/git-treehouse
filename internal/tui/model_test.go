@@ -867,7 +867,7 @@ func TestNewInitializesBranchToggleFromConfig(t *testing.T) {
 		Branches: []gitdata.Branch{
 			{Name: "feature/branch"},
 		},
-	}, appconfig.Config{ShowBranches: true}, nil)
+	}, appconfig.Config{ShowBranches: true, GitHub: true}, nil, false, false)
 
 	if !model.showBranches {
 		t.Fatal("New() should initialize showBranches from config")
@@ -2190,7 +2190,7 @@ func TestViewHidesRowsUntilLocalMetadataLoaded(t *testing.T) {
 			{Path: "/repo/main", Branch: "main"},
 			{Path: "/repo/feature", Branch: "feature"},
 		},
-	}, appconfig.Config{}, testRunner{})
+	}, appconfig.Default(), testRunner{}, false, false)
 	model.width = 160
 	model.height = 20
 
@@ -2220,7 +2220,7 @@ func TestNewReservesPullRequestColumnForRemoteRepository(t *testing.T) {
 			LocalMetadataLoaded: true,
 			GitSizeLoaded:       true,
 		}},
-	}, appconfig.Config{}, testRunner{})
+	}, appconfig.Default(), testRunner{}, false, false)
 	model.width = 160
 
 	output := model.View()
@@ -2233,6 +2233,74 @@ func TestNewReservesPullRequestColumnForRemoteRepository(t *testing.T) {
 	}
 	if !strings.Contains(output, listview.LoadingPlaceholder) {
 		t.Fatalf("View() should show pending PR marker before PR data loads:\n%s", output)
+	}
+}
+
+func TestNewDisablesGitHubEnrichmentFromConfigOrFlag(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		config      appconfig.Config
+		noGitHub    bool
+		noGitHubSet bool
+	}{
+		{name: "config", config: appconfig.Config{GitHub: false}},
+		{name: "flag", config: appconfig.Default(), noGitHub: true, noGitHubSet: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &recordingRunner{}
+			model := New(gitdata.State{
+				Repo: gitdata.Repository{Root: "/repo/main", ActiveWorktree: "/repo/main", RemoteConfigured: true},
+				Rows: []gitdata.Worktree{{
+					Path:                "/repo/main",
+					Branch:              "main",
+					LocalMetadataLoaded: true,
+					GitSizeLoaded:       true,
+					PR:                  &gitdata.PullRequest{Number: 42, State: "○"},
+				}},
+			}, test.config, runner, test.noGitHub, test.noGitHubSet)
+			model.width = 160
+			model.prReview = map[int]github.PullRequestReview{42: {Loaded: true, Number: 42}}
+
+			if model.showPR || model.prLoading {
+				t.Fatalf("GitHub opt-out should hide and stop PR loading: showPR=%t prLoading=%t", model.showPR, model.prLoading)
+			}
+			if command := model.pullRequestFetchCommand(context.Background(), model.enrichmentID); command != nil {
+				t.Fatal("GitHub opt-out returned a PR fetch command")
+			}
+			updated, _ := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+			if updated.flash != "GitHub is disabled" {
+				t.Fatalf("GitHub opt-out p action flash = %q, want disabled message", updated.flash)
+			}
+			updated, _ = model.openPullRequestCheckout()
+			if updated.pullRequestDialog != nil {
+				t.Fatal("GitHub opt-out opened the PR checkout dialog")
+			}
+			if review := model.reviewForRow(model.tableRows()[0]); review != nil {
+				t.Fatalf("GitHub opt-out rendered PR review: %+v", review)
+			}
+			if output := ansi.Strip(model.View()); strings.Contains(output, "#42") {
+				t.Fatalf("GitHub opt-out rendered PR data:\n%s", output)
+			}
+			for _, command := range runner.commands {
+				if strings.Contains(command, "|gh ") {
+					t.Fatalf("GitHub opt-out ran gh command: %s", command)
+				}
+			}
+		})
+	}
+}
+
+func TestNewAllowsExplicitFalseNoGitHubToOverrideConfig(t *testing.T) {
+	model := New(gitdata.State{
+		Repo: gitdata.Repository{Root: "/repo/main", ActiveWorktree: "/repo/main", RemoteConfigured: true},
+		Rows: []gitdata.Worktree{{Path: "/repo/main", Branch: "main", LocalMetadataLoaded: true, GitSizeLoaded: true}},
+	}, appconfig.Config{GitHub: false}, &recordingRunner{}, false, true)
+
+	if !model.showPR || !model.prLoading {
+		t.Fatalf("explicit --no-github=false should enable PRs: showPR=%t prLoading=%t", model.showPR, model.prLoading)
+	}
+	if command := model.pullRequestFetchCommand(context.Background(), model.enrichmentID); command == nil {
+		t.Fatal("explicit --no-github=false did not create a PR fetch command")
 	}
 }
 
@@ -5030,7 +5098,7 @@ func testModelWithRows(rows []gitdata.Worktree) Model {
 			ActiveWorktree: "/repo/main",
 		},
 		Rows: rows,
-	}, appconfig.Config{}, nil)
+	}, appconfig.Default(), nil, false, false)
 }
 
 func stableLoadResults(worktreeList string) map[string]recordingResult {

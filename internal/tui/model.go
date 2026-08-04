@@ -30,6 +30,8 @@ type Model struct {
 	config                 config.Config
 	repoConfig             config.RepoConfig
 	hooksApproved          bool
+	noGitHub               bool
+	noGitHubSet            bool
 	runner                 gitdata.Runner
 	width                  int
 	height                 int
@@ -575,30 +577,47 @@ func prMergedOrClosed(row gitdata.Row) bool {
 	return strings.EqualFold(pr.State, "⎇") || strings.EqualFold(pr.State, "✕")
 }
 
-func New(state gitdata.State, config config.Config, runner gitdata.Runner) Model {
+func New(state gitdata.State, config config.Config, runner gitdata.Runner, noGitHub, noGitHubSet bool) Model {
 	search := textinput.New()
 	search.Prompt = "s "
 	search.CharLimit = 200
 	search.Width = 40
 	enrichmentContext, enrichmentCancel := context.WithCancel(context.Background())
 	repoConfig, hooksApproved, _ := loadRepoRuntimeConfig(context.Background(), state.Repo.Root, runner)
+	githubEnabled := config.GitHub
+	if noGitHubSet {
+		githubEnabled = !noGitHub
+	}
 	return Model{
 		state:             state,
 		config:            config,
 		repoConfig:        repoConfig,
 		hooksApproved:     hooksApproved,
+		noGitHub:          noGitHub,
+		noGitHubSet:       noGitHubSet,
 		runner:            runner,
 		width:             100,
 		height:            30,
 		search:            search,
 		showBranches:      config.ShowBranches,
-		showPR:            state.Repo.RemoteConfigured,
-		prLoading:         state.Repo.RemoteConfigured,
+		showPR:            state.Repo.RemoteConfigured && githubEnabled,
+		prLoading:         state.Repo.RemoteConfigured && githubEnabled,
 		lastRefreshAt:     time.Now(),
 		enrichmentID:      1,
 		enrichmentContext: enrichmentContext,
 		enrichmentCancel:  enrichmentCancel,
 	}
+}
+
+func (model Model) pullRequestsEnabled() bool {
+	return model.githubEnabled() && model.state.Repo.RemoteConfigured
+}
+
+func (model Model) githubEnabled() bool {
+	if model.noGitHubSet {
+		return !model.noGitHub
+	}
+	return model.config.GitHub
 }
 
 func (model Model) Init() tea.Cmd {
@@ -661,6 +680,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model, nil
 		}
 		model.prLoading = false
+		if !model.githubEnabled() {
+			return model, nil
+		}
 		model.prLastCheckedAt = message.checkedAt
 		if message.enabled {
 			model.showPR = true
@@ -778,7 +800,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.state = message.state
 		model.repoConfig = message.repoConfig
 		model.hooksApproved = message.hooksApproved || !message.repoConfig.HasHooks()
-		model.showPR = model.state.Repo.RemoteConfigured
+		model.showPR = model.pullRequestsEnabled()
 		model.prLoading = false
 		model.applyCachedPullRequests()
 		model.lastRefreshAt = message.completedAt
@@ -855,7 +877,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.state = message.state
 			model.repoConfig = message.repoConfig
 			model.hooksApproved = message.hooksApproved || !message.repoConfig.HasHooks()
-			model.showPR = model.state.Repo.RemoteConfigured
+			model.showPR = model.pullRequestsEnabled()
 			model.prLoading = false
 			model.applyCachedPullRequests()
 			if !message.completedAt.IsZero() {
@@ -898,7 +920,7 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			model.state = message.state
 			model.repoConfig = message.repoConfig
 			model.hooksApproved = message.hooksApproved || !message.repoConfig.HasHooks()
-			model.showPR = model.state.Repo.RemoteConfigured
+			model.showPR = model.pullRequestsEnabled()
 			model.prLoading = false
 			model.applyCachedPullRequests()
 			if !message.completedAt.IsZero() {
@@ -951,6 +973,9 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		anchor := model.selectionAnchor()
 		model.config = message.config
 		model.showBranches = message.config.ShowBranches
+		model.showPR = model.pullRequestsEnabled()
+		model.prLoading = false
+		model.applyCachedPullRequests()
 		model.restoreSelection(anchor)
 		model, flashCmd := model.setFlash("config reloaded")
 		if model.createDialog != nil && message.path != "" {
@@ -1154,6 +1179,9 @@ func (model Model) updateList(message tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		return model, openEditorCmd(model.config.Editor, row.Path)
 	case "p":
+		if !model.githubEnabled() {
+			return model.setFlash("GitHub is disabled")
+		}
 		row, ok := model.selectedTableRow()
 		if !ok {
 			return model, nil
@@ -1341,6 +1369,9 @@ func (model Model) executePaletteCommand(id paletteCommandID) (Model, tea.Cmd) {
 		}
 		return model, openEditorCmd(model.config.Editor, row.Path)
 	case paletteOpenPullRequest:
+		if !model.githubEnabled() {
+			return model.setFlash("GitHub is disabled")
+		}
 		row, ok := model.selectedTableRow()
 		if !ok {
 			return model, nil
@@ -1508,6 +1539,9 @@ func selectedFilterOptionIndex(options []filterOption, current worktreeFilter) i
 }
 
 func (model Model) openPullRequestCheckout() (Model, tea.Cmd) {
+	if !model.githubEnabled() {
+		return model.setFlash("GitHub is disabled")
+	}
 	input := textinput.New()
 	input.Prompt = "> "
 	input.CharLimit = 200
@@ -1638,6 +1672,9 @@ func (model Model) startPullRequestOpen(query string) (Model, tea.Cmd) {
 	if model.pullRequestDialog == nil {
 		return model, nil
 	}
+	if !model.githubEnabled() {
+		return model.setFlash("GitHub is disabled")
+	}
 	model.pullRequestDialog.error = ""
 	model.loading = "opening…"
 	id := model.pullRequestDialog.id
@@ -1654,6 +1691,9 @@ func (model Model) startPullRequestOpen(query string) (Model, tea.Cmd) {
 func (model Model) startPullRequestLookup(query string) (Model, tea.Cmd) {
 	if model.pullRequestDialog == nil {
 		return model, nil
+	}
+	if !model.githubEnabled() {
+		return model.setFlash("GitHub is disabled")
 	}
 	model.pullRequestDialog.error = ""
 	model.pullRequestDialog.directLookup = true
@@ -2952,8 +2992,6 @@ func branchStyle(row gitdata.Worktree) lipgloss.Style {
 	return inspectorValueStyle
 }
 
-
-
 func branchText(row gitdata.Worktree) string {
 	return row.DisplayBranch()
 }
@@ -3857,13 +3895,17 @@ func (model *Model) setFilter(filter worktreeFilter) {
 }
 
 func (model *Model) applyCachedPullRequests() {
+	if !model.githubEnabled() {
+		model.showPR = false
+		return
+	}
 	if len(model.prCache) == 0 {
 		return
 	}
 	if model.prCacheRepoRoot != model.state.Repo.Root {
 		model.prCache = nil
 		model.prCacheRepoRoot = ""
-		model.showPR = model.state.Repo.RemoteConfigured
+		model.showPR = model.pullRequestsEnabled()
 		return
 	}
 	model.showPR = true
@@ -5182,6 +5224,9 @@ func (model Model) availableTableHeight(now time.Time) int {
 // reviewForRow returns the loaded PR review for the row's open pull request, or
 // nil when none has been fetched.
 func (model Model) reviewForRow(row gitdata.Row) *github.PullRequestReview {
+	if !model.showPR {
+		return nil
+	}
 	pullRequest := row.PullRequest()
 	if pullRequest == nil || pullRequest.Number == 0 || model.prReview == nil {
 		return nil
@@ -5388,7 +5433,7 @@ func (model Model) needsLocalMetadata() bool {
 }
 
 func (model Model) shouldLoadPullRequests(force bool, now time.Time) bool {
-	if !model.state.Repo.RemoteConfigured {
+	if !model.pullRequestsEnabled() {
 		return false
 	}
 	if force || model.prLastCheckedAt.IsZero() {
@@ -5407,6 +5452,9 @@ func (model Model) pullRequestsPending() bool {
 // large repos. Above the threshold the per-branch fan-out would issue too many
 // requests, so it falls back to the single list call with lazy CI.
 func (model Model) pullRequestFetchCommand(ctx context.Context, id int) tea.Cmd {
+	if !model.pullRequestsEnabled() {
+		return nil
+	}
 	repoRoot := model.state.Repo.Root
 	runner := model.runner
 	branches := model.localBranchNames()

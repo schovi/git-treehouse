@@ -18,7 +18,7 @@ Preserve this stdout/stderr split in any new output paths.
 
 ```
 cmd/git-treehouse/main.go     CLI dispatch: `init` → shellinit, `list`/`doctor`/`allow` rendered here,
-                              default → TUI. Parses global flags (--repo, --cd-file) and shell detection.
+                              default → TUI. Parses global flags (--repo, --cd-file, --no-github) and shell detection.
 internal/tui/model.go         Bubble Tea model; composes everything below. Owns all modes,
                               keybindings, dialogs, and the command palette.
 internal/gitdata              Loads + parses git state (worktree list --porcelain, status, sync),

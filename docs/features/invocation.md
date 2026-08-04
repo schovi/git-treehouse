@@ -11,7 +11,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 
 | Command | Behavior |
 |---|---|
-| `git-treehouse [--repo <path>]` | Launch the native TUI. It cannot change the parent shell directory by itself. |
+| `git-treehouse [--repo <path>] [--no-github]` | Launch the native TUI. It cannot change the parent shell directory by itself. `--no-github` skips PR lookup and hides GitHub PR data; `--no-github=false` forces GitHub back on. |
 | `git-treehouse list [--repo <path>]` | Print the table to stdout, no TUI, no ANSI when piped. For scripting. `--json` prints structured repository/worktree data. |
 | `git-treehouse init <shell>` | Print shell integration functions that define `gth` (see [shell-integration.md](./shell-integration.md)) |
 | `git-treehouse doctor [--repo <path>]` | Print environment diagnostics for required and optional integrations. |

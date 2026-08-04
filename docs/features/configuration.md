@@ -19,9 +19,12 @@ path_template = "{repo_parent}/.worktrees/{repo_name}/{branch}"
 
 main_branch = ""           # default: auto-detect (origin/HEAD, fallback main/master)
 show_branches = false      # default: hide branch-only rows until `b` is pressed
+github = true              # set false to disable TUI GitHub PR lookup
 
 skip_shell_integration_welcome = false  # set true by onboarding once the gth wrapper is installed; suppresses the first-run welcome
 ```
+
+`--no-github` overrides `github` for one invocation. Pass `--no-github=false` to temporarily enable GitHub when the config disables it.
 
 Tokens: `{repo}` is the absolute root repository path, `{repo_name}` its basename, `{repo_parent}` its parent directory, `{branch}` the sanitized branch name (slashes, backslashes, and whitespace runs collapse to single dashes). The legacy default `{repo_parent}/{branch}` is silently upgraded to the current default on load.
 

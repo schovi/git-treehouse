@@ -1,6 +1,6 @@
 # 014 — GitHub opt-out for the TUI (--no-github)
 
-priority: 140
+done: 2026-08-04
 
 tags: github, tui
 

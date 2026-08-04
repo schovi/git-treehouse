@@ -23,6 +23,9 @@ func TestDefault(t *testing.T) {
 	if got.ShowBranches {
 		t.Fatal("Default().ShowBranches = true, want false")
 	}
+	if !got.GitHub {
+		t.Fatal("Default().GitHub = false, want true")
+	}
 }
 
 func TestDefaultEditorFallback(t *testing.T) {
@@ -40,6 +43,7 @@ editor = "cursor"
 path_template = "{repo}/../{branch}"
 main_branch = "trunk"
 show_branches = true
+github = false
 `), 0600)
 	if err != nil {
 		t.Fatalf("write config: %v", err)
@@ -61,6 +65,9 @@ show_branches = true
 	}
 	if !got.ShowBranches {
 		t.Fatal("Load().ShowBranches = false, want true")
+	}
+	if got.GitHub {
+		t.Fatal("Load().GitHub = true, want false")
 	}
 }
 
@@ -89,6 +96,9 @@ main_branch = "main"
 	}
 	if got.MainBranch != "main" {
 		t.Fatalf("Load().MainBranch = %q, want %q", got.MainBranch, "main")
+	}
+	if !got.GitHub {
+		t.Fatal("Load().GitHub = false, want default true")
 	}
 }
 
@@ -159,6 +169,7 @@ func TestSaveDefaultWritesConfigFile(t *testing.T) {
 		PathTemplate:                "{repo_parent}/.worktrees/{repo_name}/{branch}",
 		MainBranch:                  "main",
 		ShowBranches:                true,
+		GitHub:                      true,
 		SkipShellIntegrationWelcome: true,
 	})
 	if err != nil {
@@ -177,6 +188,9 @@ func TestSaveDefaultWritesConfigFile(t *testing.T) {
 	}
 	if !got.ShowBranches {
 		t.Fatal("LoadDefault().ShowBranches = false, want true")
+	}
+	if !got.GitHub {
+		t.Fatal("LoadDefault().GitHub = false, want true")
 	}
 }
 

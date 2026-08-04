@@ -27,6 +27,8 @@ Lifecycle and Git state words do not appear in this column. `locked` and `prunab
 
 ## GitHub data (PR column)
 
+The TUI loads GitHub data only when the repository has a configured remote and GitHub is enabled. `git-treehouse --no-github` disables it for that run; global `github = false` disables it persistently. Both hide the PR column and PR review frame and prevent GitHub subprocesses.
+
 Loaded via the `gh` CLI, only if `gh` exists and is authed. The fetch never asks GitHub for `statusCheckRollup` across a whole PR list: that field makes the GraphQL API resolve CI for every PR and times out (HTTP 504) on large repositories, which would silently drop the whole PR column. CI is always scoped to a single PR, where the rollup is cheap.
 
 The strategy is chosen by local branch count (threshold ~40):
