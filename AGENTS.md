@@ -54,3 +54,11 @@ See `docs/harness.md` for the failure modes behind these rules.
 ## Architecture
 
 See `docs/architecture.md` for the full picture: the cd-on-exit mechanism, the package map and data flow, the `gitdata.Runner` subprocess seam, pure parsing, the async typed-message pattern (`refreshID`/`selectionAnchor`), layered enrichment, the shared `listview` renderer, and the testing approach. Keep that file in sync when code structure changes.
+
+## Work tracking
+
+Managed by the `workflow` plugin. Tasks are files in `workflow/<status>/`
+(draft, ready, in-progress, blocked, done) — the folder IS the status;
+moving a task is `git mv`. Board view: `./workflow/status`. Repo contract:
+`workflow/AGENTS.md`. Commands: `/workflow:groom`, `/workflow:work`,
+`/workflow:batch-work`, `/workflow:status`, `/workflow:framework-doctor`.
