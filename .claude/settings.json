@@ -1,5 +1,6 @@
 {
   "enabledPlugins": {
-    "homebrew@schovi-workflows": true
+    "homebrew@schovi-workflows": true,
+    "workflow@schovi-workflows": true
   }
 }
