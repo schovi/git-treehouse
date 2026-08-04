@@ -2437,9 +2437,13 @@ type viewSnapshot struct {
 	hasSelected bool
 	// blocks are the finished, bordered boxes that stack below the Worktrees panel
 	// (the Details box, possibly paired with Git context, then the secondary frames).
-	blocks    []string
-	start     int
-	scrollbar listScrollbar
+	blocks []string
+	// reservedBlockLines is the height the detail region is sized for: the tallest
+	// blocks any row would render. Shorter rows pad up to it so moving the selection
+	// never resizes the list above.
+	reservedBlockLines int
+	start              int
+	scrollbar          listScrollbar
 }
 
 type listScrollbar struct {
@@ -2457,12 +2461,14 @@ func (model Model) View() string {
 	panelContentWidth := max(1, panelWidth-2)
 	rowCount := model.totalRowCount()
 	var blocks []string
+	reservedBlockLines := 0
 	lines := []string{"Loading worktrees…"}
 	worktreeScrollbar := listScrollbar{}
 	if model.localMetadataReady() {
 		snapshot := model.viewSnapshot(now, panelContentWidth)
 		rowCount = len(snapshot.rows)
 		blocks = snapshot.blocks
+		reservedBlockLines = snapshot.reservedBlockLines
 		worktreeScrollbar = snapshot.scrollbar
 		tableWidth := tableContentWidth(panelContentWidth, snapshot.scrollbar)
 		table := listview.RenderMixedRows(snapshot.visibleRows, listview.Options{
@@ -2491,6 +2497,11 @@ func (model Model) View() string {
 		if block != "" {
 			parts = append(parts, model.wrapOuter(block, outerWidth))
 		}
+	}
+	// The list is sized for the tallest row's detail region, so pad a shorter one up
+	// to that height; otherwise the bottom line would jump as the selection moves.
+	for range max(0, reservedBlockLines-blockLinesTotal(blocks)) {
+		parts = append(parts, model.wrapOuter("", outerWidth))
 	}
 	if model.flash != "" {
 		parts = append(parts, model.wrapOuter(model.flashLineAtWidth(panelWidth), outerWidth))
@@ -2554,7 +2565,8 @@ func (model Model) viewSnapshot(now time.Time, panelContentWidth int) viewSnapsh
 		snapshot.hasSelected = true
 		snapshot.blocks = model.detailBlocks(snapshot.selectedRow, now, panelContentWidth+2)
 	}
-	availableHeight := model.availableTableHeightForBlocks(snapshot.blocks)
+	snapshot.reservedBlockLines = model.reservedDetailBlockLines(rows, now, panelContentWidth+2)
+	availableHeight := model.availableTableHeightForBlockLines(snapshot.reservedBlockLines)
 	if model.selected >= availableHeight {
 		snapshot.start = model.selected - availableHeight + 1
 	}
@@ -5028,11 +5040,12 @@ func (model Model) availableTableHeight(now time.Time) int {
 	contentWidth := max(1, outerWidth-4)
 	panelWidth := max(4, contentWidth)
 	panelContentWidth := max(1, panelWidth-2)
-	var blocks []string
-	if row, ok := model.selectedTableRow(); ok {
-		blocks = model.detailBlocks(row, now, panelContentWidth+2)
+	tableRows := model.tableRows()
+	rows := make([]gitdata.Row, 0, len(tableRows))
+	for _, index := range model.visibleIndexes() {
+		rows = append(rows, tableRows[index])
 	}
-	return model.availableTableHeightForBlocks(blocks)
+	return model.availableTableHeightForBlockLines(model.reservedDetailBlockLines(rows, now, panelContentWidth+2))
 }
 
 // reviewForRow returns the loaded PR review for the row's open pull request, or
@@ -5069,14 +5082,30 @@ func (model Model) reviewPendingNumberForRow(row gitdata.Row) int {
 	return pullRequest.Number
 }
 
-func (model Model) availableTableHeightForBlocks(blocks []string) int {
-	blockLines := 0
+// blockLinesTotal is the rendered height of a detail region; each block already
+// includes its own top/bottom borders.
+func blockLinesTotal(blocks []string) int {
+	total := 0
 	for _, block := range blocks {
 		if block != "" {
-			// Each block already includes its own top/bottom borders.
-			blockLines += lineCount(block)
+			total += lineCount(block)
 		}
 	}
+	return total
+}
+
+// reservedDetailBlockLines is the tallest detail region any row in the list would
+// render. Sizing the list against this instead of the selected row's own blocks
+// keeps the visible rows fixed while navigating; shorter rows pad the gap.
+func (model Model) reservedDetailBlockLines(rows []gitdata.Row, now time.Time, panelWidth int) int {
+	reserved := 0
+	for _, row := range rows {
+		reserved = max(reserved, blockLinesTotal(model.detailBlocks(row, now, panelWidth)))
+	}
+	return reserved
+}
+
+func (model Model) availableTableHeightForBlockLines(blockLines int) int {
 	fixedLines := 1 + 2 + 1 + blockLines + 1
 	if model.flash != "" {
 		fixedLines++

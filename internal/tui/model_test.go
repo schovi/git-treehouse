@@ -4623,3 +4623,48 @@ func visibleBranches(model Model) []string {
 	}
 	return branches
 }
+
+// The detail region below the list is taller for some rows (a dirty worktree adds a
+// Changes frame) than others, so sizing the list against the selected row's own
+// detail made rows appear and disappear while navigating. The list must instead be
+// sized for the tallest row and stay fixed.
+func TestViewKeepsListHeightStableAcrossSelection(t *testing.T) {
+	rows := []gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true, IsActive: true},
+		{
+			Path:   "/repo/dirty",
+			Branch: "feature/dirty",
+			Status: gitdata.StatusCounts{Modified: 2, Untracked: 1},
+			ChangedFiles: []gitdata.ChangedFile{
+				{Path: "a.go", WorkCode: 'M', Added: 5, Deleted: 1},
+				{Path: "b.go", WorkCode: 'M', Added: 2},
+				{Path: "c.go", WorkCode: '?', Added: -1, Deleted: -1},
+			},
+		},
+	}
+	for index := range 6 {
+		rows = append(rows, gitdata.Worktree{Path: fmt.Sprintf("/repo/clean%d", index), Branch: fmt.Sprintf("feature/clean%d", index)})
+	}
+	model := testModelWithRows(rows)
+	model.width = 100
+	// A height that cannot fit every row leaves the detail region competing with the
+	// list for lines, which is when the jitter showed up.
+	model.height = 24
+	now := time.Now()
+
+	want := -1
+	for selected := range model.totalRowCount() {
+		model.selected = selected
+		snapshot := model.viewSnapshot(now, max(1, model.width-6))
+		if want < 0 {
+			want = len(snapshot.visibleRows)
+			if want >= model.totalRowCount() {
+				t.Fatalf("test setup shows all %d rows at once, nothing to scroll", want)
+			}
+			continue
+		}
+		if got := len(snapshot.visibleRows); got != want {
+			t.Fatalf("row %d shows %d list rows, want %d", selected, got, want)
+		}
+	}
+}
