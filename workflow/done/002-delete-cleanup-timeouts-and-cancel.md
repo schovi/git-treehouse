@@ -1,6 +1,6 @@
 # 002 — Delete/cleanup robustness: timeouts, in-flight cancel, partial-failure state
 
-priority: 20
+done: 2026-08-04
 
 tags: tui, safety
 

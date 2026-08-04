@@ -57,6 +57,7 @@ type Model struct {
 	branchWorktreeDialog   *branchWorktreeDialog
 	deleteDialog           *deleteDialog
 	cleanupMergedDialog    *cleanupMergedDialog
+	actionCancel           context.CancelFunc
 	deleteInFlight         bool
 	deleteID               int
 	deleteSpinnerFrame     int
@@ -114,17 +115,18 @@ var (
 )
 
 const (
-	autoRefreshInterval    = 30 * time.Second
-	clockTickInterval      = time.Second
-	refreshTickInterval    = 80 * time.Millisecond
-	successFeedbackTimeout = 3 * time.Second
-	restoreOfferTimeout    = 10 * time.Second
-	prRefreshTTL           = 5 * time.Minute
-	prFetchTimeout         = 15 * time.Second
-	prPerBranchThreshold   = 40
-	scrollbarGutterWidth   = 2
-	appTitle               = "Git treehouse"
-	successGlyph           = "✓"
+	autoRefreshInterval      = 30 * time.Second
+	clockTickInterval        = time.Second
+	destructiveActionTimeout = 10 * time.Minute
+	refreshTickInterval      = 80 * time.Millisecond
+	successFeedbackTimeout   = 3 * time.Second
+	restoreOfferTimeout      = 10 * time.Second
+	prRefreshTTL             = 5 * time.Minute
+	prFetchTimeout           = 15 * time.Second
+	prPerBranchThreshold     = 40
+	scrollbarGutterWidth     = 2
+	appTitle                 = "Git treehouse"
+	successGlyph             = "✓"
 )
 
 var refreshSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -335,6 +337,7 @@ type deleteMsg struct {
 	state         gitdata.State
 	repoConfig    config.RepoConfig
 	hooksApproved bool
+	reloaded      bool
 	err           error
 	text          string
 	restore       *pendingBranchRestore
@@ -346,6 +349,7 @@ type cleanupMergedMsg struct {
 	state         gitdata.State
 	repoConfig    config.RepoConfig
 	hooksApproved bool
+	reloaded      bool
 	result        cleanupMergedResult
 	err           error
 	id            int
@@ -832,7 +836,23 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		anchor := model.selectionAnchor()
 		model.deleteInFlight = false
+		if model.actionCancel != nil {
+			model.actionCancel()
+			model.actionCancel = nil
+		}
 		model.deleteSpinnerFrame = 0
+		if message.reloaded {
+			model.state = message.state
+			model.repoConfig = message.repoConfig
+			model.hooksApproved = message.hooksApproved || !message.repoConfig.HasHooks()
+			model.showPR = model.state.Repo.RemoteConfigured
+			model.prLoading = false
+			model.applyCachedPullRequests()
+			if !message.completedAt.IsZero() {
+				model.lastRefreshAt = message.completedAt
+			}
+			model.restoreSelection(anchor)
+		}
 		if message.err != nil {
 			if model.deleteDialog != nil {
 				model.deleteDialog.error = "× " + message.err.Error()
@@ -841,16 +861,6 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return model.setFlash("× " + message.err.Error())
 		}
 		model.deleteDialog = nil
-		model.state = message.state
-		model.repoConfig = message.repoConfig
-		model.hooksApproved = message.hooksApproved || !message.repoConfig.HasHooks()
-		model.showPR = model.state.Repo.RemoteConfigured
-		model.prLoading = false
-		model.applyCachedPullRequests()
-		if !message.completedAt.IsZero() {
-			model.lastRefreshAt = message.completedAt
-		}
-		model.restoreSelection(anchor)
 		model, enrichmentCmd := model.startEnrichment(true)
 		var flashCmd tea.Cmd
 		if message.restore != nil {
@@ -869,7 +879,23 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		anchor := model.selectionAnchor()
 		model.cleanupMergedInFlight = false
+		if model.actionCancel != nil {
+			model.actionCancel()
+			model.actionCancel = nil
+		}
 		model.cleanupMergedSpinner = 0
+		if message.reloaded {
+			model.state = message.state
+			model.repoConfig = message.repoConfig
+			model.hooksApproved = message.hooksApproved || !message.repoConfig.HasHooks()
+			model.showPR = model.state.Repo.RemoteConfigured
+			model.prLoading = false
+			model.applyCachedPullRequests()
+			if !message.completedAt.IsZero() {
+				model.lastRefreshAt = message.completedAt
+			}
+			model.restoreSelection(anchor)
+		}
 		if message.err != nil {
 			if model.cleanupMergedDialog != nil {
 				model.cleanupMergedDialog.error = "× " + message.err.Error()
@@ -877,16 +903,6 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return model.setFlash("× " + message.err.Error())
 		}
-		model.state = message.state
-		model.repoConfig = message.repoConfig
-		model.hooksApproved = message.hooksApproved || !message.repoConfig.HasHooks()
-		model.showPR = model.state.Repo.RemoteConfigured
-		model.prLoading = false
-		model.applyCachedPullRequests()
-		if !message.completedAt.IsZero() {
-			model.lastRefreshAt = message.completedAt
-		}
-		model.restoreSelection(anchor)
 		model, enrichmentCmd := model.startEnrichment(true)
 		if len(message.result.failures) > 0 {
 			if model.cleanupMergedDialog == nil {
@@ -2005,6 +2021,9 @@ func (model Model) openDelete() (Model, tea.Cmd) {
 
 func (model Model) updateDelete(message tea.KeyMsg) (Model, tea.Cmd) {
 	if model.deleteInFlight {
+		if message.String() == "esc" && model.actionCancel != nil {
+			model.actionCancel()
+		}
 		return model, nil
 	}
 	dialog := model.deleteDialog
@@ -2129,6 +2148,9 @@ func (model Model) openCleanupMerged() (Model, tea.Cmd) {
 
 func (model Model) updateCleanupMerged(message tea.KeyMsg) (Model, tea.Cmd) {
 	if model.cleanupMergedInFlight {
+		if message.String() == "esc" && model.actionCancel != nil {
+			model.actionCancel()
+		}
 		return model, nil
 	}
 	switch message.String() {
@@ -2151,6 +2173,9 @@ func (model Model) updateCleanupMerged(message tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (model Model) startCleanupMerged(plan cleanupMergedPlan) (Model, tea.Cmd) {
+	if model.actionCancel != nil {
+		model.actionCancel()
+	}
 	model = model.cancelEnrichment()
 	model.enrichmentID++
 	model.cleanupMergedID++
@@ -2164,23 +2189,26 @@ func (model Model) startCleanupMerged(plan cleanupMergedPlan) (Model, tea.Cmd) {
 	if model.cleanupMergedDialog != nil {
 		model.cleanupMergedDialog.error = ""
 	}
-	command := cleanupMergedAndLoadCmd(model.reloadCwd(), model.config, model.state.Repo, model.runner, model.cleanupMergedID, plan)
+	ctx, cancel := context.WithTimeout(context.Background(), destructiveActionTimeout)
+	model.actionCancel = cancel
+	command := cleanupMergedAndLoadCmd(ctx, model.reloadCwd(), model.config, model.state.Repo, model.runner, model.cleanupMergedID, plan)
 	return model, tea.Batch(command, cleanupMergedSpinnerTickCmd(model.cleanupMergedID))
 }
 
-func cleanupMergedAndLoadCmd(cwd string, config config.Config, repo gitdata.Repository, runner gitdata.Runner, id int, plan cleanupMergedPlan) tea.Cmd {
+func cleanupMergedAndLoadCmd(ctx context.Context, cwd string, config config.Config, repo gitdata.Repository, runner gitdata.Runner, id int, plan cleanupMergedPlan) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
 		result := runCleanupMerged(ctx, repo, plan, runner)
-		state, err := loadStableState(ctx, cwd, config, runner)
+		reloadCtx, cancel := context.WithTimeout(context.Background(), destructiveActionTimeout)
+		defer cancel()
+		state, err := loadStableState(reloadCtx, cwd, config, runner)
 		if err != nil {
 			return cleanupMergedMsg{id: id, result: result, err: fmt.Errorf("cleaned up merged, but reload failed: %w", err)}
 		}
-		repoConfig, hooksApproved, err := loadRepoRuntimeConfig(ctx, state.Repo.Root, runner)
+		repoConfig, hooksApproved, err := loadRepoRuntimeConfig(reloadCtx, state.Repo.Root, runner)
 		if err != nil {
 			return cleanupMergedMsg{id: id, result: result, err: fmt.Errorf("cleaned up merged, but reload failed: %w", err)}
 		}
-		return cleanupMergedMsg{id: id, state: state, repoConfig: repoConfig, hooksApproved: hooksApproved, result: result, completedAt: time.Now()}
+		return cleanupMergedMsg{id: id, state: state, repoConfig: repoConfig, hooksApproved: hooksApproved, reloaded: true, result: result, completedAt: time.Now()}
 	}
 }
 
@@ -2316,6 +2344,9 @@ func cleanupWorktreeName(row gitdata.Worktree) string {
 }
 
 func (model Model) startDelete(text string, restore *pendingBranchRestore, action func(context.Context) error) (Model, tea.Cmd) {
+	if model.actionCancel != nil {
+		model.actionCancel()
+	}
 	model = model.cancelEnrichment()
 	model.enrichmentID++
 	model.deleteID++
@@ -2329,25 +2360,30 @@ func (model Model) startDelete(text string, restore *pendingBranchRestore, actio
 	if model.deleteDialog != nil {
 		model.deleteDialog.error = ""
 	}
-	command := deleteAndLoadCmd(model.reloadCwd(), model.config, model.runner, model.deleteID, text, restore, action)
+	ctx, cancel := context.WithTimeout(context.Background(), destructiveActionTimeout)
+	model.actionCancel = cancel
+	command := deleteAndLoadCmd(ctx, model.reloadCwd(), model.config, model.runner, model.deleteID, text, restore, action)
 	return model, tea.Batch(command, deleteSpinnerTickCmd(model.deleteID))
 }
 
-func deleteAndLoadCmd(cwd string, config config.Config, runner gitdata.Runner, id int, text string, restore *pendingBranchRestore, action func(context.Context) error) tea.Cmd {
+func deleteAndLoadCmd(ctx context.Context, cwd string, config config.Config, runner gitdata.Runner, id int, text string, restore *pendingBranchRestore, action func(context.Context) error) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if err := action(ctx); err != nil {
-			return deleteMsg{id: id, err: err}
-		}
-		state, err := loadStableState(ctx, cwd, config, runner)
+		actionErr := action(ctx)
+		reloadCtx, cancel := context.WithTimeout(context.Background(), destructiveActionTimeout)
+		defer cancel()
+		state, err := loadStableState(reloadCtx, cwd, config, runner)
 		if err != nil {
 			return deleteMsg{id: id, err: fmt.Errorf("%s, but reload failed: %w", text, err)}
 		}
-		repoConfig, hooksApproved, err := loadRepoRuntimeConfig(ctx, state.Repo.Root, runner)
+		repoConfig, hooksApproved, err := loadRepoRuntimeConfig(reloadCtx, state.Repo.Root, runner)
 		if err != nil {
 			return deleteMsg{id: id, err: fmt.Errorf("%s, but reload failed: %w", text, err)}
 		}
-		return deleteMsg{id: id, state: state, repoConfig: repoConfig, hooksApproved: hooksApproved, text: text, restore: restore, completedAt: time.Now()}
+		message := deleteMsg{id: id, state: state, repoConfig: repoConfig, hooksApproved: hooksApproved, reloaded: true, text: text, restore: restore, completedAt: time.Now()}
+		if actionErr != nil {
+			message.err = actionErr
+		}
+		return message
 	}
 }
 
@@ -2357,10 +2393,17 @@ func (model Model) startRestore() (Model, tea.Cmd) {
 		repo := model.state.Repo
 		runner := model.runner
 		return model.startDelete(restoredBranchesText(len(restores)), nil, func(ctx context.Context) error {
+			restored := 0
+			var failures []string
 			for _, restore := range restores {
 				if err := gitdata.CreateBranchAt(ctx, repo.Root, restore.branch, restore.sha, runner); err != nil {
-					return err
+					failures = append(failures, restore.branch+": "+err.Error())
+					continue
 				}
+				restored++
+			}
+			if len(failures) > 0 {
+				return fmt.Errorf("restored %d %s, failed %d: %s", restored, pluralize(restored, "branch", "branches"), len(failures), strings.Join(failures, "; "))
 			}
 			return nil
 		})
@@ -2403,7 +2446,7 @@ func deleteRow(ctx context.Context, repo gitdata.Repository, row gitdata.Worktre
 	}
 	if dialog.deleteWorktree && dialog.deleteBranch && row.Branch != "" && !row.Detached {
 		if err := gitdata.DeleteBranch(ctx, repo.Root, row.Branch, !row.BranchMergedToMain, runner); err != nil {
-			return err
+			return fmt.Errorf("worktree removed; delete remaining branch %q: %w", row.Branch, err)
 		}
 	}
 	return nil

@@ -59,6 +59,17 @@ func (runner *recordingRunner) RunWithEnv(_ context.Context, dir string, env []s
 	return runner.run(dir, env, name, args...)
 }
 
+type cancelledHookRunner struct {
+	*recordingRunner
+}
+
+func (runner cancelledHookRunner) RunWithEnv(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	if name == "sh" && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return runner.recordingRunner.RunWithEnv(ctx, dir, env, name, args...)
+}
+
 func (runner *recordingRunner) run(dir string, env []string, name string, args ...string) ([]byte, error) {
 	key := dir + "|" + name + " " + strings.Join(args, " ")
 	runner.mutex.Lock()
@@ -3106,6 +3117,36 @@ func TestCleanupMergedPartialFailureKeepsResultDialog(t *testing.T) {
 	}
 }
 
+func TestCleanupMergedEscCancelsInFlightHook(t *testing.T) {
+	runner := cancelledHookRunner{recordingRunner: &recordingRunner{results: stableLoadResults("worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n")}}
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+	model.runner = runner
+	plan := cleanupMergedPlan{worktrees: []cleanupMergedWorktree{{
+		row:              gitdata.Worktree{Path: "/repo/feature", Branch: "feature"},
+		runBeforeDelete:  true,
+		beforeDeleteHook: "sleep forever",
+	}}}
+	model.cleanupMergedDialog = &cleanupMergedDialog{plan: plan}
+
+	started, command := model.startCleanupMerged(plan)
+	cancelled, cancelCommand := started.updateCleanupMerged(tea.KeyMsg{Type: tea.KeyEsc})
+	if cancelCommand != nil {
+		t.Fatal("Esc should cancel the cleanup action without starting another command")
+	}
+
+	message := firstCleanupMergedMessage(t, command)
+	if len(message.result.failures) != 1 || message.result.failures[0].reason != context.Canceled.Error() {
+		t.Fatalf("cleanup result = %+v, want cancelled hook failure", message.result)
+	}
+	updated, _ := updateModel(t, cancelled, message)
+	if updated.cleanupMergedInFlight {
+		t.Fatal("cancelled cleanup should clear in-flight state")
+	}
+	if updated.cleanupMergedDialog == nil || updated.cleanupMergedDialog.result == nil {
+		t.Fatal("cancelled cleanup should keep a failure result in the dialog")
+	}
+}
+
 func TestDeleteHookToggleDisablesBeforeDelete(t *testing.T) {
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main", IsMain: true},
@@ -3535,6 +3576,33 @@ func TestRestoreKeyRestoresPendingBranchBatch(t *testing.T) {
 	}
 }
 
+func TestRestoreBatchContinuesAfterBranchAlreadyExists(t *testing.T) {
+	worktreeList := "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n"
+	results := stableLoadResults(worktreeList)
+	results["/repo/main|git branch first 1111111111111111111111111111111111111111"] = recordingResult{err: errors.New("branch already exists")}
+	results["/repo/main|git branch second 2222222222222222222222222222222222222222"] = recordingResult{}
+	runner := &recordingRunner{results: results}
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+	model.runner = runner
+	model.pendingRestoreBatch = []pendingBranchRestore{
+		{branch: "first", sha: "1111111111111111111111111111111111111111", short: "1111111"},
+		{branch: "second", sha: "2222222222222222222222222222222222222222", short: "2222222"},
+	}
+
+	started, command := model.updateList(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	message := firstDeleteMessage(t, command)
+	if message.err == nil || !strings.Contains(message.err.Error(), "restored 1 branch, failed 1: first: branch already exists") {
+		t.Fatalf("restore batch error = %v, want restored and failed counts", message.err)
+	}
+	if !hasCommand(runner.commands, "/repo/main|git branch second 2222222222222222222222222222222222222222") {
+		t.Fatalf("restore batch should continue after first failure: %v", runner.commands)
+	}
+	updated, _ := updateModel(t, started, message)
+	if !strings.Contains(updated.flash, "restored 1 branch, failed 1") {
+		t.Fatalf("restore feedback = %q, want restored and failed counts", updated.flash)
+	}
+}
+
 func TestRestoreOfferClearsWithRefreshFlashLifecycle(t *testing.T) {
 	restore := &pendingBranchRestore{branch: "feature", sha: "0123456789abcdef0123456789abcdef01234567", short: "0123456"}
 	model := Model{
@@ -3614,9 +3682,9 @@ func TestDeleteBranchProgressRendersInBottomBorder(t *testing.T) {
 }
 
 func TestDeleteErrorStaysInDeleteModal(t *testing.T) {
-	runner := &recordingRunner{results: map[string]recordingResult{
-		"/repo/main|git worktree remove /repo/feature": {err: errors.New("cannot remove worktree")},
-	}}
+	results := stableLoadResults("worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n")
+	results["/repo/main|git worktree remove /repo/feature"] = recordingResult{err: errors.New("cannot remove worktree")}
+	runner := &recordingRunner{results: results}
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main", IsMain: true},
 		{Path: "/repo/feature", Branch: "feature"},
@@ -3645,11 +3713,66 @@ func TestDeleteErrorStaysInDeleteModal(t *testing.T) {
 	}
 }
 
+func TestDeleteEscCancelsInFlightAction(t *testing.T) {
+	runner := &recordingRunner{results: stableLoadResults("worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n")}
+	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
+	model.runner = runner
+	model.deleteDialog = &deleteDialog{}
+
+	started, command := model.startDelete("deleted worktree", nil, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	cancelled, cancelCommand := started.updateDelete(tea.KeyMsg{Type: tea.KeyEsc})
+	if cancelCommand != nil {
+		t.Fatal("Esc should cancel the delete action without starting another command")
+	}
+
+	message := firstDeleteMessage(t, command)
+	if !errors.Is(message.err, context.Canceled) {
+		t.Fatalf("delete error = %v, want context cancellation", message.err)
+	}
+	updated, _ := updateModel(t, cancelled, message)
+	if updated.deleteInFlight {
+		t.Fatal("cancelled delete should clear in-flight state")
+	}
+	if !strings.Contains(updated.deleteDialog.error, context.Canceled.Error()) {
+		t.Fatalf("delete dialog error = %q, want cancellation", updated.deleteDialog.error)
+	}
+}
+
+func TestDeletePartialFailureReloadsStateAndNamesRemainingBranchAction(t *testing.T) {
+	results := stableLoadResults("worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n")
+	results["/repo/main|git worktree remove /repo/feature"] = recordingResult{}
+	results["/repo/main|git branch -d feature"] = recordingResult{err: errors.New("branch deletion failed")}
+	runner := &recordingRunner{results: results}
+	model := testModelWithRows([]gitdata.Worktree{
+		{Path: "/repo/main", Branch: "main", IsMain: true},
+		{Path: "/repo/feature", Branch: "feature", BranchMergedToMain: true},
+	})
+	model.runner = runner
+	model.selected = 1
+	model, _ = model.openDelete()
+	started, command := model.updateDelete(tea.KeyMsg{Type: tea.KeyEnter})
+	message := firstDeleteMessage(t, command)
+
+	if !message.reloaded || len(message.state.Rows) != 1 {
+		t.Fatalf("partial delete message = %+v, want reloaded main-only state", message)
+	}
+	updated, _ := updateModel(t, started, message)
+	if len(updated.state.Rows) != 1 || updated.state.Rows[0].Path != "/repo/main" {
+		t.Fatalf("rows after partial delete = %+v, want main only", updated.state.Rows)
+	}
+	if !strings.Contains(updated.deleteDialog.error, `delete remaining branch "feature"`) {
+		t.Fatalf("partial delete dialog error = %q, want remaining branch action", updated.deleteDialog.error)
+	}
+}
+
 func TestDeleteErrorWrapsWithinModal(t *testing.T) {
 	longError := "warning: not deleting branch 'codex/fix-scan-hot-path-regressions' that is not yet merged to 'refs/remotes/origin/codex/fix-scan-hot-path-regressions', even though it is merged to HEAD"
-	runner := &recordingRunner{results: map[string]recordingResult{
-		"/repo/main|git worktree remove /repo/feature": {err: errors.New(longError)},
-	}}
+	results := stableLoadResults("worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n")
+	results["/repo/main|git worktree remove /repo/feature"] = recordingResult{err: errors.New(longError)}
+	runner := &recordingRunner{results: results}
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main", IsMain: true},
 		{Path: "/repo/feature", Branch: "feature"},
@@ -3697,9 +3820,9 @@ func TestDeleteErrorDropsGitHints(t *testing.T) {
 
 func TestDeleteErrorClipsToTerminalHeight(t *testing.T) {
 	longError := strings.Repeat("warning: branch is not yet merged and cannot be deleted safely. ", 12)
-	runner := &recordingRunner{results: map[string]recordingResult{
-		"/repo/main|git worktree remove /repo/feature": {err: errors.New(longError)},
-	}}
+	results := stableLoadResults("worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n")
+	results["/repo/main|git worktree remove /repo/feature"] = recordingResult{err: errors.New(longError)}
+	runner := &recordingRunner{results: results}
 	model := testModelWithRows([]gitdata.Worktree{
 		{Path: "/repo/main", Branch: "main", IsMain: true},
 		{Path: "/repo/feature", Branch: "feature"},
