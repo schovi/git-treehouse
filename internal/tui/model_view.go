@@ -179,7 +179,7 @@ const detailSideBySideGap = 1
 // detailBlocks renders the Details box together with the context frames as finished,
 // bordered blocks ready to stack below the Worktrees panel. On a wide panel the Git
 // context frame sits beside the Details box; otherwise it stacks directly beneath it.
-// The remaining frames (PR review, Changes, Disk) always stack full width below.
+// The remaining frames (PR review and Changes) always stack full width below.
 func (model Model) detailBlocks(row gitdata.Row, now time.Time, panelWidth int) []string {
 	var blocks []string
 	if left, right, ok := model.detailWithGitContext(row, now, panelWidth); ok {
@@ -198,7 +198,6 @@ func (model Model) detailBlocks(row gitdata.Row, now time.Time, panelWidth int) 
 			blocks = append(blocks, box)
 		}
 	}
-	blocks = append(blocks, belowDetailFrames(row, panelWidth)...)
 	return blocks
 }
 

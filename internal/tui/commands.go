@@ -406,9 +406,8 @@ func loadSizesMsg(ctx context.Context, runner gitdata.Runner, repoRoot string, i
 	}
 	gitSizes := map[string]int64{}
 	fullSizes := map[string]int64{}
-	breakdowns := map[string]gitdata.DiskBreakdown{}
 	if len(jobs) == 0 {
-		return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, breakdowns: breakdowns, repoRoot: repoRoot, id: id}
+		return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, repoRoot: repoRoot, id: id}
 	}
 	jobChannel := make(chan sizeJob)
 	var mutex sync.Mutex
@@ -420,10 +419,9 @@ func loadSizesMsg(ctx context.Context, runner gitdata.Runner, repoRoot string, i
 			defer waitGroup.Done()
 			for job := range jobChannel {
 				if job.full {
-					if breakdown, err := gitdata.BucketedDiskUsage(ctx, job.path); err == nil {
+					if size, err := gitdata.FullDiskUsage(ctx, job.path); err == nil {
 						mutex.Lock()
-						fullSizes[job.path] = breakdown.Total
-						breakdowns[job.path] = breakdown
+						fullSizes[job.path] = size
 						mutex.Unlock()
 					}
 					continue
@@ -442,12 +440,12 @@ func loadSizesMsg(ctx context.Context, runner gitdata.Runner, repoRoot string, i
 		case <-ctx.Done():
 			close(jobChannel)
 			waitGroup.Wait()
-			return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, breakdowns: breakdowns, repoRoot: repoRoot, id: id}
+			return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, repoRoot: repoRoot, id: id}
 		}
 	}
 	close(jobChannel)
 	waitGroup.Wait()
-	return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, breakdowns: breakdowns, repoRoot: repoRoot, id: id}
+	return sizesLoadedMsg{gitSizes: gitSizes, fullSizes: fullSizes, repoRoot: repoRoot, id: id}
 }
 
 func reloadCmd(cwd string, config config.Config, runner gitdata.Runner, repo gitdata.Repository, priorState gitdata.State, fetch, automatic bool, id int) tea.Cmd {

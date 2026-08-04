@@ -382,6 +382,19 @@ func TestStaleSizeLoadIsIgnored(t *testing.T) {
 	}
 }
 
+func TestLoadSizesMsgLoadsSelectedWorktreeFullSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(path, []byte("full size"), 0o600); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	message := loadSizesMsg(context.Background(), nil, "/repo", 1, nil, nil, filepath.Dir(path)).(sizesLoadedMsg)
+
+	if got, want := message.fullSizes[filepath.Dir(path)], int64(len("full size")); got != want {
+		t.Fatalf("full size = %d, want %d", got, want)
+	}
+}
+
 func TestDiskUsagePathsPrioritizeVisibleRows(t *testing.T) {
 	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
 	model := testModelWithRows([]gitdata.Worktree{
@@ -411,7 +424,6 @@ func TestDiskUsageCommandSkipsCachedAutomaticSizes(t *testing.T) {
 		Branch:         "feature",
 		GitSizeLoaded:  true,
 		FullSizeLoaded: true,
-		DiskBreakdown:  gitdata.DiskBreakdown{Loaded: true},
 	}})
 	model.width = 160
 	model.height = 24
@@ -480,7 +492,7 @@ func TestManualReloadBypassesPriorEnrichment(t *testing.T) {
 		Repo: gitdata.Repository{Root: "/repo/main", MainWorktree: "/repo/main", MainBranch: "main"},
 		Rows: []gitdata.Worktree{
 			{Path: "/repo/main", Head: "aaaaaaaa", Branch: "main", IsMain: true},
-			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature", Graph: gitdata.ContextGraph{Loaded: true, BranchCommits: []gitdata.GraphCommit{{Short: "cached"}}}, GitSizeLoaded: true, FullSizeLoaded: true, DiskBreakdown: gitdata.DiskBreakdown{Loaded: true}},
+			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature", Graph: gitdata.ContextGraph{Loaded: true, BranchCommits: []gitdata.GraphCommit{{Short: "cached"}}}, GitSizeLoaded: true, FullSizeLoaded: true},
 		},
 	}
 
@@ -495,7 +507,7 @@ func TestManualReloadBypassesPriorEnrichment(t *testing.T) {
 			feature = row
 		}
 	}
-	if len(feature.Graph.BranchCommits) > 0 || feature.GitSizeLoaded || feature.FullSizeLoaded || feature.DiskBreakdown.Loaded {
+	if len(feature.Graph.BranchCommits) > 0 || feature.GitSizeLoaded || feature.FullSizeLoaded {
 		t.Fatalf("manual reload reused automatic enrichment: %+v", feature)
 	}
 	for _, command := range runner.commands {

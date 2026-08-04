@@ -210,7 +210,6 @@ func retainPriorSizes(rows, priorRows []Worktree, skeletonHeads map[string]strin
 		rows[index].FullSizeLoaded = prior.FullSizeLoaded
 		rows[index].SizeBytes = prior.SizeBytes
 		rows[index].SizeLoaded = prior.SizeLoaded
-		rows[index].DiskBreakdown = prior.DiskBreakdown
 	}
 }
 
@@ -808,93 +807,6 @@ func FullDiskUsage(ctx context.Context, path string) (int64, error) {
 
 func DiskUsage(path string) (int64, error) {
 	return FullDiskUsage(context.Background(), path)
-}
-
-const (
-	diskBucketDependencies = "dependencies"
-	diskBucketBuild        = "build output"
-	diskBucketGit          = "git data"
-	diskBucketSource       = "source"
-)
-
-// diskDependencyDirs and diskBuildDirs name directory segments treated as
-// regenerable (safe to delete and rebuild). Anything under them is bucketed
-// accordingly regardless of depth.
-var (
-	diskDependencyDirs = map[string]bool{
-		"node_modules": true, "vendor": true, ".venv": true, "venv": true,
-		".tox": true, ".gradle": true, ".cargo": true, "Pods": true,
-	}
-	diskBuildDirs = map[string]bool{
-		"dist": true, "build": true, "out": true, "target": true,
-		".next": true, ".nuxt": true, ".turbo": true, "coverage": true,
-	}
-)
-
-// BucketedDiskUsage walks a worktree once and groups file sizes into cleanup
-// buckets. It is the breakdown-aware replacement for FullDiskUsage when the Disk
-// frame needs detail; the returned breakdown also carries the total.
-func BucketedDiskUsage(ctx context.Context, path string) (DiskBreakdown, error) {
-	sizes := map[string]int64{}
-	var total int64
-	err := filepath.WalkDir(path, func(entryPath string, entry os.DirEntry, err error) error {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if err != nil || entry.IsDir() {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return nil
-		}
-		relative, relErr := filepath.Rel(path, entryPath)
-		if relErr != nil {
-			relative = entryPath
-		}
-		sizes[classifyDiskPath(relative)] += info.Size()
-		total += info.Size()
-		return nil
-	})
-	if err != nil {
-		return DiskBreakdown{}, err
-	}
-	return buildDiskBreakdown(sizes, total), nil
-}
-
-func classifyDiskPath(relative string) string {
-	segments := strings.Split(relative, string(filepath.Separator))
-	for _, segment := range segments {
-		if diskDependencyDirs[segment] {
-			return diskBucketDependencies
-		}
-	}
-	for _, segment := range segments {
-		if diskBuildDirs[segment] {
-			return diskBucketBuild
-		}
-	}
-	if len(segments) > 0 && segments[0] == ".git" {
-		return diskBucketGit
-	}
-	return diskBucketSource
-}
-
-func buildDiskBreakdown(sizes map[string]int64, total int64) DiskBreakdown {
-	breakdown := DiskBreakdown{Loaded: true, Total: total}
-	for label, bytes := range sizes {
-		if bytes == 0 {
-			continue
-		}
-		breakdown.Buckets = append(breakdown.Buckets, DiskBucket{Label: label, Bytes: bytes})
-		if label == diskBucketDependencies || label == diskBucketBuild {
-			breakdown.ReclaimableBytes += bytes
-		}
-	}
-	sort.SliceStable(breakdown.Buckets, func(left, right int) bool {
-		return breakdown.Buckets[left].Bytes > breakdown.Buckets[right].Bytes
-	})
-	return breakdown
 }
 
 func sortWorktrees(rows []Worktree) {

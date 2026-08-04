@@ -144,11 +144,10 @@ type branchGraphLoadedMsg struct {
 }
 
 type sizesLoadedMsg struct {
-	gitSizes   map[string]int64
-	fullSizes  map[string]int64
-	breakdowns map[string]gitdata.DiskBreakdown
-	repoRoot   string
-	id         int
+	gitSizes  map[string]int64
+	fullSizes map[string]int64
+	repoRoot  string
+	id        int
 }
 
 type localMetadataLoadedMsg struct {
@@ -522,11 +521,6 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				model.state.Rows[index].FullSizeLoaded = true
 				model.state.Rows[index].SizeBytes = size
 				model.state.Rows[index].SizeLoaded = true
-			}
-		}
-		for path, breakdown := range message.breakdowns {
-			if index, ok := pathIndexes[path]; ok {
-				model.state.Rows[index].DiskBreakdown = breakdown
 			}
 		}
 		return model, nil

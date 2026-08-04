@@ -1,6 +1,6 @@
 # 024 — Remove unused disk-breakdown enrichment
 
-priority: 50
+done: 2026-08-04
 tags: tui
 
 ## What & why

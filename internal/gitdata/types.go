@@ -257,23 +257,6 @@ type ContextGraph struct {
 	RemoteCommits []GraphCommit
 }
 
-// DiskBucket is one coarse category of disk usage within a worktree.
-type DiskBucket struct {
-	Label string
-	Bytes int64
-}
-
-// DiskBreakdown groups a worktree's bytes into cleanup-relevant buckets
-// (dependencies, build output, git data, source). Buckets are sorted largest
-// first and exclude empty categories. ReclaimableBytes sums the regenerable
-// buckets. It powers the Disk frame.
-type DiskBreakdown struct {
-	Loaded           bool
-	Total            int64
-	Buckets          []DiskBucket
-	ReclaimableBytes int64
-}
-
 // ChangedFile is a single entry from `git status --porcelain`, optionally
 // enriched with line stats from `git diff --numstat HEAD`. It powers the
 // Changes frame, which previews local work file by file.
@@ -442,7 +425,6 @@ type Worktree struct {
 	Status              StatusCounts
 	ChangedFiles        []ChangedFile
 	Graph               ContextGraph
-	DiskBreakdown       DiskBreakdown
 	Upstream            string
 	UpstreamGone        bool
 	HeadSync            SyncState

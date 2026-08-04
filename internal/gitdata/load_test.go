@@ -634,7 +634,6 @@ func TestEnrichLocalMetadataWithPriorStateReusesMatchingGraphAndSizes(t *testing
 				FullSizeLoaded: true,
 				SizeBytes:      202,
 				SizeLoaded:     true,
-				DiskBreakdown:  DiskBreakdown{Loaded: true, Total: 202},
 			},
 		},
 	}
@@ -656,8 +655,8 @@ func TestEnrichLocalMetadataWithPriorStateReusesMatchingGraphAndSizes(t *testing
 	if !feature.Graph.Loaded || feature.Graph.BranchCommits[0].Short != "feature" {
 		t.Fatalf("feature graph = %+v, want cached graph", feature.Graph)
 	}
-	if !feature.GitSizeLoaded || !feature.FullSizeLoaded || !feature.DiskBreakdown.Loaded {
-		t.Fatalf("feature sizes = %+v, want cached sizes and breakdown", feature)
+	if !feature.GitSizeLoaded || !feature.FullSizeLoaded {
+		t.Fatalf("feature sizes = %+v, want cached sizes", feature)
 	}
 	for _, command := range runner.commands {
 		if strings.Contains(command, "/repo/feature|git log") || strings.Contains(command, "/repo/feature|git merge-base") {
@@ -680,7 +679,7 @@ func TestEnrichLocalMetadataWithPriorStateReloadsChangedHeads(t *testing.T) {
 		Repo: Repository{Root: "/repo/main", MainWorktree: "/repo/main", MainBranch: "main"},
 		Rows: []Worktree{
 			{Path: "/repo/main", Head: "aaaaaaaa", Branch: "main", IsMain: true},
-			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature", Graph: ContextGraph{Loaded: true}, GitSizeLoaded: true, FullSizeLoaded: true, DiskBreakdown: DiskBreakdown{Loaded: true}},
+			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature", Graph: ContextGraph{Loaded: true}, GitSizeLoaded: true, FullSizeLoaded: true},
 		},
 	}
 	state := State{
@@ -698,7 +697,7 @@ func TestEnrichLocalMetadataWithPriorStateReloadsChangedHeads(t *testing.T) {
 		t.Fatalf("EnrichLocalMetadataWithPriorState() error = %v", err)
 	}
 	feature := enriched.Rows[1]
-	if feature.Graph.Loaded || feature.GitSizeLoaded || feature.FullSizeLoaded || feature.DiskBreakdown.Loaded {
+	if feature.Graph.Loaded || feature.GitSizeLoaded || feature.FullSizeLoaded {
 		t.Fatalf("changed worktree reused cached enrichment: %+v", feature)
 	}
 	graphCalls := 0
@@ -754,7 +753,7 @@ func TestEnrichLocalMetadataWithPriorStateRejectsRefMetadataHeadChange(t *testin
 		Repo: Repository{Root: "/repo/main", MainWorktree: "/repo/main", MainBranch: "main"},
 		Rows: []Worktree{
 			{Path: "/repo/main", Head: "aaaaaaaa", Branch: "main", IsMain: true},
-			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature", Graph: ContextGraph{Loaded: true}, GitSizeLoaded: true, FullSizeLoaded: true, DiskBreakdown: DiskBreakdown{Loaded: true}},
+			{Path: "/repo/feature", Head: "bbbbbbbb", Branch: "feature", Graph: ContextGraph{Loaded: true}, GitSizeLoaded: true, FullSizeLoaded: true},
 		},
 	}
 	state := State{
@@ -773,7 +772,7 @@ func TestEnrichLocalMetadataWithPriorStateRejectsRefMetadataHeadChange(t *testin
 		t.Fatalf("EnrichLocalMetadataWithPriorState() error = %v", err)
 	}
 	feature := enriched.Rows[1]
-	if feature.Graph.Loaded || feature.GitSizeLoaded || feature.FullSizeLoaded || feature.DiskBreakdown.Loaded {
+	if feature.Graph.Loaded || feature.GitSizeLoaded || feature.FullSizeLoaded {
 		t.Fatalf("ref metadata HEAD change reused cached enrichment: %+v", feature)
 	}
 	for _, command := range runner.commands {
@@ -819,58 +818,5 @@ func TestLoadBranchContextGraph(t *testing.T) {
 	// The main branch never gets a graph (nothing to compare against).
 	if LoadBranchContextGraph(context.Background(), repo, "main", runner).Loaded {
 		t.Fatal("main branch should not get a context graph")
-	}
-}
-
-func TestBucketedDiskUsage(t *testing.T) {
-	root := t.TempDir()
-	files := map[string]string{
-		filepath.Join("src", "main.go"):                  "package main",        // source
-		filepath.Join("node_modules", "dep", "index.js"): "module.exports = {}", // dependencies
-		filepath.Join("dist", "bundle.js"):               "minified",            // build output
-		filepath.Join(".git", "objects", "pack", "data"): "gitpack",             // git data
-	}
-	for relative, content := range files {
-		full := filepath.Join(root, relative)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	breakdown, err := BucketedDiskUsage(context.Background(), root)
-	if err != nil {
-		t.Fatalf("BucketedDiskUsage() error = %v", err)
-	}
-	if !breakdown.Loaded {
-		t.Fatal("breakdown not marked loaded")
-	}
-
-	byLabel := map[string]int64{}
-	for _, bucket := range breakdown.Buckets {
-		byLabel[bucket.Label] = bucket.Bytes
-	}
-	for _, label := range []string{"dependencies", "build output", "git data", "source"} {
-		if byLabel[label] == 0 {
-			t.Fatalf("expected non-zero %q bucket, got buckets %+v", label, breakdown.Buckets)
-		}
-	}
-	wantReclaimable := byLabel["dependencies"] + byLabel["build output"]
-	if breakdown.ReclaimableBytes != wantReclaimable {
-		t.Fatalf("ReclaimableBytes = %d, want %d (deps + build)", breakdown.ReclaimableBytes, wantReclaimable)
-	}
-	var sum int64
-	for _, bucket := range breakdown.Buckets {
-		sum += bucket.Bytes
-	}
-	if sum != breakdown.Total {
-		t.Fatalf("bucket sum %d != total %d", sum, breakdown.Total)
-	}
-	for index := 1; index < len(breakdown.Buckets); index++ {
-		if breakdown.Buckets[index-1].Bytes < breakdown.Buckets[index].Bytes {
-			t.Fatalf("buckets not sorted descending: %+v", breakdown.Buckets)
-		}
 	}
 }

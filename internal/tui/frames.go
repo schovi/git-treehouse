@@ -12,8 +12,7 @@ import (
 
 // Auxiliary frames are bordered context blocks stacked below the Details panel.
 // Each frame renders itself fully (including borders) for a given outer width, or
-// returns "" when it has nothing to show. belowDetailFrames collects the frames
-// that apply to the selected row, in priority order. See docs/features.
+// returns "" when it has nothing to show. See docs/features.
 
 // changesFrameMinWidth is the narrowest panel width at which the Changes frame is
 // worth showing; below it the Details panel alone carries the dirty summary.
@@ -22,26 +21,6 @@ const changesFrameMinWidth = 50
 // changesFrameMaxFiles caps how many file rows the Changes frame lists before
 // collapsing the remainder into a "+N more" line, keeping the frame height bounded.
 const changesFrameMaxFiles = 8
-
-// belowDetailFrames returns the secondary frame boxes that stack full width below
-// the Detail region. The Details, Changes, and PR review boxes (left column) and the
-// Git context frame (right column) are composed separately, so they are not included
-// here; only the Disk frame remains, and it is currently disabled.
-func belowDetailFrames(row gitdata.Row, panelWidth int) []string {
-	var frames []string
-	// The Disk frame is built and tested but kept out of the rendered stack for
-	// now: it is a promising idea, just not earning its space by default yet.
-	if diskFrameEnabled {
-		if box := diskFrame(row, panelWidth); box != "" {
-			frames = append(frames, box)
-		}
-	}
-	return frames
-}
-
-// diskFrameEnabled gates whether the Disk usage frame appears in the rendered
-// frame stack. It stays off by default; flip it to bring the frame back.
-const diskFrameEnabled = false
 
 // changesFrame renders the per-file git status preview for a worktree row. It always
 // renders for a worktree row (showing "no changes" when the tree is clean) so it can
@@ -598,89 +577,6 @@ func graphForkNodeLine(fork gitdata.GraphCommit, isHead bool, headShort string, 
 		return hintStyle.Render("●") + " " + label
 	}
 	return graphNodeLine("", commit, hintStyle, tag, tagStyle, innerWidth)
-}
-
-// diskFrameMinWidth is the narrowest panel width at which the Disk frame renders.
-const diskFrameMinWidth = 50
-
-// diskFrameThreshold is the total worktree size below which the Disk frame stays
-// hidden; small worktrees do not need a cleanup pitch and the Details panel
-// already shows their size.
-const diskFrameThreshold int64 = 50 * 1024 * 1024
-
-const (
-	diskLabelColumn   = 13
-	diskSizeColumn    = 5
-	diskPercentColumn = 4
-)
-
-// diskFrame renders where a worktree's bytes go as a small bar chart. It appears
-// only once disk usage has loaded and the total crosses diskFrameThreshold.
-func diskFrame(row gitdata.Row, panelWidth int) string {
-	if row.Kind != gitdata.RowKindWorktree || panelWidth < diskFrameMinWidth {
-		return ""
-	}
-	breakdown := row.Worktree.DiskBreakdown
-	if !breakdown.Loaded || breakdown.Total < diskFrameThreshold || len(breakdown.Buckets) == 0 {
-		return ""
-	}
-	innerWidth := panelWidth - 2
-	maxBytes := breakdown.Buckets[0].Bytes
-	lines := make([]string, 0, len(breakdown.Buckets)+1)
-	for _, bucket := range breakdown.Buckets {
-		lines = append(lines, diskBucketLine(bucket, maxBytes, breakdown.Total, innerWidth))
-	}
-	if breakdown.ReclaimableBytes > 0 {
-		note := fmt.Sprintf("reclaimable %s (deps + build), no committed work lost", formatByteSize(breakdown.ReclaimableBytes))
-		lines = append(lines, inspectorCleanStyle.Render(truncatePlain(note, innerWidth)))
-	}
-	title := "Disk · " + formatByteSize(breakdown.Total)
-	return sectionBoxWithFooter(title, lines, "", panelWidth)
-}
-
-func diskBucketLine(bucket gitdata.DiskBucket, maxBytes, total int64, innerWidth int) string {
-	label := inspectorValueStyle.Render(padRight(truncatePlain(bucket.Label, diskLabelColumn), diskLabelColumn))
-	size := inspectorLabelStyle.Render(padRight(formatByteSize(bucket.Bytes), diskSizeColumn))
-	percent := 0
-	if total > 0 {
-		percent = int(bucket.Bytes * 100 / total)
-	}
-	percentText := hintStyle.Render(padLeft(fmt.Sprintf("%d%%", percent), diskPercentColumn))
-
-	barBudget := innerWidth - diskLabelColumn - 1 - diskSizeColumn - 1 - 1 - diskPercentColumn
-	if barBudget < 1 {
-		barBudget = 1
-	}
-	barLength := 0
-	if maxBytes > 0 {
-		barLength = int(bucket.Bytes * int64(barBudget) / maxBytes)
-	}
-	if barLength < 1 {
-		barLength = 1
-	}
-	bar := diskBucketStyle(bucket.Label).Render(strings.Repeat("▓", barLength))
-	barCell := padStyled(bar, barBudget)
-	return label + " " + size + " " + barCell + " " + percentText
-}
-
-func diskBucketStyle(label string) lipgloss.Style {
-	switch label {
-	case "dependencies":
-		return inspectorWarnStyle
-	case "build output":
-		return inspectorCommitStyle
-	case "git data":
-		return hintStyle
-	default:
-		return inspectorCleanStyle
-	}
-}
-
-func padLeft(value string, width int) string {
-	if gap := width - lipgloss.Width(value); gap > 0 {
-		return strings.Repeat(" ", gap) + value
-	}
-	return value
 }
 
 // osc8 wraps text in an OSC 8 terminal hyperlink. The escape sequences are
