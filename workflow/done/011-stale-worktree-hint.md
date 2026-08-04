@@ -1,6 +1,6 @@
 # 011 — Stale-worktree "safe to remove" hint in the detail panel
 
-priority: 110
+done: 2026-08-04
 
 tags: tui, ux
 

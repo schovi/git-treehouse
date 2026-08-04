@@ -156,6 +156,51 @@ func TestSelectedInspectorKeepsDirtyFieldForCleanRows(t *testing.T) {
 	}
 }
 
+func TestSelectedInspectorRendersSafeToRemoveHint(t *testing.T) {
+	forceANSIProfile(t)
+	model := Model{width: 100}
+	tests := []struct {
+		name string
+		row  gitdata.Worktree
+		want string
+	}{
+		{
+			name: "merged to main",
+			row:  gitdata.Worktree{Path: "/repo/merged", Branch: "merged", LocalMetadataLoaded: true, BranchMergedToMain: true},
+			want: "finished: clean, merged to main — safe to remove (d)",
+		},
+		{
+			name: "pull request closed",
+			row:  gitdata.Worktree{Path: "/repo/closed", Branch: "closed", LocalMetadataLoaded: true, PR: &gitdata.PullRequest{State: "✕"}},
+			want: "finished: clean, PR merged/closed — safe to remove (d)",
+		},
+		{
+			name: "upstream gone",
+			row:  gitdata.Worktree{Path: "/repo/gone", Branch: "gone", LocalMetadataLoaded: true, BranchMergedToMain: true, UpstreamGone: true},
+			want: "finished: clean, merged; remote branch deleted — safe to remove (d)",
+		},
+		{name: "dirty", row: gitdata.Worktree{Path: "/repo/dirty", Branch: "dirty", LocalMetadataLoaded: true, BranchMergedToMain: true, Status: gitdata.StatusCounts{Modified: 1}}},
+		{name: "unmerged", row: gitdata.Worktree{Path: "/repo/unmerged", Branch: "unmerged", LocalMetadataLoaded: true}},
+		{name: "root", row: gitdata.Worktree{Path: "/repo/main", Branch: "main", LocalMetadataLoaded: true, IsMain: true, BranchMergedToMain: true}},
+		{name: "active", row: gitdata.Worktree{Path: "/repo/active", Branch: "active", LocalMetadataLoaded: true, IsActive: true, BranchMergedToMain: true}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output := model.selectedRowInspectorAtWidth(gitdata.Row{Kind: gitdata.RowKindWorktree, Worktree: test.row}, time.Now(), 100)
+			if test.want == "" {
+				if strings.Contains(ansi.Strip(output), "safe to remove") {
+					t.Fatalf("safe-to-remove hint rendered unexpectedly:\n%s", output)
+				}
+				return
+			}
+			if !strings.Contains(output, inspectorCleanStyle.Render(test.want)) {
+				t.Fatalf("safe-to-remove hint missing styled text %q:\n%s", test.want, output)
+			}
+		})
+	}
+}
+
 func TestDetailPanelRendersInspectorOnly(t *testing.T) {
 	model := Model{
 		width: 100,

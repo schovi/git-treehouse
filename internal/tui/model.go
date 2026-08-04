@@ -545,14 +545,7 @@ func (filter worktreeFilter) matches(row gitdata.Row) bool {
 	case filterBranches:
 		return row.IsBranch()
 	case filterMerged:
-		if row.IsBranch() {
-			return row.Branch.BranchMergedToMain || prMergedOrClosed(row)
-		}
-		if !row.IsWorktree() || row.Worktree.IsMain || row.Worktree.Detached {
-			return false
-		}
-		return row.Worktree.Status.Clean() &&
-			(row.Worktree.BranchMergedToMain || prMergedOrClosed(row))
+		return mergedFilterMatches(row)
 	case filterPrunable:
 		return row.IsWorktree() && row.Worktree.Prunable
 	case filterLocked:
@@ -562,6 +555,16 @@ func (filter worktreeFilter) matches(row gitdata.Row) bool {
 	default:
 		return true
 	}
+}
+
+func mergedFilterMatches(row gitdata.Row) bool {
+	if row.IsBranch() {
+		return cleanupMergedDone(row)
+	}
+	if !row.IsWorktree() || row.Worktree.IsMain || row.Worktree.Detached {
+		return false
+	}
+	return row.Worktree.Status.Clean() && cleanupMergedDone(row)
 }
 
 func prMergedOrClosed(row gitdata.Row) bool {
@@ -2799,7 +2802,24 @@ func (model Model) selectedRowInspectorAtWidth(row gitdata.Row, now time.Time, w
 	lines = append(lines,
 		model.inspectorFieldAtWidth("Delete", deleteSafetyText(worktree), deleteSafetyStyle(worktree), width),
 	)
+	if hint := model.safeToRemoveDetailHint(row); hint != "" {
+		lines = append(lines, inspectorCleanStyle.Render(truncatePlain(hint, width)))
+	}
 	return strings.Join(lines, "\n")
+}
+
+func (model Model) safeToRemoveDetailHint(row gitdata.Row) string {
+	if !row.IsWorktree() || !mergedFilterMatches(row) || model.cleanupMergedWorktreeSkipReason(row.Worktree) != "" {
+		return ""
+	}
+	switch {
+	case row.Worktree.UpstreamGone:
+		return "finished: clean, merged; remote branch deleted — safe to remove (d)"
+	case prMergedOrClosed(row):
+		return "finished: clean, PR merged/closed — safe to remove (d)"
+	default:
+		return "finished: clean, merged to main — safe to remove (d)"
+	}
 }
 
 func (model Model) selectedBranchInspectorAtWidth(branch gitdata.Branch, width int) string {
