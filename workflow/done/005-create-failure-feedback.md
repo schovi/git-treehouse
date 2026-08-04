@@ -1,6 +1,6 @@
 # 005 — Create failure is silently swallowed after dialog close; no in-flight guard
 
-priority: 50
+done: 2026-08-04
 
 tags: tui, ux
 

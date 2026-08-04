@@ -15,7 +15,7 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
 └────────────────────────────────────┘
 ```
 
-- **Branch name:** free text input. Validated live against `git check-ref-format` rules and existing branch names; invalid/duplicate shows inline error and blocks Enter.
+- **Branch name:** free text input. Validated on Enter against `git check-ref-format` rules and existing branch names; invalid/duplicate shows inline error and blocks Enter. Editing clears the previous error.
 - **Base picker** (Tab or ↑/↓ cycles), defaults to the first option:
   1. Focused row's branch at its **local tip** (includes unpushed work)
   2. `origin/<focused-branch>` (last fetched remote state)
@@ -28,7 +28,8 @@ _Behavior spec. Index: [docs/README.md](../README.md) · Code: [docs/architectur
   4. Copy any repo-scoped `copy_untracked` files (see [Configuration](./configuration.md)) from the root repository into the new worktree.
   5. Run the approved `post_create` hook, if configured (see [Configuration](./configuration.md)).
   6. Success → **cd into the new worktree immediately** (write `--cd-file`, exit app).
-  7. Failure → git's stderr or hook error shown in the dialog, dialog stays open. If the failure happened after `git worktree add`, the created worktree remains on disk.
+  7. Failure → git's stderr or hook error shown in the dialog, dialog stays open. If Esc closed the dialog while the command ran, the error appears in the status flash. If the failure happened after `git worktree add`, the created worktree remains on disk.
+  8. While the command runs, Enter is ignored to prevent a duplicate create. Esc closes only the dialog.
 
 ## Existing branch worktree flow
 

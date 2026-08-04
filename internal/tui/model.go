@@ -58,6 +58,7 @@ type Model struct {
 	deleteDialog           *deleteDialog
 	cleanupMergedDialog    *cleanupMergedDialog
 	actionCancel           context.CancelFunc
+	createInFlight         bool
 	deleteInFlight         bool
 	deleteID               int
 	deleteSpinnerFrame     int
@@ -787,15 +788,21 @@ func (model Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, tea.Batch(enrichmentCmd, flashCmd)
 	case createMsg:
 		model.loading = ""
+		model.createInFlight = false
 		if message.err != nil {
 			if message.created {
+				errorText := createdHookError("post_create", message.path, message.err)
 				if model.createDialog != nil {
-					model.createDialog.error = createdHookError("post_create", message.path, message.err)
+					model.createDialog.error = errorText
+				} else {
+					return model.setFlash(errorText)
 				}
 				return model, nil
 			}
 			if model.createDialog != nil {
 				model.createDialog.error = message.err.Error()
+			} else {
+				return model.setFlash(message.err.Error())
 			}
 			return model, nil
 		}
@@ -1900,6 +1907,9 @@ func runPostCreateSteps(ctx context.Context, repoRoot, path, branch, mainBranch 
 }
 
 func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
+	if model.createInFlight && message.String() == "enter" {
+		return model, nil
+	}
 	dialog := model.createDialog
 	switch message.String() {
 	case "esc":
@@ -1931,6 +1941,7 @@ func (model Model) updateCreate(message tea.KeyMsg) (Model, tea.Cmd) {
 		hooksApproved := model.hooksApproved
 		runner := model.runner
 		model.loading = "creating…"
+		model.createInFlight = true
 		return model, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()

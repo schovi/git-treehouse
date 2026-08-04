@@ -1187,6 +1187,57 @@ func TestCreateWorktreeHookFailureDoesNotSelectCreatedPath(t *testing.T) {
 	}
 }
 
+func TestCreateFailureAfterDialogCloseShowsFlash(t *testing.T) {
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.createDialog = nil
+	model.createInFlight = true
+
+	updated, cmd := updateModel(t, model, createMsg{err: errors.New("create failed")})
+
+	if updated.flash != "create failed" {
+		t.Fatalf("flash = %q, want create failure", updated.flash)
+	}
+	if updated.createInFlight {
+		t.Fatal("createInFlight should clear after create result")
+	}
+	if cmd == nil {
+		t.Fatal("create failure flash should schedule clearing")
+	}
+}
+
+func TestCreateDialogIgnoresEnterWhileCreateInFlight(t *testing.T) {
+	runner := &recordingRunner{}
+	model := modelWithCreateDialog([]gitdata.BaseOption{{Label: "main (local)", Rev: "main"}})
+	model.runner = runner
+	model.createDialog.input.SetValue("feature/guard")
+	path := model.createPathPreview()
+
+	model, firstCreate := model.updateCreate(tea.KeyMsg{Type: tea.KeyEnter})
+	if firstCreate == nil {
+		t.Fatal("first Enter should start create")
+	}
+	if !model.createInFlight {
+		t.Fatal("createInFlight should be set while create runs")
+	}
+	_, secondCreate := model.updateCreate(tea.KeyMsg{Type: tea.KeyEnter})
+	if secondCreate != nil {
+		t.Fatal("second Enter should not start another create")
+	}
+	if message := firstCreate().(createMsg); message.err != nil {
+		t.Fatalf("first create command error = %v", message.err)
+	}
+	command := "/repo/main|git worktree add -b feature/guard " + path + " main"
+	createCount := 0
+	for _, recorded := range runner.commands {
+		if recorded == command {
+			createCount++
+		}
+	}
+	if createCount != 1 {
+		t.Fatalf("create command count = %d, want 1; commands = %v", createCount, runner.commands)
+	}
+}
+
 func TestBranchWorktreeDialogRunsApprovedPostCreate(t *testing.T) {
 	runner := &recordingRunner{}
 	model := testModelWithRows([]gitdata.Worktree{{Path: "/repo/main", Branch: "main", IsMain: true}})
